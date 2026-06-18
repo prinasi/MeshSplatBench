@@ -1,0 +1,10 @@
+plyfile
+ninja
+cmake
+torch
+torchvision
+trimesh
+open3d
+scikit-image
+scikit-learn
+matplotlib

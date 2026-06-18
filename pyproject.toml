@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel", "torch>=2.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trianglebench"
+version = "0.1.0"
+description = "A Python-first developer toolkit for triangle-splatting-style radiance field research"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "TriangleBench Contributors"},
+]
+keywords = ["3D reconstruction", "triangle splatting", "radiance fields", "benchmarking"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.0",
+    "numpy",
+    "Pillow",
+    "imageio[ffmpeg]",
+    "opencv-python",
+    "scipy",
+    "trimesh",
+    "pytorch-msssim",
+    "lpips",
+    "typer[all]>=0.9",
+    "pyyaml",
+    "rich",
+    "tabulate",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "ruff",
+]
+cuda = [
+    "nanobind>=2.11.0",
+    "cmake>=3.20",
+    "ninja",
+]
+
+[project.scripts]
+trianglebench = "trianglebench.cli.main:app"
+
+[project.entry-points."trianglebench.adapters"]
+d2ts = "trianglebench.renderers.d2ts_adapter"
+triangle_splatting = "trianglebench.renderers.triangle_splatting_adapter"
+mesh_splatting = "trianglebench.renderers.mesh_splatting_adapter"
+diffsoup = "trianglebench.renderers.diffsoup_adapter"
+
+[project.entry-points."trianglebench.training_methods"]
+triangle_splatting = "trianglebench.trainers.triangle_splatting_method"
+
+[tool.setuptools.packages.find]
+include = ["trianglebench*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

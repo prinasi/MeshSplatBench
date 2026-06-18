@@ -1,0 +1,2 @@
+"""Vendored Triangle Splatting runtime."""
+
