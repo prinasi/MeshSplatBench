@@ -145,6 +145,7 @@ def evaluate_mesh(
     """Evaluate a reconstructed mesh. DTU configs use the DTU mesh protocol."""
     from tribench.core.mesh_eval import dtu_mesh_metrics, write_mesh_metrics
 
+    cfg = None
     scene_root = None
     if config is not None:
         cfg = load_cli_config(config)
@@ -179,6 +180,8 @@ def evaluate_mesh(
     downsample_density = 0.2 if downsample_density is None else downsample_density
     max_dist = 20.0 if max_dist is None else max_dist
     cull_masks = True if cull_masks is None else cull_masks
+    if cfg is not None:
+        pred = _ensure_pred_mesh_exists(cfg, pred)
     metrics = dtu_mesh_metrics(
         pred,
         dtu_root,
@@ -191,6 +194,24 @@ def evaluate_mesh(
     )
     write_mesh_metrics(metrics, output)
     typer.echo(json.dumps(metrics, indent=2))
+
+
+def _ensure_pred_mesh_exists(cfg, pred: str) -> str:
+    """Export the configured adapter mesh when the predicted mesh is absent."""
+    pred_path = Path(pred).expanduser()
+    if pred_path.exists():
+        return str(pred_path)
+
+    adapter_cfg = adapter_config(cfg)
+    if adapter_cfg.get("type") is None or adapter_cfg.get("checkpoint") is None:
+        return str(pred_path)
+
+    from tribench.core.builder import build_adapter
+    from tribench.core.mesh_eval import export_adapter_mesh
+
+    typer.echo(f"Predicted mesh not found at {pred_path}; exporting mesh first.")
+    adapter = build_adapter(adapter_cfg)
+    return str(export_adapter_mesh(adapter, pred_path))
 
 
 def _infer_pred_mesh(cfg) -> str | None:

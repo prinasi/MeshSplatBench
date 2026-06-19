@@ -6,7 +6,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from tribench.cli.eval import _infer_dtu_eval_target, _infer_pred_mesh
+from tribench.cli.eval import _ensure_pred_mesh_exists, _infer_dtu_eval_target, _infer_pred_mesh
 from tribench.cli.main import app
 from tribench.core.config import Config
 
@@ -82,6 +82,43 @@ def test_dtu_mesh_eval_can_infer_required_options_from_config():
 
     assert _infer_pred_mesh(cfg) == "outputs/triangle-splatting/dtu/scan24/mesh.ply"
     assert _infer_dtu_eval_target(cfg) == ("data/dtu", "scan24")
+
+
+def test_eval_mesh_exports_missing_configured_mesh(tmp_path: Path, monkeypatch):
+    config = Config(
+        {
+            "adapter": {
+                "type": "triangle-splatting",
+                "checkpoint": str(tmp_path / "checkpoint"),
+            }
+        }
+    )
+    pred = tmp_path / "mesh.ply"
+    calls = {}
+
+    def fake_build_adapter(adapter_cfg):
+        calls["adapter_cfg"] = adapter_cfg
+        return object()
+
+    def fake_export_adapter_mesh(adapter, path):
+        calls["export_path"] = Path(path)
+        Path(path).write_text("ply\n")
+        return Path(path)
+
+    monkeypatch.setattr("tribench.core.builder.build_adapter", fake_build_adapter)
+    monkeypatch.setattr("tribench.core.mesh_eval.export_adapter_mesh", fake_export_adapter_mesh)
+
+    assert _ensure_pred_mesh_exists(config, str(pred)) == str(pred)
+    assert pred.exists()
+    assert calls["adapter_cfg"]["type"] == "triangle-splatting"
+    assert calls["export_path"] == pred
+
+
+def test_eval_mesh_missing_mesh_without_adapter_is_left_for_metrics(tmp_path: Path):
+    pred = tmp_path / "mesh.ply"
+
+    assert _ensure_pred_mesh_exists(Config({}), str(pred)) == str(pred)
+    assert not pred.exists()
 
 
 def test_eval_chamfer_command_is_removed():
