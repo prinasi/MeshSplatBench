@@ -24,7 +24,7 @@ loop:
 
 adapter:
   type: triangle-splatting
-  checkpoint: outputs/triangle-splatting/mipnerf360/bicycle
+  checkpoint: outputs/triangle-splatting/mipnerf360/bicycle/point_cloud/iteration_30000/
 
 render:
   split: test
