@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# single_train.sh - one-scene TriangleBench training/evaluation pipeline.
+# single_train.sh - one-scene TriBench training/evaluation pipeline.
 #
 # Primary interface:
 #   bash single_train.sh <method> <dataset/scene|dataset/all|all> <gpu_id> [options]
@@ -33,7 +33,7 @@ else
     PYTHON_BIN="python3"
 fi
 
-TB_CMD="${TRIANGLEBENCH_CMD:-trianglebench}"
+TB_CMD="${TRIBENCH_CMD:-tribench}"
 TB_CMD_ARR=()
 
 TRAIN_ITERATIONS=30000
@@ -200,7 +200,7 @@ resolve_tb_cmd() {
     if command -v "${TB_CMD}" >/dev/null 2>&1; then
         TB_CMD_ARR=("${TB_CMD}")
     else
-        TB_CMD_ARR=("${PYTHON_BIN}" -m trianglebench.cli.main)
+        TB_CMD_ARR=("${PYTHON_BIN}" -m tribench.cli.main)
     fi
 }
 
@@ -727,7 +727,7 @@ print_final_summary() {
 
     echo
     echo "=============================================================================================================="
-    echo "  TriangleBench Summary  (method: ${METHOD_ID})"
+    echo "  TriBench Summary  (method: ${METHOD_ID})"
     echo "=============================================================================================================="
     echo "  Output root: ${OUTPUT_PATH}/${METHOD_ID}/<dataset>/<scene>"
     echo "  FPS: test-split render frames/s | TrainMem: MiB | TrainTime: s | Metrics: test split"

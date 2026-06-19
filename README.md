@@ -1,10 +1,10 @@
-# TriangleBench
+# TriBench
 
 A Python-first developer toolkit for unified benchmarking of triangle-splatting-style radiance field methods.
 
 ## Overview
 
-TriangleBench provides a single, consistent evaluation framework for comparing different triangle-based radiance field reconstruction methods. Instead of wrangling per-repo scripts and ad-hoc metrics, you get:
+TriBench provides a single, consistent evaluation framework for comparing different triangle-based radiance field reconstruction methods. Instead of wrangling per-repo scripts and ad-hoc metrics, you get:
 
 - **Standardized metrics** -- PSNR, SSIM, LPIPS, and geometry quality, computed the same way for every method.
 - **Adapter pattern** -- plug any triangle-splatting method into the same API.
@@ -23,32 +23,30 @@ TriangleBench provides a single, consistent evaluation framework for comparing d
 ## Installation
 
 ```bash
-git clone https://github.com/your-org/TriangleBench.git
-cd TriangleBench
+git clone https://github.com/your-org/TriBench.git
+cd TriBench
 pip install -e ".[dev]"
 ```
 
 ## Quick Start
 
 ```bash
-# Inspect a dataset
-trianglebench inspect --scene data/mipnerf360/garden
+# Train, render, evaluate, inspect, and profile from one experiment config
+tribench train --config configs/triangle_splatting_colmap.yaml
+tribench render images --config configs/triangle_splatting_colmap.yaml
+tribench eval images --config configs/triangle_splatting_colmap.yaml
+tribench inspect --config configs/triangle_splatting_colmap.yaml
+tribench profile --config configs/triangle_splatting_colmap.yaml
 
-# Profile a method's training
-trianglebench profile --method 2dts --scene garden --config configs/2dts.yaml
-
-# Evaluate a trained model
-trianglebench eval --method 2dts --scene garden --checkpoint outputs/2dts/garden/ckpt.pt
-
-# Compare multiple methods
-trianglebench compare --methods 2dts,ts,mesh --scene garden
+# Config values can still be overridden from the CLI
+tribench render video --config configs/triangle_splatting_colmap.yaml --output-dir outputs/demo-video
 ```
 
 ## Project Structure
 
 ```
-TriangleBench/
-├── trianglebench/
+TriBench/
+├── tribench/
 │   ├── core/           # Cameras, stats, registry, config
 │   ├── primitives/     # Triangle primitive types (independent, mesh, convex)
 │   ├── renderers/      # Adapter wrappers for each method

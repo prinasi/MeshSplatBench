@@ -3,14 +3,14 @@ requires = ["setuptools>=68.0", "wheel", "torch>=2.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "trianglebench"
+name = "tribench"
 version = "0.1.0"
 description = "A Python-first developer toolkit for triangle-splatting-style radiance field research"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
-    {name = "TriangleBench Contributors"},
+    {name = "TriBench Contributors"},
 ]
 keywords = ["3D reconstruction", "triangle splatting", "radiance fields", "benchmarking"]
 classifiers = [
@@ -52,22 +52,22 @@ cuda = [
 ]
 
 [project.scripts]
-trianglebench = "trianglebench.cli.main:app"
+tribench = "tribench.cli.main:app"
 
-[project.entry-points."trianglebench.adapters"]
-d2ts = "trianglebench.renderers.d2ts_adapter"
-triangle_splatting = "trianglebench.renderers.triangle_splatting_adapter"
-mesh_splatting = "trianglebench.renderers.mesh_splatting_adapter"
-diffsoup = "trianglebench.renderers.diffsoup_adapter"
+[project.entry-points."tribench.adapters"]
+d2ts = "tribench.renderers.d2ts_adapter"
+triangle_splatting = "tribench.renderers.triangle_splatting_adapter"
+mesh_splatting = "tribench.renderers.mesh_splatting_adapter"
+diffsoup = "tribench.renderers.diffsoup_adapter"
 
-[project.entry-points."trianglebench.training_methods"]
-triangle_splatting = "trianglebench.trainers.triangle_splatting_method"
+[project.entry-points."tribench.training_methods"]
+triangle_splatting = "tribench.trainers.triangle_splatting_method"
 
 [tool.setuptools.packages.find]
-include = ["trianglebench*"]
+include = ["tribench*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tribench/tests"]
 python_files = "test_*.py"
 
 [tool.ruff]

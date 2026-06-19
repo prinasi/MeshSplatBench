@@ -1,1 +1,2 @@
-recursive-include trianglebench/vendor/_csrc *
+recursive-include configs *.yaml
+recursive-include tribench/vendor/_csrc *

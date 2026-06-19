@@ -1,1 +1,0 @@
-"""TriangleBench command-line interface."""
