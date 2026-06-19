@@ -181,7 +181,7 @@ def evaluate_mesh(
     max_dist = 20.0 if max_dist is None else max_dist
     cull_masks = True if cull_masks is None else cull_masks
     if cfg is not None:
-        pred = _ensure_pred_mesh_exists(cfg, pred)
+        pred = _ensure_pred_mesh_exists(cfg, pred, eval_cfg)
     metrics = dtu_mesh_metrics(
         pred,
         dtu_root,
@@ -196,7 +196,7 @@ def evaluate_mesh(
     typer.echo(json.dumps(metrics, indent=2))
 
 
-def _ensure_pred_mesh_exists(cfg, pred: str) -> str:
+def _ensure_pred_mesh_exists(cfg, pred: str, mesh_cfg: dict | None = None) -> str:
     """Export the configured adapter mesh when the predicted mesh is absent."""
     pred_path = Path(pred).expanduser()
     if pred_path.exists():
@@ -208,10 +208,12 @@ def _ensure_pred_mesh_exists(cfg, pred: str) -> str:
 
     from tribench.core.builder import build_adapter
     from tribench.core.mesh_eval import export_adapter_mesh
+    from tribench.cli.render import _mesh_export_kwargs
 
     typer.echo(f"Predicted mesh not found at {pred_path}; exporting mesh first.")
     adapter = build_adapter(adapter_cfg)
-    return str(export_adapter_mesh(adapter, pred_path))
+    export_kwargs = _mesh_export_kwargs(cfg, mesh_cfg or section(cfg, "mesh"))
+    return str(export_adapter_mesh(adapter, pred_path, **export_kwargs))
 
 
 def _infer_pred_mesh(cfg) -> str | None:

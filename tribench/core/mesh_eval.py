@@ -48,8 +48,10 @@ def export_ply(vertices: np.ndarray, faces: np.ndarray, path: str | Path) -> Pat
     return path
 
 
-def export_adapter_mesh(adapter: Any, path: str | Path) -> Path:
+def export_adapter_mesh(adapter: Any, path: str | Path, **kwargs: Any) -> Path:
     """Export an adapter's primitive representation to PLY."""
+    if kwargs and hasattr(adapter, "export_mesh"):
+        return adapter.export_mesh(path, **kwargs)
     vertices, faces = primitive_to_mesh_arrays(adapter.to_primitive())
     return export_ply(vertices, faces, path)
 

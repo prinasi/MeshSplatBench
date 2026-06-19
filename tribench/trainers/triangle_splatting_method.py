@@ -266,7 +266,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
             init_size=2.23,
             nb_points=3,
             set_sigma=1.16,
-            no_dome=False,
+            no_dome=bool(self.extra_args.get("no_dome", False)),
         )
 
         # -- Optimizer via training_setup ---------------------------------
@@ -275,6 +275,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
             start_lr_sigma=0,
             max_noise_factor=1.5,
             add_shape=1.3,
+            depth_ratio=1.0,
             position_lr_delay_mult=0.01,
             position_lr_max_steps=max(self.max_steps, 30_000),
             feature_lr=0.0025,
@@ -373,7 +374,11 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         if iteration % 1000 == 0:
             self._model.oneupSHdegree()
 
-        pipe = SimpleNamespace(debug=False, convert_SHs_python=False, depth_ratio=0.0)
+        pipe = SimpleNamespace(
+            debug=False,
+            convert_SHs_python=False,
+            depth_ratio=float(self._opt.depth_ratio),
+        )
         bg = (
             torch.rand((3), device="cuda")
             if self._opt.random_background

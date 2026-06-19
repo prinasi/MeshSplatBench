@@ -8,7 +8,9 @@ from typer.testing import CliRunner
 
 from tribench.cli.eval import _ensure_pred_mesh_exists, _infer_dtu_eval_target, _infer_pred_mesh
 from tribench.cli.main import app
+from tribench.cli.render import _mesh_export_kwargs
 from tribench.core.config import Config
+from tribench.core.mesh_eval import export_adapter_mesh
 
 
 def _unified_config(path: Path) -> Path:
@@ -80,7 +82,7 @@ def test_dtu_mesh_eval_can_infer_required_options_from_config():
 
     cfg = Config.fromfile(config)
 
-    assert _infer_pred_mesh(cfg) == "outputs/triangle-splatting/dtu/scan24/mesh.ply"
+    assert _infer_pred_mesh(cfg) == "outputs/triangle-splatting/dtu/scan24/fuse_post.ply"
     assert _infer_dtu_eval_target(cfg) == ("data/dtu", "scan24")
 
 
@@ -119,6 +121,37 @@ def test_eval_mesh_missing_mesh_without_adapter_is_left_for_metrics(tmp_path: Pa
 
     assert _ensure_pred_mesh_exists(Config({}), str(pred)) == str(pred)
     assert not pred.exists()
+
+
+def test_mesh_export_kwargs_resolve_dataset_and_mesh_options():
+    cfg = Config.fromfile("configs/triangle-splatting/scan24.yaml")
+
+    kwargs = _mesh_export_kwargs(cfg, cfg.mesh.to_dict())
+
+    assert kwargs["dataset_path"] == "data/dtu/scan24"
+    assert kwargs["split"] == "train"
+    assert kwargs["resolution"] == 2
+    assert kwargs["voxel_size"] == 0.004
+    assert kwargs["sdf_trunc"] == 0.016
+    assert kwargs["depth_trunc"] == 3.0
+    assert kwargs["num_cluster"] == 1
+    assert kwargs["depth_ratio"] == 1.0
+
+
+def test_export_adapter_mesh_uses_native_export_when_context_is_available(tmp_path: Path):
+    class Adapter:
+        def export_mesh(self, path, **kwargs):
+            self.path = Path(path)
+            self.kwargs = kwargs
+            self.path.write_text("ply\n")
+            return self.path
+
+    adapter = Adapter()
+    output = tmp_path / "mesh.ply"
+
+    assert export_adapter_mesh(adapter, output, dataset_path="data/dtu/scan24") == output
+    assert output.exists()
+    assert adapter.kwargs == {"dataset_path": "data/dtu/scan24"}
 
 
 def test_eval_chamfer_command_is_removed():

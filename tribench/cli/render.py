@@ -335,10 +335,40 @@ def mesh(
         if output == "mesh.ply":
             output = str(mesh_cfg.get("output") or section(cfg, "output").get("mesh_file", output))
         adapter = build_adapter(adapter_cfg)
+        export_kwargs = _mesh_export_kwargs(cfg, mesh_cfg)
         save_config_snapshot(cfg, Path(output).parent)
     else:
         if method is None or checkpoint is None:
             raise typer.BadParameter("Use --config, or provide --method and --checkpoint.")
         adapter = _load(method, checkpoint)
-    path = export_adapter_mesh(adapter, output)
+        export_kwargs = {}
+    path = export_adapter_mesh(adapter, output, **export_kwargs)
     typer.echo(f"Mesh saved to {path}")
+
+
+def _mesh_export_kwargs(cfg, mesh_cfg: dict) -> dict:
+    try:
+        dataset_cfg = dataset_config(
+            cfg,
+            split=str(mesh_cfg.get("split", "train")),
+            stage=None,
+        )
+    except Exception:
+        return {}
+
+    dataset_path = dataset_cfg.get("root") or dataset_cfg.get("dataset_path")
+    if dataset_path is None:
+        return {}
+
+    return {
+        "dataset_path": str(dataset_path),
+        "split": str(dataset_cfg.get("split", mesh_cfg.get("split", "train"))),
+        "image_dir": str(dataset_cfg.get("image_dir", "images")),
+        "resolution": int(dataset_cfg.get("resolution", 1)),
+        "eval_every": int(dataset_cfg.get("eval_every", 8)),
+        "voxel_size": float(mesh_cfg.get("voxel_size", 0.004)),
+        "sdf_trunc": float(mesh_cfg.get("sdf_trunc", 0.016)),
+        "depth_trunc": float(mesh_cfg.get("depth_trunc", 3.0)),
+        "num_cluster": int(mesh_cfg.get("num_cluster", mesh_cfg.get("clusters", 1))),
+        "depth_ratio": float(mesh_cfg.get("depth_ratio", 1.0)),
+    }

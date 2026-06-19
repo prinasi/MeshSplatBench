@@ -238,7 +238,15 @@ class TriangleSplattingAdapter(RendererAdapter):
 
     # ---- Scene loading ----
 
-    def load_scene(self, dataset_path: str, split: str = "test") -> None:
+    def load_scene(
+        self,
+        dataset_path: str,
+        split: str = "test",
+        *,
+        image_dir: str = "images",
+        resolution: int = 1,
+        eval_every: int = 8,
+    ) -> None:
         """Load a scene's cameras from a dataset directory.
 
         Supports COLMAP and Blender (NeRF Synthetic) formats.
@@ -246,6 +254,9 @@ class TriangleSplattingAdapter(RendererAdapter):
         Args:
             dataset_path: Path to the dataset root directory.
             split: Dataset split ('train' or 'test').
+            image_dir: Image folder inside the dataset root.
+            resolution: Native triangle-splatting resolution argument.
+            eval_every: Holdout stride for train/test splits.
         """
         self._ensure_imports()
 
@@ -259,8 +270,8 @@ class TriangleSplattingAdapter(RendererAdapter):
             read_intrinsics_text,
         )
         from tribench.vendor.triangle_splatting.scene.dataset_readers import (
-            readBlenderInfo,
             readColmapCameras,
+            readNerfSyntheticInfo,
         )
         from tribench.vendor.triangle_splatting.utils.camera_utils import (
             cameraList_from_camInfos,
@@ -290,20 +301,19 @@ class TriangleSplattingAdapter(RendererAdapter):
             cam_infos_unsorted = readColmapCameras(
                 cam_extrinsics=cameras_extrinsic,
                 cam_intrinsics=cameras_intrinsic,
-                images_folder=str(dataset_path / "images"),
+                images_folder=str(dataset_path / image_dir),
             )
             # Sort by image name for deterministic ordering
             cam_infos = sorted(cam_infos_unsorted, key=lambda x: x.image_name)
 
             # Split into train/test (every 8th for test)
-            eval_every = 8
             if split == "test":
                 cam_infos = [c for i, c in enumerate(cam_infos) if i % eval_every == 0]
-            else:
+            elif split == "train":
                 cam_infos = [c for i, c in enumerate(cam_infos) if i % eval_every != 0]
 
             # Build Camera objects
-            model_args = SimpleNamespace(data_device="cuda")
+            model_args = SimpleNamespace(data_device="cuda", resolution=resolution)
             self._cameras = cameraList_from_camInfos(cam_infos, 1.0, model_args)
 
         elif (dataset_path / "transforms_test.json").exists():
@@ -312,8 +322,12 @@ class TriangleSplattingAdapter(RendererAdapter):
             if not transform_file.exists():
                 transform_file = dataset_path / "transforms_test.json"
 
-            scene_info = readBlenderInfo(transform_file, str(dataset_path / f"{split}"))
-            self._cameras = scene_info.test_cameras
+            scene_info = readNerfSyntheticInfo(
+                str(dataset_path),
+                self._background_color == [1.0, 1.0, 1.0],
+                True,
+            )
+            self._cameras = scene_info.test_cameras if split == "test" else scene_info.train_cameras
 
         else:
             raise FileNotFoundError(
@@ -322,6 +336,77 @@ class TriangleSplattingAdapter(RendererAdapter):
             )
 
         print(f"[TriBench] Loaded {len(self._cameras)} cameras for split '{split}'")
+
+    def export_mesh(
+        self,
+        path: str | Path,
+        *,
+        dataset_path: str,
+        split: str = "train",
+        image_dir: str = "images",
+        resolution: int = 1,
+        eval_every: int = 8,
+        voxel_size: float = 0.004,
+        sdf_trunc: float = 0.016,
+        depth_trunc: float = 3.0,
+        num_cluster: int = 1,
+        depth_ratio: float = 1.0,
+    ) -> Path:
+        """Export a TSDF-fused mesh following the native DTU mesh pipeline."""
+        if self._model is None:
+            raise RuntimeError("No model loaded. Call load_checkpoint() first.")
+
+        self._ensure_imports()
+        self.load_scene(
+            dataset_path,
+            split=split,
+            image_dir=image_dir,
+            resolution=resolution,
+            eval_every=eval_every,
+        )
+        if not self._cameras:
+            raise RuntimeError(f"No cameras loaded for mesh export from {dataset_path!r}.")
+
+        try:
+            import open3d as o3d
+        except ImportError as exc:
+            raise ImportError("Triangle-splatting TSDF mesh export requires open3d.") from exc
+
+        from tribench.vendor.triangle_splatting.utils.mesh_utils import (
+            GaussianExtractor,
+            post_process_mesh,
+        )
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        previous_sh_degree = self._model.active_sh_degree
+        self._model.active_sh_degree = 0
+        pipe = SimpleNamespace(
+            debug=False,
+            convert_SHs_python=False,
+            depth_ratio=float(depth_ratio),
+        )
+        extractor = GaussianExtractor(
+            self._model,
+            self._ts_render,
+            pipe,
+            bg_color=self._background_color,
+        )
+        try:
+            extractor.reconstruction(self._cameras)
+            mesh = extractor.extract_mesh_bounded(
+                voxel_size=float(voxel_size),
+                sdf_trunc=float(sdf_trunc),
+                depth_trunc=float(depth_trunc),
+            )
+            if int(num_cluster) > 0:
+                mesh = post_process_mesh(mesh, cluster_to_keep=int(num_cluster))
+            o3d.io.write_triangle_mesh(str(path), mesh)
+        finally:
+            self._model.active_sh_degree = previous_sh_degree
+
+        return path
 
     # ---- Model statistics ----
 
