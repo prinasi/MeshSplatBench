@@ -1,4 +1,4 @@
-"""Eval commands: image metrics and mesh Chamfer/DTU metrics."""
+"""Eval commands: image metrics and mesh/DTU metrics."""
 
 import json
 from pathlib import Path
@@ -130,59 +130,108 @@ def evaluate_images(
     typer.echo(f"Metrics saved to {output}")
 
 
-@eval_app.command("chamfer")
-def chamfer(
-    pred: Optional[str] = typer.Option(None, "--pred", help="Predicted mesh/point cloud"),
-    gt: Optional[str] = typer.Option(None, "--gt", help="Ground-truth mesh/point cloud"),
-    config: Optional[Path] = typer.Option(None, "--config", help="TriBench evaluation config YAML"),
-    output: str = typer.Option("mesh_metrics.json", "--output", "-o"),
-    samples: int = typer.Option(500_000, "--samples"),
-):
-    """Compute symmetric Chamfer distance between mesh/point-cloud files."""
-    from tribench.core.mesh_eval import chamfer_distance, write_mesh_metrics
-
-    if config is not None:
-        cfg = load_cli_config(config)
-        chamfer_cfg = merge_dicts(section(cfg, "chamfer"), merged_section(cfg, "eval", nested="chamfer"))
-        pred = pred or chamfer_cfg.get("pred")
-        gt = gt or chamfer_cfg.get("gt")
-        if output == "mesh_metrics.json":
-            output = str(chamfer_cfg.get("output") or section(cfg, "output").get("mesh_metrics_file", output))
-        samples = int(chamfer_cfg.get("samples", samples))
-    if pred is None or gt is None:
-        raise typer.BadParameter("Use --config, or provide both --pred and --gt.")
-
-    metrics = chamfer_distance(pred, gt, num_samples=samples)
-    write_mesh_metrics(metrics, output)
-    typer.echo(json.dumps(metrics, indent=2))
-
-
-@eval_app.command("dtu-mesh")
-def dtu_mesh(
+@eval_app.command("mesh")
+def evaluate_mesh(
     pred: Optional[str] = typer.Option(None, "--pred", help="Predicted mesh/point cloud"),
     dtu_root: Optional[str] = typer.Option(None, "--dtu-root", help="Official DTU dataset root"),
     scan_id: Optional[str] = typer.Option(None, "--scan-id", help="DTU scan id, e.g. 24 or scan24"),
     config: Optional[Path] = typer.Option(None, "--config", help="TriBench evaluation config YAML"),
-    output: str = typer.Option("dtu_mesh_metrics.json", "--output", "-o"),
-    samples: int = typer.Option(500_000, "--samples"),
+    output: str = typer.Option("mesh_metrics.json", "--output", "-o"),
+    samples: Optional[int] = typer.Option(None, "--samples"),
+    downsample_density: Optional[float] = typer.Option(None, "--downsample-density"),
+    max_dist: Optional[float] = typer.Option(None, "--max-dist"),
+    cull_masks: Optional[bool] = typer.Option(None, "--cull-masks/--no-cull-masks"),
 ):
-    """Find DTU official GT for a scan and compute Chamfer metrics."""
-    from tribench.core.mesh_eval import chamfer_distance, find_dtu_ground_truth, write_mesh_metrics
+    """Evaluate a reconstructed mesh. DTU configs use the DTU mesh protocol."""
+    from tribench.core.mesh_eval import dtu_mesh_metrics, write_mesh_metrics
 
+    scene_root = None
     if config is not None:
         cfg = load_cli_config(config)
-        dtu_cfg = merge_dicts(section(cfg, "dtu_mesh"), merged_section(cfg, "eval", nested="dtu_mesh"))
-        pred = pred or dtu_cfg.get("pred")
-        dtu_root = dtu_root or dtu_cfg.get("dtu_root")
-        scan_id = scan_id or dtu_cfg.get("scan_id")
-        if output == "dtu_mesh_metrics.json":
-            output = str(dtu_cfg.get("output") or section(cfg, "output").get("dtu_mesh_metrics_file", output))
-        samples = int(dtu_cfg.get("samples", samples))
+        legacy_cfg = merge_dicts(section(cfg, "dtu_mesh"), merged_section(cfg, "eval", nested="dtu_mesh"))
+        mesh_cfg = merge_dicts(section(cfg, "mesh_eval"), merged_section(cfg, "eval", nested="mesh"))
+        eval_cfg = merge_dicts(legacy_cfg, mesh_cfg)
+        inferred_dtu_root, inferred_scan_id = _infer_dtu_eval_target(cfg)
+        scene_root = _infer_dtu_scene_root(cfg)
+        pred = pred or eval_cfg.get("pred") or _infer_pred_mesh(cfg)
+        dtu_root = dtu_root or eval_cfg.get("dtu_root") or inferred_dtu_root
+        scan_id = scan_id or eval_cfg.get("scan_id") or inferred_scan_id
+        if output == "mesh_metrics.json":
+            output_cfg = section(cfg, "output")
+            output = str(
+                eval_cfg.get("output")
+                or output_cfg.get("mesh_metrics_file")
+                or output_cfg.get("dtu_mesh_metrics_file")
+                or output
+            )
+        samples = int(samples if samples is not None else eval_cfg.get("samples", 500_000))
+        downsample_density = float(
+            downsample_density
+            if downsample_density is not None
+            else eval_cfg.get("downsample_density", 0.2)
+        )
+        max_dist = float(max_dist if max_dist is not None else eval_cfg.get("max_dist", 20.0))
+        cull_masks = bool(cull_masks if cull_masks is not None else eval_cfg.get("cull_masks", True))
     if pred is None or dtu_root is None or scan_id is None:
         raise typer.BadParameter("Use --config, or provide --pred, --dtu-root, and --scan-id.")
 
-    gt = find_dtu_ground_truth(dtu_root, scan_id)
-    metrics = chamfer_distance(pred, gt, num_samples=samples)
-    metrics["gt_path"] = str(gt)
+    samples = 500_000 if samples is None else samples
+    downsample_density = 0.2 if downsample_density is None else downsample_density
+    max_dist = 20.0 if max_dist is None else max_dist
+    cull_masks = True if cull_masks is None else cull_masks
+    metrics = dtu_mesh_metrics(
+        pred,
+        dtu_root,
+        scan_id,
+        scene_root=scene_root,
+        num_samples=samples,
+        downsample_density=downsample_density,
+        max_dist=max_dist,
+        cull_masks=cull_masks,
+    )
     write_mesh_metrics(metrics, output)
     typer.echo(json.dumps(metrics, indent=2))
+
+
+def _infer_pred_mesh(cfg) -> str | None:
+    mesh_cfg = section(cfg, "mesh")
+    output_cfg = section(cfg, "output")
+    value = mesh_cfg.get("output") or output_cfg.get("mesh_file")
+    if value is None and output_cfg.get("dir") is not None:
+        value = Path(output_cfg["dir"]) / "mesh.ply"
+    return str(value) if value is not None else None
+
+
+def _infer_dtu_eval_target(cfg) -> tuple[str | None, str | None]:
+    dataset_cfg = section(cfg, "dataset")
+    scene = dataset_cfg.get("scene")
+    root = dataset_cfg.get("root") or dataset_cfg.get("dataset_path")
+    dataset_type = str(dataset_cfg.get("type", dataset_cfg.get("dataset_type", ""))).lower()
+
+    scan_id = str(scene) if scene is not None else None
+    dtu_root = None
+    if root is not None:
+        root_path = Path(str(root)).expanduser()
+        if scan_id is not None and root_path.name == Path(scan_id).name:
+            dtu_root = str(root_path.parent)
+        elif dataset_type == "dtu":
+            dtu_root = str(root_path)
+
+    if scan_id is None and root is not None and Path(str(root)).name.startswith("scan"):
+        scan_id = Path(str(root)).name
+    return dtu_root, scan_id
+
+
+def _infer_dtu_scene_root(cfg) -> str | None:
+    dataset_cfg = section(cfg, "dataset")
+    root = dataset_cfg.get("root") or dataset_cfg.get("dataset_path")
+    if root is None:
+        return None
+    root_path = Path(str(root)).expanduser()
+    if root_path.name.startswith("scan") or (root_path / "cameras.npz").exists():
+        return str(root_path)
+    scene = dataset_cfg.get("scene")
+    if scene is not None:
+        candidate = root_path / str(scene)
+        return str(candidate)
+    return None

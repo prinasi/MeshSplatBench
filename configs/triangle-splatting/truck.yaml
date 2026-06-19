@@ -1,15 +1,15 @@
 # @format
 
 _base_:
-  - ../base/mipnerf360.yaml
+  - ../base/tandt.yaml
   - ../base/triangle-splatting.yaml
 
 experiment:
-  name: triangle_splatting_bicycle
+  name: triangle_splatting_truck
 
 dataset:
-  scene: bicycle
-  resolution: 4
+  scene: truck
+  resolution: 1
 
 trainer:
   outdoor: true

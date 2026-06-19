@@ -48,24 +48,24 @@ tribench render video --config configs/triangle-splatting/bicycle.yaml --output-
 
 Experiment configs use `_base_` inheritance. Common defaults live in
 `configs/base/_base_.yaml`, dataset-level defaults live in files such as
-`configs/base/mipnerf360.yaml`, and method/scene configs only keep the fields
-that are unique to that run.
+`configs/base/mipnerf360.yaml`, method-level shared settings live in files such
+as `configs/base/triangle-splatting.yaml`, and method/scene configs only keep
+the fields that are unique to that run.
 
 For example, `configs/triangle-splatting/bicycle.yaml` inherits the MipNeRF360
-dataset defaults and only sets the scene plus Triangle Splatting-specific
-training/checkpoint settings:
+dataset defaults plus Triangle Splatting defaults, then only sets the scene and
+scene-specific training options:
 
 ```yaml
-_base_: ../base/mipnerf360.yaml
+_base_:
+  - ../base/mipnerf360.yaml
+  - ../base/triangle-splatting.yaml
 
 dataset:
   scene: bicycle
 
 trainer:
-  type: triangle-splatting
-
-adapter:
-  type: triangle-splatting
+  outdoor: true
 ```
 
 `dataset.root` and `dataset.scene` are resolved together, so a dataset base can
@@ -73,6 +73,12 @@ declare `root: data/mipnerf360` while a scene config declares `scene: bicycle`;
 the effective dataset path becomes `data/mipnerf360/bicycle`. String templates
 such as `outputs/{method}/{dataset}/{scene}` are resolved after all inherited
 configs are merged.
+
+Triangle Splatting configs inherit scene-specific triangle count caps from
+`configs/base/triangle-splatting-caps.yaml` through
+`configs/base/triangle-splatting.yaml`. During config finalization, the cap for
+`dataset.scene` is written to `trainer.max_shapes` unless the scene config
+explicitly overrides it.
 
 ## Project Structure
 

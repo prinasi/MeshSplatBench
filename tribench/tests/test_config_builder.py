@@ -73,6 +73,89 @@ def test_resolve_dataset_config_does_not_duplicate_scene():
     assert cfg["root"] == "data/mipnerf360/bicycle"
 
 
+def test_scene_triangle_caps_populate_trainer_max_shapes(tmp_path: Path):
+    base = tmp_path / "caps.yaml"
+    child = tmp_path / "child.yaml"
+    base.write_text(
+        "triangle_caps:\n"
+        "  bicycle: 6400000\n"
+    )
+    child.write_text(
+        "_base_: caps.yaml\n"
+        "dataset:\n"
+        "  scene: bicycle\n"
+        "trainer:\n"
+        "  type: triangle-splatting\n"
+    )
+
+    cfg = load_config(child)
+
+    assert cfg["trainer"]["max_shapes"] == 6_400_000
+
+
+def test_scene_triangle_caps_do_not_override_explicit_max_shapes(tmp_path: Path):
+    base = tmp_path / "caps.yaml"
+    child = tmp_path / "child.yaml"
+    base.write_text(
+        "triangle_caps:\n"
+        "  bicycle: 6400000\n"
+    )
+    child.write_text(
+        "_base_: caps.yaml\n"
+        "dataset:\n"
+        "  scene: bicycle\n"
+        "trainer:\n"
+        "  type: triangle-splatting\n"
+        "  max_shapes: 10\n"
+    )
+
+    cfg = load_config(child)
+
+    assert cfg["trainer"]["max_shapes"] == 10
+
+
+def test_scene_triangle_caps_support_scan_pattern(tmp_path: Path):
+    base = tmp_path / "caps.yaml"
+    child = tmp_path / "child.yaml"
+    base.write_text(
+        "triangle_caps:\n"
+        "  \"scan*\": 500000\n"
+    )
+    child.write_text(
+        "_base_: caps.yaml\n"
+        "dataset:\n"
+        "  scene: scan24\n"
+        "trainer:\n"
+        "  type: triangle-splatting\n"
+    )
+
+    cfg = load_config(child)
+
+    assert cfg["trainer"]["max_shapes"] == 500_000
+
+
+def test_triangle_splatting_scene_configs_apply_full_eval_caps():
+    expected = {
+        "bicycle": 6_400_000,
+        "flowers": 5_500_000,
+        "garden": 5_200_000,
+        "stump": 4_750_000,
+        "treehill": 5_000_000,
+        "room": 2_100_000,
+        "counter": 2_500_000,
+        "kitchen": 2_400_000,
+        "bonsai": 3_000_000,
+        "truck": 2_000_000,
+        "train": 2_500_000,
+        "scan24": 500_000,
+    }
+    config_dir = Path(__file__).resolve().parents[2] / "configs" / "triangle-splatting"
+
+    for scene, cap in expected.items():
+        cfg = load_config(config_dir / f"{scene}.yaml")
+        assert cfg["trainer"]["max_shapes"] == cap
+
+
 def test_build_from_cfg_with_params():
     obj = build_from_cfg(
         {"type": "toy", "params": {"width": 8}, "name": "demo"},

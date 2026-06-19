@@ -34,10 +34,11 @@ eval:
   split: test
   save_renders: true
   render_dir: outputs/{method}/{dataset}/{scene}/test_metrics
-  chamfer:
+  mesh:
     samples: 500000
-  dtu_mesh:
-    samples: 500000
+    downsample_density: 0.2
+    max_dist: 20.0
+    cull_masks: true
 
 metrics:
   - type: psnr
@@ -58,6 +59,7 @@ inspect:
 output:
   dir: outputs/{method}/{dataset}/{scene}
   metrics_file: outputs/{method}/{dataset}/{scene}/metrics.json
+  mesh_metrics_file: outputs/{method}/{dataset}/{scene}/mesh_metrics.json
   mesh_file: outputs/{method}/{dataset}/{scene}/mesh.ply
   stats_file: outputs/{method}/{dataset}/{scene}/stats.json
   report_file: outputs/{method}/{dataset}/{scene}/report.md

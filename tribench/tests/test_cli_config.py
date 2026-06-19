@@ -6,7 +6,9 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from tribench.cli.eval import _infer_dtu_eval_target, _infer_pred_mesh
 from tribench.cli.main import app
+from tribench.core.config import Config
 
 
 def _unified_config(path: Path) -> Path:
@@ -61,21 +63,42 @@ def test_mesh_eval_subcommands_accept_config_options(tmp_path: Path):
     config = tmp_path / "mesh_eval.yaml"
     config.write_text(
         "eval:\n"
-        "  chamfer:\n"
-        "    pred: missing_pred.ply\n"
-        "    gt: missing_gt.ply\n"
-        "    samples: 1\n"
-        "  dtu_mesh:\n"
+        "  mesh:\n"
         "    pred: missing_pred.ply\n"
         "    dtu_root: missing_dtu\n"
         "    scan_id: 24\n"
         "    samples: 1\n"
     )
 
-    for subcommand in ("chamfer", "dtu-mesh"):
-        result = CliRunner().invoke(app, ["eval", subcommand, "--config", str(config)])
-        assert result.exit_code != 2, subcommand
-        assert "Missing option" not in result.output
+    result = CliRunner().invoke(app, ["eval", "mesh", "--config", str(config)])
+    assert result.exit_code != 2
+    assert "Missing option" not in result.output
+
+
+def test_dtu_mesh_eval_can_infer_required_options_from_config():
+    config = "configs/triangle-splatting/scan24.yaml"
+
+    cfg = Config.fromfile(config)
+
+    assert _infer_pred_mesh(cfg) == "outputs/triangle-splatting/dtu/scan24/mesh.ply"
+    assert _infer_dtu_eval_target(cfg) == ("data/dtu", "scan24")
+
+
+def test_eval_chamfer_command_is_removed():
+    result = CliRunner().invoke(app, ["eval", "chamfer", "--config", "configs/triangle-splatting/scan24.yaml"])
+
+    assert result.exit_code != 0
+    assert "No such command" in result.output
+
+
+def test_eval_dtu_mesh_command_is_removed():
+    result = CliRunner().invoke(
+        app,
+        ["eval", "dtu-mesh", "--config", "configs/triangle-splatting/scan24.yaml"],
+    )
+
+    assert result.exit_code != 0
+    assert "No such command" in result.output
 
 
 def test_inspect_accepts_config(tmp_path: Path):

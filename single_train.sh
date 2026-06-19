@@ -662,7 +662,7 @@ run_video() {
 }
 
 # ---------------------------------------------------------------------------
-# DTU Chamfer distance
+# DTU mesh distance
 # ---------------------------------------------------------------------------
 run_dtu_chamfer() {
     local dataset="$1" scene="$2" model_path="$3"
@@ -694,7 +694,7 @@ run_dtu_chamfer() {
     echo "[${dataset}/${scene}] DTU Chamfer started. Log: ${chamfer_log}"
 
     local -a cmd=(
-        "${TB_CMD_ARR[@]}" eval dtu-mesh
+        "${TB_CMD_ARR[@]}" eval mesh
         --pred "${mesh_path}"
         --dtu-root "${DTU_OFFICIAL_ROOT}"
         --scan-id "${scan_id}"

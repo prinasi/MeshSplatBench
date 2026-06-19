@@ -1,0 +1,13 @@
+# @format
+
+_base_: triangle-splatting-caps.yaml
+
+trainer:
+  type: triangle-splatting
+  max_steps: 30000
+  white_background: false
+  densify_until_iter: 15000
+
+adapter:
+  type: triangle-splatting
+  checkpoint: outputs/{method}/{dataset}/{scene}/point_cloud/iteration_{max_steps}

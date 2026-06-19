@@ -1,0 +1,16 @@
+# @format
+
+# Scene-specific triangle count caps from ../triangle-splatting/full_eval.py.
+triangle_caps:
+  bicycle: 6400000
+  flowers: 5500000
+  garden: 5200000
+  stump: 4750000
+  treehill: 5000000
+  room: 2100000
+  counter: 2500000
+  kitchen: 2400000
+  bonsai: 3000000
+  truck: 2000000
+  train: 2500000
+  "scan*": 500000

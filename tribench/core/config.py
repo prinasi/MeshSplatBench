@@ -9,6 +9,7 @@ registries.
 from __future__ import annotations
 
 from copy import deepcopy
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -136,10 +137,12 @@ def finalize_config(config: Mapping[str, Any]) -> dict[str, Any]:
 
     Finalization currently supports two small conventions:
 
+    - Scene-specific triangle caps via ``triangle_caps``.
     - String templates such as ``outputs/{method}/{dataset}/{scene}``.
     - Dataset roots split into ``dataset.root`` plus ``dataset.scene``.
     """
-    resolved = _format_config_templates(_to_plain_dict(config))
+    resolved = _apply_scene_triangle_caps(_to_plain_dict(config))
+    resolved = _format_config_templates(resolved)
     return _resolve_dataset_scene(resolved)
 
 
@@ -165,6 +168,46 @@ class _SafeFormatDict(dict):
 def _format_config_templates(config: dict[str, Any]) -> dict[str, Any]:
     context = _format_context(config)
     return _format_value(config, context)
+
+
+def _apply_scene_triangle_caps(config: dict[str, Any]) -> dict[str, Any]:
+    dataset_cfg = config.get("dataset", {})
+    if not isinstance(dataset_cfg, Mapping):
+        return config
+
+    scene = dataset_cfg.get("scene")
+    if scene is None:
+        return config
+
+    cap_maps = []
+    for key in ("triangle_caps", "triangle_limits"):
+        value = config.get(key)
+        if isinstance(value, Mapping):
+            cap_maps.append(value)
+
+    cap = None
+    for cap_map in cap_maps:
+        if scene in cap_map:
+            cap = cap_map[scene]
+            break
+        scene_name = Path(str(scene)).name
+        if scene_name in cap_map:
+            cap = cap_map[scene_name]
+            break
+        for pattern, value in cap_map.items():
+            pattern_text = str(pattern)
+            if fnmatchcase(str(scene), pattern_text) or fnmatchcase(scene_name, pattern_text):
+                cap = value
+                break
+        if cap is not None:
+            break
+    if cap is None:
+        return config
+
+    trainer_cfg = dict(config.get("trainer", {}) or {})
+    trainer_cfg.setdefault("max_shapes", cap)
+    config["trainer"] = trainer_cfg
+    return config
 
 
 def _format_context(config: Mapping[str, Any]) -> dict[str, Any]:

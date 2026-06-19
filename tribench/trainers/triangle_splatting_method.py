@@ -483,6 +483,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
                 step < opt.densify_until_iter
                 and step % opt.densification_interval == 0
                 and step > opt.densify_from_iter
+                and before < int(opt.max_shapes)
             ):
                 if len(self._train_cameras) < 250 or not self._new_round:
                     dead_mask = torch.logical_or(
@@ -552,6 +553,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
             "triangles_before": before,
             "triangles_after": after,
             "delta": after - before,
+            "cap_max": int(opt.max_shapes),
         }
         return self._last_structure_update
 

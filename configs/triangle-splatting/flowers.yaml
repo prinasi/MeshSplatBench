@@ -5,10 +5,10 @@ _base_:
   - ../base/triangle-splatting.yaml
 
 experiment:
-  name: triangle_splatting_bicycle
+  name: triangle_splatting_flowers
 
 dataset:
-  scene: bicycle
+  scene: flowers
   resolution: 4
 
 trainer:

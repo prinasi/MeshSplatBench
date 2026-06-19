@@ -5,11 +5,8 @@ _base_:
   - ../base/triangle-splatting.yaml
 
 experiment:
-  name: triangle_splatting_bicycle
+  name: triangle_splatting_kitchen
 
 dataset:
-  scene: bicycle
-  resolution: 4
-
-trainer:
-  outdoor: true
+  scene: kitchen
+  resolution: 2

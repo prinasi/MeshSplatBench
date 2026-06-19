@@ -1,4 +1,4 @@
-"""Mesh export and Chamfer-style evaluation utilities."""
+"""Mesh export and Chamfer/DTU-style evaluation utilities."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def export_adapter_mesh(adapter: Any, path: str | Path) -> Path:
     return export_ply(vertices, faces, path)
 
 
-def _load_points(path: str | Path, *, num_samples: int = 500_000) -> np.ndarray:
+def _load_mesh_object(path: str | Path):
     path = Path(path)
     try:
         import trimesh
@@ -64,6 +64,10 @@ def _load_points(path: str | Path, *, num_samples: int = 500_000) -> np.ndarray:
     obj = trimesh.load(path, process=False)
     if isinstance(obj, trimesh.Scene):
         obj = trimesh.util.concatenate(tuple(obj.geometry.values()))
+    return obj
+
+
+def _sample_points(obj: Any, *, num_samples: int = 500_000) -> np.ndarray:
     if hasattr(obj, "faces") and getattr(obj, "faces", None) is not None and len(obj.faces) > 0:
         count = min(num_samples, max(num_samples // 2, len(obj.faces) * 8))
         pts = obj.sample(count)
@@ -72,20 +76,20 @@ def _load_points(path: str | Path, *, num_samples: int = 500_000) -> np.ndarray:
     return np.asarray(pts, dtype=np.float32)
 
 
-def chamfer_distance(
-    pred_path: str | Path,
-    gt_path: str | Path,
-    *,
-    num_samples: int = 500_000,
-) -> dict[str, float]:
-    """Compute symmetric Chamfer distance between mesh/point cloud files."""
+def _load_points(path: str | Path, *, num_samples: int = 500_000) -> np.ndarray:
+    return _sample_points(_load_mesh_object(path), num_samples=num_samples)
+
+
+def _chamfer_points(pred: np.ndarray, gt: np.ndarray) -> dict[str, float]:
     try:
         from scipy.spatial import cKDTree
     except ImportError as exc:
         raise ImportError("Chamfer evaluation requires scipy.") from exc
 
-    pred = _load_points(pred_path, num_samples=num_samples)
-    gt = _load_points(gt_path, num_samples=num_samples)
+    if len(pred) == 0:
+        raise ValueError("Predicted mesh/point cloud produced no evaluation points.")
+    if len(gt) == 0:
+        raise ValueError("Ground-truth point cloud produced no evaluation points.")
     pred_tree = cKDTree(pred)
     gt_tree = cKDTree(gt)
     gt_to_pred, _ = pred_tree.query(gt, k=1)
@@ -102,7 +106,324 @@ def chamfer_distance(
     }
 
 
-def write_mesh_metrics(metrics: dict[str, float], output: str | Path) -> Path:
+def chamfer_distance(
+    pred_path: str | Path,
+    gt_path: str | Path,
+    *,
+    num_samples: int = 500_000,
+) -> dict[str, float]:
+    """Compute symmetric Chamfer distance between mesh/point cloud files."""
+    pred = _load_points(pred_path, num_samples=num_samples)
+    gt = _load_points(gt_path, num_samples=num_samples)
+    return _chamfer_points(pred, gt)
+
+
+def dtu_mesh_metrics(
+    pred_path: str | Path,
+    dtu_root: str | Path,
+    scan_id: str | int,
+    *,
+    scene_root: str | Path | None = None,
+    num_samples: int = 500_000,
+    downsample_density: float = 0.2,
+    patch_size: float = 60.0,
+    max_dist: float = 20.0,
+    cull_masks: bool = True,
+) -> dict[str, Any]:
+    """Evaluate a DTU mesh in the official DTU coordinate frame.
+
+    The triangle-splatting DTU scripts first cull the normalized mesh with scene
+    masks, then apply the first DTU ``scale_mat`` before comparing with official
+    STL points. This function mirrors that flow and uses official ``ObsMask`` /
+    ``Plane`` files when they are present under ``dtu_root``.
+    """
+    dtu_root = Path(dtu_root)
+    gt_path = find_dtu_ground_truth(dtu_root, scan_id)
+    scene_dir = _find_dtu_scene_root(dtu_root, scan_id, scene_root)
+    warnings: list[str] = []
+
+    obj = _load_mesh_object(pred_path)
+    if cull_masks:
+        obj, cull_info = _cull_dtu_mesh_with_scene_masks(obj, scene_dir)
+        warnings.extend(cull_info.pop("warnings", []))
+    else:
+        cull_info = {"mask_culled": False}
+
+    scale_mat, scale_path = _load_dtu_scale_matrix(dtu_root, scan_id, scene_dir)
+    if scale_mat is not None:
+        _apply_dtu_scale(obj, scale_mat)
+    else:
+        warnings.append("DTU cameras.npz not found; evaluated without DTU scale transform.")
+
+    pred = _sample_points(obj, num_samples=num_samples)
+    gt = _load_points(gt_path, num_samples=num_samples)
+
+    obs_mask_path = _dtu_obs_mask_path(dtu_root, scan_id)
+    plane_path = _dtu_plane_path(dtu_root, scan_id)
+    if obs_mask_path.exists():
+        metrics = _official_dtu_metrics(
+            pred,
+            gt,
+            obs_mask_path=obs_mask_path,
+            plane_path=plane_path if plane_path.exists() else None,
+            downsample_density=downsample_density,
+            patch_size=patch_size,
+            max_dist=max_dist,
+        )
+        protocol = "dtu_official"
+        if not plane_path.exists():
+            warnings.append("DTU Plane*.mat not found; completeness used all STL points.")
+    else:
+        metrics = _chamfer_points(pred, gt)
+        protocol = "dtu_scaled_chamfer_fallback" if scale_mat is not None else "raw_chamfer_fallback"
+        warnings.append(
+            "DTU ObsMask file not found; used scaled Chamfer fallback instead of official DTU masking."
+        )
+
+    metrics.update(
+        {
+            "protocol": protocol,
+            "gt_path": str(gt_path),
+            "pred_path": str(pred_path),
+            "scene_root": str(scene_dir) if scene_dir is not None else None,
+            "scale_mat_path": str(scale_path) if scale_path is not None else None,
+            "scale_transform_applied": scale_mat is not None,
+            "samples": int(num_samples),
+            **cull_info,
+        }
+    )
+    if warnings:
+        metrics["warnings"] = warnings
+    return metrics
+
+
+def _scan_number(scan_id: str | int) -> str:
+    scan = str(scan_id)
+    return scan[4:] if scan.startswith("scan") else scan
+
+
+def _find_dtu_scene_root(
+    dtu_root: Path,
+    scan_id: str | int,
+    scene_root: str | Path | None,
+) -> Path | None:
+    if scene_root is not None:
+        path = Path(scene_root)
+        if path.exists():
+            return path
+    scan_num = _scan_number(scan_id)
+    for candidate in (dtu_root / f"scan{scan_num}", dtu_root / str(scan_id)):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _load_dtu_scale_matrix(
+    dtu_root: Path,
+    scan_id: str | int,
+    scene_root: Path | None,
+) -> tuple[np.ndarray | None, Path | None]:
+    scan_num = _scan_number(scan_id)
+    candidates = []
+    if scene_root is not None:
+        candidates.append(scene_root / "cameras.npz")
+    candidates.extend(
+        [dtu_root / f"scan{scan_num}" / "cameras.npz", dtu_root / str(scan_id) / "cameras.npz"]
+    )
+    for path in candidates:
+        if path.exists():
+            data = np.load(path)
+            key = "scale_mat_0"
+            if key in data.files:
+                return data[key].astype(np.float32), path
+    return None, None
+
+
+def _apply_dtu_scale(obj: Any, scale_mat: np.ndarray) -> None:
+    scale = float(scale_mat[0, 0])
+    translate = scale_mat[:3, 3].astype(np.float64)
+    obj.vertices = np.asarray(obj.vertices, dtype=np.float64) * scale + translate[None]
+
+
+def _cull_dtu_mesh_with_scene_masks(obj: Any, scene_root: Path | None) -> tuple[Any, dict[str, Any]]:
+    info: dict[str, Any] = {
+        "mask_culled": False,
+        "vertices_before_cull": int(len(getattr(obj, "vertices", []))),
+        "faces_before_cull": int(len(getattr(obj, "faces", []))) if hasattr(obj, "faces") else 0,
+        "warnings": [],
+    }
+    if scene_root is None:
+        info["warnings"].append("DTU scene root not found; skipped scene-mask culling.")
+        return obj, info
+    camera_file = scene_root / "cameras.npz"
+    mask_dir = scene_root / "mask"
+    image_dir = scene_root / "images"
+    if not image_dir.exists():
+        image_dir = scene_root / "image"
+    if not camera_file.exists() or not mask_dir.exists() or not image_dir.exists():
+        info["warnings"].append("DTU cameras/images/mask directory incomplete; skipped scene-mask culling.")
+        return obj, info
+    if not hasattr(obj, "faces") or getattr(obj, "faces", None) is None or len(obj.faces) == 0:
+        info["warnings"].append("Predicted geometry is a point cloud; skipped mesh face culling.")
+        return obj, info
+
+    try:
+        import cv2
+        from scipy.ndimage import binary_dilation
+    except ImportError as exc:
+        raise ImportError("DTU mask culling requires opencv-python and scipy.") from exc
+
+    image_paths = sorted(path for path in image_dir.glob("*.png") if not path.name.startswith("._"))
+    if not image_paths:
+        info["warnings"].append("No DTU images found; skipped scene-mask culling.")
+        return obj, info
+    camera_data = np.load(camera_file)
+    vertices = np.asarray(obj.vertices, dtype=np.float64)
+    vertices_h = np.concatenate([vertices, np.ones((vertices.shape[0], 1), dtype=np.float64)], axis=1)
+    keep = np.ones(vertices.shape[0], dtype=bool)
+    footprint = _disk_footprint(24)
+
+    for image_idx, image_path in enumerate(image_paths):
+        world_key = f"world_mat_{image_idx}"
+        if world_key not in camera_data.files:
+            continue
+        scale_key = f"scale_mat_{image_idx}"
+        scale_mat = (
+            camera_data[scale_key].astype(np.float64)
+            if scale_key in camera_data.files
+            else np.eye(4, dtype=np.float64)
+        )
+        world_mat = camera_data[world_key].astype(np.float64)
+        mask_path = mask_dir / image_path.name
+        if not mask_path.exists():
+            mask_candidates = sorted(mask_dir.glob(f"{image_idx:03d}.*"))
+            mask_path = mask_candidates[0] if mask_candidates else mask_path
+        mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            continue
+        mask = binary_dilation(mask > 0, structure=footprint)
+        projection = (world_mat @ scale_mat)[:3, :4]
+        decomposed = cv2.decomposeProjectionMatrix(projection.astype(np.float64))
+        K, R, t = decomposed[0], decomposed[1], decomposed[2]
+        K = K / K[2, 2]
+        pose = np.eye(4, dtype=np.float64)
+        pose[:3, :3] = R.T
+        pose[:3, 3] = (t[:3] / t[3])[:, 0]
+        w2c = np.linalg.inv(pose)
+        cam = K @ (w2c[:3, :] @ vertices_h.T)
+        z = cam[2]
+        u = cam[0] / (z + 1e-6)
+        v = cam[1] / (z + 1e-6)
+        height, width = mask.shape[:2]
+        valid = (z > 1e-6) & (u >= 0) & (u < width) & (v >= 0) & (v < height)
+        visible_or_outside = ~valid
+        ui = np.clip(np.rint(u[valid]).astype(np.int64), 0, width - 1)
+        vi = np.clip(np.rint(v[valid]).astype(np.int64), 0, height - 1)
+        visible_or_outside[valid] = mask[vi, ui]
+        keep &= visible_or_outside
+
+    if keep.all():
+        info["vertices_after_cull"] = info["vertices_before_cull"]
+        info["faces_after_cull"] = info["faces_before_cull"]
+        return obj, info
+    face_keep = keep[np.asarray(obj.faces)].all(axis=1)
+    obj.update_faces(face_keep)
+    obj.update_vertices(keep)
+    info.update(
+        {
+            "mask_culled": True,
+            "vertices_after_cull": int(len(obj.vertices)),
+            "faces_after_cull": int(len(obj.faces)),
+        }
+    )
+    if len(obj.faces) == 0:
+        raise ValueError("DTU scene-mask culling removed all predicted mesh faces.")
+    return obj, info
+
+
+def _disk_footprint(radius: int) -> np.ndarray:
+    yy, xx = np.ogrid[-radius : radius + 1, -radius : radius + 1]
+    return (xx * xx + yy * yy) <= radius * radius
+
+
+def _dtu_obs_mask_path(dtu_root: Path, scan_id: str | int) -> Path:
+    scan_num = int(_scan_number(scan_id))
+    return dtu_root / "ObsMask" / f"ObsMask{scan_num}_10.mat"
+
+
+def _dtu_plane_path(dtu_root: Path, scan_id: str | int) -> Path:
+    scan_num = int(_scan_number(scan_id))
+    return dtu_root / "ObsMask" / f"Plane{scan_num}.mat"
+
+
+def _official_dtu_metrics(
+    pred: np.ndarray,
+    gt: np.ndarray,
+    *,
+    obs_mask_path: Path,
+    plane_path: Path | None,
+    downsample_density: float,
+    patch_size: float,
+    max_dist: float,
+) -> dict[str, float]:
+    try:
+        from scipy.io import loadmat
+        from scipy.spatial import cKDTree
+    except ImportError as exc:
+        raise ImportError("Official DTU mesh evaluation requires scipy.") from exc
+
+    pred_down = _voxel_downsample(pred, downsample_density)
+    obs = loadmat(obs_mask_path)
+    obs_mask, bb, resolution = [obs[key] for key in ("ObsMask", "BB", "Res")]
+    bb = bb.astype(np.float32)
+    inbound = ((pred_down >= bb[:1] - patch_size) & (pred_down < bb[1:] + patch_size * 2)).all(axis=1)
+    pred_in = pred_down[inbound]
+    grid = np.rint((pred_in - bb[:1]) / resolution).astype(np.int32)
+    grid_inbound = ((grid >= 0) & (grid < np.array(obs_mask.shape)[None])).all(axis=1)
+    grid_valid = grid[grid_inbound]
+    in_obs = obs_mask[grid_valid[:, 0], grid_valid[:, 1], grid_valid[:, 2]].astype(bool)
+    pred_in_obs = pred_in[grid_inbound][in_obs]
+    if len(pred_in) == 0:
+        raise ValueError("DTU ObsMask filtering removed all predicted points.")
+    if len(pred_in_obs) == 0:
+        raise ValueError("DTU observation mask removed all predicted points.")
+
+    gt_eval = gt
+    if plane_path is not None:
+        plane = loadmat(plane_path)["P"].reshape((1, 4))
+        gt_h = np.concatenate([gt, np.ones_like(gt[:, :1])], axis=1)
+        gt_eval = gt[(plane * gt_h).sum(axis=1) > 0]
+
+    gt_tree = cKDTree(gt)
+    d2s, _ = gt_tree.query(pred_in_obs, k=1)
+    pred_tree = cKDTree(pred_in)
+    s2d, _ = pred_tree.query(gt_eval, k=1)
+    d2s = d2s[d2s < max_dist]
+    s2d = s2d[s2d < max_dist]
+    accuracy = float(np.mean(d2s)) if len(d2s) else float("nan")
+    completeness = float(np.mean(s2d)) if len(s2d) else float("nan")
+    return {
+        "accuracy": accuracy,
+        "completeness": completeness,
+        "overall": float((accuracy + completeness) * 0.5),
+        "mean_d2s": accuracy,
+        "mean_s2d": completeness,
+        "pred_points": int(pred_in_obs.shape[0]),
+        "pred_points_sampled": int(pred.shape[0]),
+        "pred_points_downsampled": int(pred_down.shape[0]),
+        "gt_points": int(gt_eval.shape[0]),
+    }
+
+
+def _voxel_downsample(points: np.ndarray, voxel_size: float) -> np.ndarray:
+    if voxel_size <= 0 or len(points) == 0:
+        return points
+    keys = np.floor(points / voxel_size).astype(np.int64)
+    _, indices = np.unique(keys, axis=0, return_index=True)
+    return points[np.sort(indices)]
+
+
+def write_mesh_metrics(metrics: dict[str, Any], output: str | Path) -> Path:
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(metrics, indent=2))
@@ -112,11 +433,7 @@ def write_mesh_metrics(metrics: dict[str, float], output: str | Path) -> Path:
 def find_dtu_ground_truth(dtu_root: str | Path, scan_id: str | int) -> Path:
     """Find a DTU official point cloud for a scan id."""
     root = Path(dtu_root)
-    scan = str(scan_id)
-    if scan.startswith("scan"):
-        scan_num = scan[4:]
-    else:
-        scan_num = scan
+    scan_num = _scan_number(scan_id)
     candidates = [
         root / f"Points/stl/stl{scan_num:0>3}_total.ply",
         root / f"Points/stl/stl{scan_num}_total.ply",
@@ -127,4 +444,3 @@ def find_dtu_ground_truth(dtu_root: str | Path, scan_id: str | int) -> Path:
         if path.exists():
             return path
     raise FileNotFoundError(f"Cannot find DTU ground-truth point cloud for scan {scan_id} under {root}")
-
