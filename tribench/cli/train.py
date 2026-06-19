@@ -14,7 +14,7 @@ from typing import Optional
 import typer
 
 from tribench.core.builder import build_training_loop, build_training_method
-from tribench.core.config import Config, load_config, save_config_snapshot
+from tribench.core.config import Config, load_config, resolve_dataset_config, save_config_snapshot
 from tribench.trainers.loop import TrainingConfig, TrainingLoop
 from tribench.trainers.registry import get_training_method
 
@@ -203,7 +203,7 @@ def _train_from_structured_config(
     run_output_dir.mkdir(parents=True, exist_ok=True)
     save_config_snapshot(cfg, run_output_dir)
 
-    dataset_cfg = Config(cfg.dataset).to_dict()
+    dataset_cfg = resolve_dataset_config(Config(cfg.dataset).to_dict())
     dataset_root = dataset_cfg.pop("root", dataset_cfg.pop("dataset_path", None))
     if dataset_root is None:
         raise typer.BadParameter("dataset.root is required for training configs.")

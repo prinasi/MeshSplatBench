@@ -76,6 +76,11 @@ def load_config(filename: str | Path) -> dict[str, Any]:
     base keys.
     """
     path = Path(filename).expanduser().resolve()
+    return finalize_config(_load_config(path))
+
+
+def _load_config(path: Path) -> dict[str, Any]:
+    """Load and merge config files without applying final conveniences."""
     data = _read_yaml_mapping(path)
     base_entry = data.pop("_base_", None)
 
@@ -88,7 +93,7 @@ def load_config(filename: str | Path) -> dict[str, Any]:
         base_path = Path(base).expanduser()
         if not base_path.is_absolute():
             base_path = path.parent / base_path
-        merged = merge_dicts(merged, load_config(base_path))
+        merged = merge_dicts(merged, _load_config(base_path.resolve()))
     return merge_dicts(merged, data)
 
 
@@ -126,12 +131,97 @@ def apply_overrides(config: Mapping[str, Any], overrides: list[str] | None) -> d
     return result
 
 
+def finalize_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve inherited config conveniences.
+
+    Finalization currently supports two small conventions:
+
+    - String templates such as ``outputs/{method}/{dataset}/{scene}``.
+    - Dataset roots split into ``dataset.root`` plus ``dataset.scene``.
+    """
+    resolved = _format_config_templates(_to_plain_dict(config))
+    return _resolve_dataset_scene(resolved)
+
+
+def resolve_dataset_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Return one dataset config with ``root`` resolved against ``scene``."""
+    data = {"dataset": _to_plain_dict(config)}
+    return finalize_config(data)["dataset"]
+
+
 def save_config_snapshot(config: Mapping[str, Any], output_dir: str | Path) -> Path:
     """Save the fully resolved config to ``output_dir/config.yaml``."""
     path = Path(output_dir).expanduser() / "config.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_safe_dump(_to_plain_dict(config)))
     return path
+
+
+class _SafeFormatDict(dict):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _format_config_templates(config: dict[str, Any]) -> dict[str, Any]:
+    context = _format_context(config)
+    return _format_value(config, context)
+
+
+def _format_context(config: Mapping[str, Any]) -> dict[str, Any]:
+    dataset_cfg = config.get("dataset", {})
+    if not isinstance(dataset_cfg, Mapping):
+        dataset_cfg = {}
+    trainer_cfg = config.get("trainer", {})
+    if not isinstance(trainer_cfg, Mapping):
+        trainer_cfg = {}
+    adapter_cfg = config.get("adapter", {})
+    if not isinstance(adapter_cfg, Mapping):
+        adapter_cfg = {}
+
+    scene = dataset_cfg.get("scene", "")
+    root = dataset_cfg.get("root", dataset_cfg.get("dataset_path", ""))
+    dataset_name = dataset_cfg.get("name") or dataset_cfg.get("dataset")
+    if dataset_name is None and root:
+        dataset_name = Path(str(root).replace("{scene}", "")).name
+    method = adapter_cfg.get("type") or adapter_cfg.get("name") or trainer_cfg.get("type") or trainer_cfg.get("name")
+    max_steps = trainer_cfg.get("max_steps", "")
+
+    return {
+        "scene": str(scene) if scene is not None else "",
+        "dataset": str(dataset_name) if dataset_name is not None else "",
+        "dataset_name": str(dataset_name) if dataset_name is not None else "",
+        "method": str(method) if method is not None else "",
+        "method_name": str(method) if method is not None else "",
+        "max_steps": str(max_steps) if max_steps is not None else "",
+    }
+
+
+def _format_value(value: Any, context: Mapping[str, str]) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _format_value(item, context) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_format_value(item, context) for item in value]
+    if isinstance(value, str) and "{" in value and "}" in value:
+        return value.format_map(_SafeFormatDict(context))
+    return value
+
+
+def _resolve_dataset_scene(config: dict[str, Any]) -> dict[str, Any]:
+    dataset_cfg = config.get("dataset")
+    if not isinstance(dataset_cfg, Mapping):
+        return config
+
+    dataset = dict(dataset_cfg)
+    scene = dataset.get("scene")
+    key = "root" if "root" in dataset else "dataset_path" if "dataset_path" in dataset else None
+    if scene and key is not None:
+        root = Path(str(dataset[key])).expanduser()
+        scene_name = Path(str(scene)).name
+        if root.name != scene_name:
+            root = root / scene_name
+        dataset[key] = str(root)
+    config["dataset"] = dataset
+    return config
 
 
 def _read_yaml_mapping(path: Path) -> dict[str, Any]:

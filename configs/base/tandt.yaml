@@ -1,0 +1,9 @@
+# @format
+
+_base_: _base_.yaml
+
+dataset:
+  name: tandt
+  type: tanks
+  root: data/tandt
+  resolution: -1

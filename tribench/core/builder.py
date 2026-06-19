@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, TypeVar
 
-from tribench.core.config import Config
+from tribench.core.config import Config, resolve_dataset_config
 
 T = TypeVar("T")
 
@@ -71,11 +71,13 @@ def build_dataset(cfg: Mapping[str, Any]):
     """Build a dataset from a config mapping."""
     from tribench.core.datasets import load_dataset
 
-    plain_cfg = Config(cfg).to_dict()
+    plain_cfg = resolve_dataset_config(Config(cfg).to_dict())
     dataset_type = plain_cfg.pop("type", plain_cfg.pop("dataset_type", "auto"))
     root = plain_cfg.pop("root", plain_cfg.pop("dataset_path", None))
     plain_cfg.pop("eval_split", None)
     plain_cfg.pop("llffhold", None)
+    plain_cfg.pop("scene", None)
+    plain_cfg.pop("name", None)
     if root is None:
         raise KeyError("Dataset config must include 'root' or 'dataset_path'.")
     return load_dataset(root, dataset_type=dataset_type, **plain_cfg)

@@ -1,0 +1,9 @@
+# @format
+
+_base_: _base_.yaml
+
+dataset:
+  name: mipnerf360
+  type: colmap
+  root: data/mipnerf360
+  resolution: -1

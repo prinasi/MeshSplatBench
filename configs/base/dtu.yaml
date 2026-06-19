@@ -1,0 +1,11 @@
+# @format
+
+_base_: _base_.yaml
+
+dataset:
+  name: dtu
+  type: dtu
+  root: data/dtu
+  image_dir: images
+  resolution: 1
+  eval_every: 8

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from tribench.core.config import Config, merge_dicts
+from tribench.core.config import Config, merge_dicts, resolve_dataset_config
 
 
 def load_cli_config(path: str | Path | None) -> Config | None:
@@ -114,8 +114,10 @@ def dataset_config(
         data["eval_every"] = eval_every
     data["split"] = stage_cfg.get("split", split if split is not None else data.get("split", "test"))
 
+    data = resolve_dataset_config(data)
+
     # Training configs may carry train-only keys; dataset builders should not
     # receive them for evaluation/rendering.
-    for key in ("eval_split", "llffhold"):
+    for key in ("eval_split", "llffhold", "scene", "name"):
         data.pop(key, None)
     return data

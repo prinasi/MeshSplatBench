@@ -1,0 +1,25 @@
+# @format
+
+_base_: ../base/mipnerf360.yaml
+
+experiment:
+  name: triangle_splatting_bicycle
+
+dataset:
+  scene: bicycle
+  resolution: 4
+
+trainer:
+  type: triangle-splatting
+  max_steps: 30000
+  white_background: false
+  densify_until_iter: 15000
+
+loop:
+  log_interval: 1000
+  eval_interval: 1000
+  save_interval: 5000
+
+adapter:
+  type: triangle-splatting
+  checkpoint: outputs/{method}/{dataset}/{scene}/point_cloud/iteration_{max_steps}

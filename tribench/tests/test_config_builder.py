@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tribench.core.builder import build_from_cfg
-from tribench.core.config import Config, apply_overrides, load_config
+from tribench.core.config import Config, apply_overrides, load_config, resolve_dataset_config
 from tribench.core.registry import get_adapter
 
 
@@ -39,6 +39,38 @@ def test_load_config_with_base(tmp_path: Path):
     assert cfg["dataset"]["root"] == "data/child"
     assert cfg["trainer"]["type"] == "triangle-splatting"
     assert cfg["trainer"]["max_steps"] == 20
+
+
+def test_load_config_resolves_scene_and_templates(tmp_path: Path):
+    base = tmp_path / "base.yaml"
+    child = tmp_path / "child.yaml"
+    base.write_text(
+        "dataset:\n"
+        "  name: mipnerf360\n"
+        "  type: colmap\n"
+        "  root: data/mipnerf360\n"
+        "output:\n"
+        "  dir: outputs/{method}/{dataset}/{scene}\n"
+    )
+    child.write_text(
+        "_base_: base.yaml\n"
+        "dataset:\n"
+        "  scene: bicycle\n"
+        "trainer:\n"
+        "  type: triangle-splatting\n"
+    )
+
+    cfg = load_config(child)
+
+    assert cfg["dataset"]["root"] == "data/mipnerf360/bicycle"
+    assert cfg["dataset"]["scene"] == "bicycle"
+    assert cfg["output"]["dir"] == "outputs/triangle-splatting/mipnerf360/bicycle"
+
+
+def test_resolve_dataset_config_does_not_duplicate_scene():
+    cfg = resolve_dataset_config({"root": "data/mipnerf360/bicycle", "scene": "bicycle"})
+
+    assert cfg["root"] == "data/mipnerf360/bicycle"
 
 
 def test_build_from_cfg_with_params():
