@@ -8,6 +8,7 @@ scheduling are consistent across backends.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -219,6 +220,20 @@ def _train_from_structured_config(
         if key in dataset_cfg and key not in trainer_cfg:
             trainer_cfg[key] = dataset_cfg[key]
 
+    method_name = str(trainer_cfg.get("type", trainer_cfg.get("name", ""))).replace("_", "-")
+    native_loop = bool(trainer_cfg.pop("native_loop", method_name == "triangle-splatting"))
+    if method_name == "triangle-splatting" and native_loop:
+        summary = _run_triangle_splatting_native_config(
+            trainer_cfg=trainer_cfg,
+            dataset_root=str(dataset_root),
+            output_dir=run_output_dir,
+            max_steps=max_steps,
+            quiet=quiet,
+        )
+        if not quiet:
+            typer.echo(f"Config snapshot saved to {run_output_dir / 'config.yaml'}")
+        return summary
+
     training_method = build_training_method(
         trainer_cfg,
         default_args={
@@ -232,3 +247,102 @@ def _train_from_structured_config(
     if not quiet:
         typer.echo(f"Config snapshot saved to {run_output_dir / 'config.yaml'}")
     return summary
+
+
+def _run_triangle_splatting_native_config(
+    *,
+    trainer_cfg: dict,
+    dataset_root: str,
+    output_dir: Path,
+    max_steps: int,
+    quiet: bool,
+) -> dict:
+    """Run triangle-splatting with its native training loop."""
+    from tribench.vendor.triangle_splatting.train import run_training
+
+    start = time.time()
+    argv = _triangle_splatting_native_argv(
+        trainer_cfg=trainer_cfg,
+        dataset_root=dataset_root,
+        output_dir=output_dir,
+        max_steps=max_steps,
+        quiet=quiet,
+    )
+    run_training(argv)
+    total_time = time.time() - start
+    return {
+        "total_steps": max_steps,
+        "total_time_s": total_time,
+        "avg_step_time_ms": total_time * 1000.0 / max(max_steps, 1),
+        "final_losses": {},
+    }
+
+
+def _triangle_splatting_native_argv(
+    *,
+    trainer_cfg: dict,
+    dataset_root: str,
+    output_dir: Path,
+    max_steps: int,
+    quiet: bool,
+) -> list[str]:
+    argv = [
+        "-s",
+        str(Path(dataset_root).expanduser()),
+        "-m",
+        str(output_dir),
+        "--iterations",
+        str(max_steps),
+        "--test_iterations",
+        "-1",
+        "--save_iterations",
+        "7000",
+        str(max_steps),
+    ]
+
+    images = trainer_cfg.get("images")
+    if images is not None:
+        argv.extend(["-i", str(images)])
+    resolution = trainer_cfg.get("resolution")
+    if resolution is not None:
+        argv.extend(["-r", str(resolution)])
+    if bool(trainer_cfg.get("white_background", False)):
+        argv.append("--white_background")
+    if bool(trainer_cfg.get("eval_split", True)):
+        argv.append("--eval")
+    if bool(trainer_cfg.get("no_dome", False)):
+        argv.append("--no_dome")
+    if bool(trainer_cfg.get("outdoor", False)):
+        argv.append("--outdoor")
+    if quiet:
+        argv.append("--quiet")
+
+    passthrough = {
+        "depth_ratio",
+        "lambda_normals",
+        "lambda_dist",
+        "iteration_mesh",
+        "densify_until_iter",
+        "lambda_opacity",
+        "importance_threshold",
+        "lr_triangles_points_init",
+        "lambda_size",
+        "max_shapes",
+        "opacity_dead",
+        "opacity_lr",
+        "feature_lr",
+        "lr_sigma",
+        "proba_distr",
+        "split_size",
+        "add_shape",
+        "position_lr_delay_mult",
+        "position_lr_max_steps",
+        "densification_interval",
+        "densify_from_iter",
+    }
+    for key in sorted(passthrough):
+        if key in trainer_cfg:
+            argv.extend([f"--{key}", str(trainer_cfg[key])])
+    if bool(trainer_cfg.get("random_background", False)):
+        argv.append("--random_background")
+    return argv

@@ -21,6 +21,43 @@ from tribench.trainers.hooks import TrainingMethod
 from tribench.trainers.registry import register_training_method
 
 
+def _pil_rgb_uint8(
+    image,
+    size: tuple[int, int] | None = None,
+    *,
+    resample=None,
+):
+    """Match native triangle-splatting RGB loading while ignoring alpha."""
+    import numpy as np
+
+    bands = image.getbands()
+    if len(bands) >= 3 and bands[:3] == ("R", "G", "B"):
+        channels = image.split()[:3]
+        if size is not None and image.size != size:
+            channels = tuple(channel.resize(size, resample) for channel in channels)
+        return np.stack([np.asarray(channel) for channel in channels], axis=-1)
+    if len(bands) >= 1:
+        gray = image.split()[0]
+        if size is not None and image.size != size:
+            gray = gray.resize(size, resample)
+        return np.repeat(np.asarray(gray)[..., None], 3, axis=-1)
+    rgb = image.convert("RGB")
+    if size is not None and rgb.size != size:
+        rgb = rgb.resize(size, resample)
+    return np.asarray(rgb)
+
+
+def _seed_native_state(seed: int) -> None:
+    """Match triangle-splatting's deterministic training state."""
+    import numpy as np
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.set_device(torch.device("cuda:0"))
+
+
 @register_training_method("triangle-splatting")
 class TriangleSplattingTrainingMethod(TrainingMethod):
     """Training method implementation for the triangle-splatting backend.
@@ -74,10 +111,10 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         # Lazy-initialized state
         self._model = None
         self._optimizer = None
-        self._scene_cameras = None  # (train_cameras, test_cameras)
+        self._scene = None
         self._bg_color: torch.Tensor | None = None
         self._opt = None
-        self._viewpoint_stack: list[int] = []
+        self._viewpoint_stack: list[Any] = []
         self._new_round = False
         self._removed_them = False
         self._opacity_now = True
@@ -110,166 +147,25 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         if self._initialized:
             return
         self._initialized = True
+        seed = self.extra_args.get("seed", 0)
+        if seed is not None:
+            _seed_native_state(int(seed))
 
-        from tribench.vendor.triangle_splatting.scene.triangle_model import (
-            TriangleModel,
-        )
-        from tribench.vendor.triangle_splatting.scene.colmap_loader import (
-            read_extrinsics_binary,
-            read_intrinsics_binary,
-            read_points3D_binary,
-            read_points3D_text,
-        )
-        from tribench.vendor.triangle_splatting.utils.graphics_utils import (
-            BasicPointCloud,
-            getWorld2View2,
-            getProjectionMatrix,
-        )
+        from tribench.vendor.triangle_splatting.scene import Scene, TriangleModel
         from tribench.vendor.triangle_splatting.triangle_renderer import (
             render as ts_render,
+        )
+        from tribench.vendor.triangle_splatting.utils.graphics_utils import (
+            getProjectionMatrix,
+            getWorld2View2,
         )
 
         self._ts_render = ts_render
         self._getWorld2View2 = getWorld2View2
         self._getProjectionMatrix = getProjectionMatrix
 
-        # -- Load scene cameras (COLMAP) ------------------------------
-        sparse_dir = self.dataset_path / "sparse" / "0"
-        if not sparse_dir.exists():
-            sparse_dir = self.dataset_path / "sparse"
-
-        try:
-            extrinsics = read_extrinsics_binary(str(sparse_dir / "images.bin"))
-            intrinsics = read_intrinsics_binary(str(sparse_dir / "cameras.bin"))
-        except Exception:
-            from tribench.vendor.triangle_splatting.scene.colmap_loader import (
-                read_extrinsics_text,
-                read_intrinsics_text,
-            )
-            extrinsics = read_extrinsics_text(str(sparse_dir / "images.txt"))
-            intrinsics = read_intrinsics_text(str(sparse_dir / "cameras.txt"))
-
         from types import SimpleNamespace
-        from PIL import Image
-        import numpy as np
 
-        image_names = sorted(extrinsics.keys(), key=lambda k: extrinsics[k].name)
-        all_cams = []
-        all_images = []
-        for k in image_names:
-            im = extrinsics[k]
-            cam = intrinsics[im.camera_id]
-            colmap_w, colmap_h = int(cam.width), int(cam.height)
-            params = np.asarray(cam.params, dtype=np.float32)
-
-            if cam.model == "PINHOLE":
-                fx, fy, cx, cy = params[0], params[1], params[2], params[3]
-            elif cam.model in {"SIMPLE_PINHOLE", "SIMPLE_RADIAL", "RADIAL"}:
-                fx = fy = params[0]
-                cx, cy = params[1], params[2]
-            else:
-                fx, fy, cx, cy = params[0], params[1], params[2], params[3]
-
-            fovx = 2 * np.arctan(colmap_w / (2 * fx))
-            fovy = 2 * np.arctan(colmap_h / (2 * fy))
-
-            img_path = self.dataset_path / self.images_dir / Path(im.name).name
-            pil = Image.open(img_path) if img_path.exists() else None
-            image_w, image_h = pil.size if pil is not None else (colmap_w, colmap_h)
-            w, h, _, _ = self._resolve_resolution(image_w, image_h)
-
-            # Native triangle-splatting stores Camera.R as qvec2rotmat().T.
-            # getWorld2View2() transposes it back internally to the COLMAP W2C
-            # rotation; passing qvec2rotmat() directly flips the camera frame.
-            R = im.qvec2rotmat().T
-            t = np.array(im.tvec, dtype=np.float32)
-
-            wvt = torch.from_numpy(
-                self._getWorld2View2(R, t, np.array([0.0, 0.0, 0.0]), 1.0).T
-            ).float().cuda()
-            znear, zfar = 0.01, 100.0
-            proj = self._getProjectionMatrix(znear, zfar, fovx, fovy).T.cuda()
-            full_proj = (wvt.unsqueeze(0).bmm(proj.unsqueeze(0))).squeeze(0)
-
-            # Build SimpleNamespace matching native Camera
-            native_cam = SimpleNamespace(
-                image_width=w,
-                image_height=h,
-                FoVx=fovx,
-                FoVy=fovy,
-                world_view_transform=wvt,
-                full_proj_transform=full_proj,
-                camera_center=wvt.inverse()[3, :3],
-                uid=k,
-            )
-            all_cams.append(native_cam)
-
-            # Load image
-            if pil is not None:
-                if pil.size != (w, h):
-                    pil = pil.resize((w, h), Image.Resampling.LANCZOS)
-                arr = np.asarray(pil)
-                if arr.ndim == 2:
-                    arr = np.stack([arr] * 3, axis=-1)
-                gt = torch.from_numpy(arr[..., :3].copy())
-                pil.close()
-            else:
-                gt = torch.zeros(h, w, 3, dtype=torch.uint8)
-            all_images.append(gt)
-
-        # Train/test split
-        if self.eval_split:
-            train_idx = [i for i in range(len(all_cams)) if i % self.llffhold != 0]
-            test_idx = [i for i in range(len(all_cams)) if i % self.llffhold == 0]
-        else:
-            train_idx = list(range(len(all_cams)))
-            test_idx = []
-
-        self._train_cameras = [all_cams[i] for i in train_idx]
-        self._train_images = [all_images[i] for i in train_idx]
-        self._test_cameras = [all_cams[i] for i in test_idx]
-
-        # -- Load COLMAP 3D points ----------------------------------------
-        try:
-            pts_xyz, pts_rgb, _ = read_points3D_binary(str(sparse_dir / "points3D.bin"))
-        except Exception:
-            try:
-                pts_xyz, pts_rgb, _ = read_points3D_binary(str(sparse_dir / "points3D.bin").replace("points3D.bin", "points3D.BIN"))
-            except Exception:
-                pts_xyz, pts_rgb, _ = read_points3D_text(str(sparse_dir / "points3D.txt"))
-        # Normalize colors to [0, 1]
-        pts_rgb = pts_rgb.astype(np.float32) / 255.0
-
-        pcd = BasicPointCloud(points=pts_xyz, colors=pts_rgb, normals=np.zeros_like(pts_xyz))
-
-        # -- Compute cameras_extent (nerf normalization radius) -----------
-        cam_centers = []
-        extent_image_names = [image_names[i] for i in train_idx]
-        for k in extent_image_names:
-            R = extrinsics[k].qvec2rotmat().T
-            t = np.array(extrinsics[k].tvec, dtype=np.float32)
-            W2C = getWorld2View2(R, t)
-            C2W = np.linalg.inv(W2C)
-            cam_centers.append(C2W[:3, 3:4])
-        cam_centers_np = np.hstack(cam_centers)
-        avg_center = np.mean(cam_centers_np, axis=1, keepdims=True)
-        dist = np.linalg.norm(cam_centers_np - avg_center, axis=0, keepdims=True)
-        cameras_extent = float(np.max(dist)) * 1.1
-
-        # -- Build model via create_from_pcd ------------------------------
-        sh_degree = 3
-        self._model = TriangleModel(sh_degree=sh_degree)
-        self._model.create_from_pcd(
-            pcd,
-            spatial_lr_scale=cameras_extent,
-            opacity=0.28,
-            init_size=2.23,
-            nb_points=3,
-            set_sigma=1.16,
-            no_dome=bool(self.extra_args.get("no_dome", False)),
-        )
-
-        # -- Optimizer via training_setup ---------------------------------
         opt_defaults = dict(
             split_size=24.0,
             start_lr_sigma=0,
@@ -278,6 +174,10 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
             depth_ratio=1.0,
             position_lr_delay_mult=0.01,
             position_lr_max_steps=max(self.max_steps, 30_000),
+            set_opacity=0.28,
+            triangle_size=2.23,
+            nb_points=3,
+            set_sigma=1.16,
             feature_lr=0.0025,
             opacity_lr=0.014,
             lambda_dssim=0.2,
@@ -297,10 +197,39 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
             lr_triangles_points_init=0.0018,
             proba_distr=2,
             max_shapes=3_000_000,
+            no_dome=False,
             outdoor=False,
         )
         opt_defaults.update(self.extra_args)
         self._opt = SimpleNamespace(**opt_defaults)
+
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        dataset_args = SimpleNamespace(
+            sh_degree=3,
+            source_path=str(self.dataset_path),
+            model_path=str(self.output_dir),
+            images=self.images_dir,
+            resolution=self.resolution,
+            white_background=self.white_background,
+            data_device="cuda",
+            eval=self.eval_split,
+        )
+        self._model = TriangleModel(dataset_args.sh_degree)
+        self._scene = Scene(
+            dataset_args,
+            self._model,
+            self._opt.set_opacity,
+            self._opt.triangle_size,
+            self._opt.nb_points,
+            self._opt.set_sigma,
+            bool(self._opt.no_dome),
+            shuffle=bool(self.extra_args.get("shuffle", True)),
+        )
+
+        self._train_cameras = self._scene.getTrainCameras().copy()
+        self._test_cameras = self._scene.getTestCameras().copy()
+
+        # -- Optimizer via training_setup ---------------------------------
         self._model.training_setup(
             self._opt,
             lr_mask=self._opt.lr_mask,
@@ -310,7 +239,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
             lr_triangles_points_init=self._opt.lr_triangles_points_init,
         )
         self._optimizer = self._model.optimizer
-        self._viewpoint_stack = list(range(len(self._train_cameras)))
+        self._viewpoint_stack = self._train_cameras.copy()
 
         # -- Background color ---------------------------------------------
         bg_val = 1.0 if self.white_background else 0.0
@@ -322,8 +251,9 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
 
     def sample_batch(self) -> tuple[CameraBatch, torch.Tensor]:
         self._ensure_initialized()
+        self._model.update_learning_rate(self._step)
         if not self._viewpoint_stack:
-            self._viewpoint_stack = list(range(len(self._train_cameras)))
+            self._viewpoint_stack = self._train_cameras.copy()
             if not self._new_round and self._removed_them:
                 self._new_round = True
                 self._removed_them = False
@@ -331,37 +261,17 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
                 self._new_round = False
 
         stack_pos = random.randint(0, len(self._viewpoint_stack) - 1)
-        idx = self._viewpoint_stack.pop(stack_pos)
-        cam = self._train_cameras[idx]
-        gt = self._train_images[idx].to(device="cuda", dtype=torch.float32).div_(255.0)
+        cam = self._viewpoint_stack.pop(stack_pos)
+        gt = cam.original_image.permute(1, 2, 0).contiguous()
 
         # Build a CameraBatch wrapping this single camera
-        import numpy as np
-
-        w2c = np.linalg.inv(
-            np.vstack([
-                np.hstack([
-                    cam.world_view_transform.T.cpu().numpy()[:3, :3],
-                    cam.camera_center.cpu().numpy().reshape(3, 1),
-                ]),
-                [0, 0, 0, 1],
-            ])
-        )[:3, :4]
-        viewmat = torch.eye(4).unsqueeze(0)
-        viewmat[0, :3, :4] = torch.from_numpy(
-            np.hstack([
-                cam.world_view_transform.T.cpu().numpy()[:3, :3],
-                np.array([[0.0], [0.0], [0.0]]),
-            ])
-        )
-        # Simplified: just use identity-ish matrices and rely on native cam
         camera = CameraBatch(
             viewmats=torch.eye(4).unsqueeze(0),
             camtoworlds=torch.eye(4).unsqueeze(0),
             Ks=torch.eye(3).unsqueeze(0),
             width=cam.image_width,
             height=cam.image_height,
-            metadata={"native_cam": cam, "idx": idx},
+            metadata={"native_cam": cam},
         )
         return camera, gt.unsqueeze(0)
 
@@ -370,7 +280,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         native_cam = cameras.metadata["native_cam"]
         from types import SimpleNamespace
 
-        iteration = self._step + 1
+        iteration = self._step
         if iteration % 1000 == 0:
             self._model.oneupSHdegree()
 
@@ -423,7 +333,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         gt = gt_images.squeeze(0).permute(2, 0, 1).contiguous()
 
         opt = self._opt
-        iteration = self._step + 1
+        iteration = self._step
         pixel_loss = (
             l2_loss(pred, gt)
             if self._model.large and opt.outdoor
@@ -471,17 +381,48 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
 
     def optimizer_step(self) -> None:
         self._ensure_initialized()
-        iteration = self._step + 1
-        self._model.update_learning_rate(iteration)
-        self._optimizer.step()
+        if self._step < self.max_steps:
+            self._optimizer.step()
         self._optimizer.zero_grad(set_to_none=True)
-        self._step += 1
+
+    def _build_dead_mask(
+        self,
+        *,
+        include_area: bool,
+        include_image_size: bool,
+    ) -> tuple[torch.Tensor, dict[str, int]]:
+        opt = self._opt
+        importance_dead = (
+            self._model.importance_score < opt.importance_threshold
+        ).squeeze()
+        opacity_dead = (self._model.get_opacity <= opt.opacity_dead).squeeze()
+        area_dead = (self._model.triangle_area < 2).squeeze()
+        image_size_dead = (self._model.image_size > 1400).squeeze()
+
+        if len(self._train_cameras) < 250 or not self._new_round:
+            dead_mask = torch.logical_or(importance_dead, opacity_dead)
+        else:
+            dead_mask = opacity_dead
+
+        if include_area and not self._new_round:
+            dead_mask = torch.logical_or(dead_mask, area_dead)
+            if include_image_size:
+                dead_mask = torch.logical_or(dead_mask, image_size_dead)
+
+        return dead_mask, {
+            "dead_importance": int(importance_dead.sum().item()),
+            "dead_opacity": int(opacity_dead.sum().item()),
+            "dead_area": int(area_dead.sum().item()),
+            "dead_image_size": int(image_size_dead.sum().item()),
+            "dead_total": int(dead_mask.sum().item()),
+        }
 
     def update_structure(self, step: int) -> dict[str, Any] | None:
         self._ensure_initialized()
         opt = self._opt
         before = int(self._model.get_triangles_points.shape[0])
         update_type = None
+        dead_stats: dict[str, int] = {}
 
         with torch.no_grad():
             if (
@@ -490,24 +431,10 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
                 and step > opt.densify_from_iter
                 and before < int(opt.max_shapes)
             ):
-                if len(self._train_cameras) < 250 or not self._new_round:
-                    dead_mask = torch.logical_or(
-                        (
-                            self._model.importance_score < opt.importance_threshold
-                        ).squeeze(),
-                        (self._model.get_opacity <= opt.opacity_dead).squeeze(),
-                    )
-                else:
-                    dead_mask = (self._model.get_opacity <= opt.opacity_dead).squeeze()
-
-                if step > 1000 and not self._new_round:
-                    dead_mask = torch.logical_or(
-                        dead_mask, (self._model.triangle_area < 2).squeeze()
-                    )
-                    if not opt.outdoor:
-                        dead_mask = torch.logical_or(
-                            dead_mask, (self._model.image_size > 1400).squeeze()
-                        )
+                dead_mask, dead_stats = self._build_dead_mask(
+                    include_area=step > 1000,
+                    include_image_size=not opt.outdoor,
+                )
 
                 if opt.proba_distr == 0:
                     odd_group = True
@@ -527,20 +454,10 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
                 update_type = "densify"
 
             elif step > opt.densify_until_iter and step % opt.densification_interval == 0:
-                if len(self._train_cameras) < 250 or not self._new_round:
-                    dead_mask = torch.logical_or(
-                        (
-                            self._model.importance_score < opt.importance_threshold
-                        ).squeeze(),
-                        (self._model.get_opacity <= opt.opacity_dead).squeeze(),
-                    )
-                else:
-                    dead_mask = (self._model.get_opacity <= opt.opacity_dead).squeeze()
-
-                if not self._new_round:
-                    dead_mask = torch.logical_or(
-                        dead_mask, (self._model.triangle_area < 2).squeeze()
-                    )
+                dead_mask, dead_stats = self._build_dead_mask(
+                    include_area=True,
+                    include_image_size=False,
+                )
 
                 self._model.remove_final_points(dead_mask)
                 self._removed_them = True
@@ -559,6 +476,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
             "triangles_after": after,
             "delta": after - before,
             "cap_max": int(opt.max_shapes),
+            **dead_stats,
         }
         return self._last_structure_update
 
@@ -566,13 +484,16 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         pass
 
     def on_epoch_end(self, epoch: int) -> None:
-        """Save checkpoint at evaluation intervals."""
+        """Save checkpoint at the given training step."""
         self._ensure_initialized()
-        ckpt_dir = self.output_dir / "point_cloud" / f"iteration_{epoch * 1000}"
+        ckpt_dir = self.output_dir / "point_cloud" / f"iteration_{epoch}"
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         # TriangleModel.save() expects a directory path and creates
         # point_cloud_state_dict.pt + hyperparameters.pt inside it.
-        self._model.save(str(ckpt_dir))
+        if self._scene is not None:
+            self._scene.save(epoch)
+        else:
+            self._model.save(str(ckpt_dir))
         metadata = {
             "white_background": self.white_background,
             "background_color": self._bg_color.detach().cpu().tolist(),

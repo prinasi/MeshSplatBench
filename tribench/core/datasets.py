@@ -47,15 +47,37 @@ def _resolve_resolution(
     return max(1, new_width), max(1, new_height)
 
 
+def _pil_rgb_array(
+    image: Image.Image,
+    size: tuple[int, int] | None = None,
+    *,
+    resample: int | None = None,
+) -> np.ndarray:
+    """Load RGB values without compositing or premultiplying alpha."""
+    bands = image.getbands()
+    if len(bands) >= 3 and bands[:3] == ("R", "G", "B"):
+        channels = image.split()[:3]
+        if size is not None and image.size != size:
+            channels = tuple(channel.resize(size, resample) for channel in channels)
+        return np.stack([np.asarray(channel) for channel in channels], axis=-1)
+    if len(bands) >= 1:
+        gray = image.split()[0]
+        if size is not None and image.size != size:
+            gray = gray.resize(size, resample)
+        return np.repeat(np.asarray(gray)[..., None], 3, axis=-1)
+
+    rgb = image.convert("RGB")
+    if size is not None and rgb.size != size:
+        rgb = rgb.resize(size, resample)
+    return np.asarray(rgb)
+
+
 def _load_image(path: Path | None, size: tuple[int, int] | None = None) -> torch.Tensor | None:
     if path is None or not path.exists():
         return None
-    image = Image.open(path)
-    if size is not None and image.size != size:
-        image = image.resize(size, Image.Resampling.BILINEAR)
-    arr = np.asarray(image).astype(np.float32) / 255.0
-    if arr.ndim == 2:
-        arr = np.repeat(arr[..., None], 3, axis=-1)
+    with Image.open(path) as image:
+        arr = _pil_rgb_array(image, size)
+    arr = arr.astype(np.float32) / 255.0
     return torch.from_numpy(arr[..., :3]).contiguous()
 
 

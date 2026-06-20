@@ -88,6 +88,7 @@ class TrainingLoop:
 
         for step in range(1, cfg.max_steps + 1):
             self._step = step
+            self.method.set_step(step)
             t0 = time.perf_counter()
 
             # Sample batch
@@ -102,12 +103,6 @@ class TrainingLoop:
 
             # Backward pass
             total_loss.backward()
-
-            # Optimizer step
-            self.method.optimizer_step()
-
-            # Structure update
-            update_info = self.method.update_structure(step)
 
             # Step end callback
             loss_values = {k: v.item() if isinstance(v, torch.Tensor) else v for k, v in losses.items()}
@@ -124,9 +119,18 @@ class TrainingLoop:
                 lr_info = self.method.get_lr()
                 self._log_step(step, loss_values, step_time, lr_info)
 
-            # Evaluation
-            if step % cfg.eval_interval == 0:
-                self.method.on_epoch_end(step // cfg.eval_interval)
+            # Checkpointing
+            if step % cfg.save_interval == 0 or step == cfg.max_steps:
+                with torch.no_grad():
+                    self.method.on_epoch_end(step)
+
+            # Structure update
+            update_info = self.method.update_structure(step)
+            if update_info is not None:
+                self._log_structure_update(step, update_info)
+
+            # Optimizer step
+            self.method.optimizer_step()
 
         total_time = time.time() - start_time
         avg_step_time = sum(step_times) / len(step_times) if step_times else 0
@@ -156,4 +160,31 @@ class TrainingLoop:
         parts = [f"Step {step:6d}", loss_str, f"{step_time * 1000:.1f}ms"]
         if lr_str:
             parts.append(lr_str)
+        print(" | ".join(parts))
+
+    def _log_structure_update(self, step: int, update_info: dict[str, Any]) -> None:
+        """Log topology changes such as densification and pruning."""
+        update_type = update_info.get("type", "structure")
+        before = update_info.get("triangles_before", "?")
+        after = update_info.get("triangles_after", "?")
+        delta = update_info.get("delta", "?")
+        delta_text = f"{delta:+}" if isinstance(delta, (int, float)) else str(delta)
+        parts = [
+            f"Step {step:6d}",
+            f"{update_type}: {before} -> {after} ({delta_text})",
+        ]
+        dead_keys = [
+            ("dead_total", "dead"),
+            ("dead_opacity", "opacity"),
+            ("dead_importance", "importance"),
+            ("dead_area", "area"),
+            ("dead_image_size", "image_size"),
+        ]
+        dead_parts = [
+            f"{label}: {update_info[key]}"
+            for key, label in dead_keys
+            if key in update_info
+        ]
+        if dead_parts:
+            parts.append(" | ".join(dead_parts))
         print(" | ".join(parts))

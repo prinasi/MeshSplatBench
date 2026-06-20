@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 import typer
 
@@ -141,6 +141,11 @@ def evaluate_mesh(
     downsample_density: Optional[float] = typer.Option(None, "--downsample-density"),
     max_dist: Optional[float] = typer.Option(None, "--max-dist"),
     cull_masks: Optional[bool] = typer.Option(None, "--cull-masks/--no-cull-masks"),
+    force_export: Optional[bool] = typer.Option(
+        None,
+        "--force-export/--no-force-export",
+        help="Re-export config meshes before evaluating. Defaults to auto when checkpoint is newer.",
+    ),
 ):
     """Evaluate a reconstructed mesh. DTU configs use the DTU mesh protocol."""
     from tribench.core.mesh_eval import dtu_mesh_metrics, write_mesh_metrics
@@ -150,8 +155,8 @@ def evaluate_mesh(
     if config is not None:
         cfg = load_cli_config(config)
         legacy_cfg = merge_dicts(section(cfg, "dtu_mesh"), merged_section(cfg, "eval", nested="dtu_mesh"))
-        mesh_cfg = merge_dicts(section(cfg, "mesh_eval"), merged_section(cfg, "eval", nested="mesh"))
-        eval_cfg = merge_dicts(legacy_cfg, mesh_cfg)
+        metric_mesh_cfg = merge_dicts(section(cfg, "mesh_eval"), merged_section(cfg, "eval", nested="mesh"))
+        eval_cfg = merge_dicts(legacy_cfg, metric_mesh_cfg)
         inferred_dtu_root, inferred_scan_id = _infer_dtu_eval_target(cfg)
         scene_root = _infer_dtu_scene_root(cfg)
         pred = pred or eval_cfg.get("pred") or _infer_pred_mesh(cfg)
@@ -181,7 +186,12 @@ def evaluate_mesh(
     max_dist = 20.0 if max_dist is None else max_dist
     cull_masks = True if cull_masks is None else cull_masks
     if cfg is not None:
-        pred = _ensure_pred_mesh_exists(cfg, pred, eval_cfg)
+        pred = _ensure_pred_mesh_exists(
+            cfg,
+            pred,
+            _mesh_export_config(cfg),
+            force_export=force_export,
+        )
     metrics = dtu_mesh_metrics(
         pred,
         dtu_root,
@@ -196,13 +206,24 @@ def evaluate_mesh(
     typer.echo(json.dumps(metrics, indent=2))
 
 
-def _ensure_pred_mesh_exists(cfg, pred: str, mesh_cfg: dict | None = None) -> str:
-    """Export the configured adapter mesh when the predicted mesh is absent."""
+def _ensure_pred_mesh_exists(
+    cfg,
+    pred: str,
+    mesh_cfg: dict | None = None,
+    *,
+    force_export: bool | None = None,
+) -> str:
+    """Export the configured adapter mesh when absent or stale."""
     pred_path = Path(pred).expanduser()
-    if pred_path.exists():
+    adapter_cfg = adapter_config(cfg)
+    checkpoint = adapter_cfg.get("checkpoint")
+    should_export = force_export is True or not pred_path.exists()
+    if pred_path.exists() and force_export is None and checkpoint is not None:
+        checkpoint_mtime = _checkpoint_mtime(Path(str(checkpoint)).expanduser())
+        should_export = checkpoint_mtime is not None and checkpoint_mtime > pred_path.stat().st_mtime
+    if pred_path.exists() and not should_export:
         return str(pred_path)
 
-    adapter_cfg = adapter_config(cfg)
     if adapter_cfg.get("type") is None or adapter_cfg.get("checkpoint") is None:
         return str(pred_path)
 
@@ -210,10 +231,33 @@ def _ensure_pred_mesh_exists(cfg, pred: str, mesh_cfg: dict | None = None) -> st
     from tribench.core.mesh_eval import export_adapter_mesh
     from tribench.cli.render import _mesh_export_kwargs
 
-    typer.echo(f"Predicted mesh not found at {pred_path}; exporting mesh first.")
+    if pred_path.exists():
+        typer.echo(f"Predicted mesh at {pred_path} is stale; re-exporting mesh.")
+    else:
+        typer.echo(f"Predicted mesh not found at {pred_path}; exporting mesh first.")
     adapter = build_adapter(adapter_cfg)
     export_kwargs = _mesh_export_kwargs(cfg, mesh_cfg or section(cfg, "mesh"))
     return str(export_adapter_mesh(adapter, pred_path, **export_kwargs))
+
+
+def _checkpoint_mtime(path: Path) -> float | None:
+    if path.is_dir():
+        state_path = path / "point_cloud_state_dict.pt"
+        if state_path.exists():
+            return state_path.stat().st_mtime
+    if path.exists():
+        return path.stat().st_mtime
+    return None
+
+
+def _mesh_export_config(cfg) -> dict:
+    """Return mesh-export options without inheriting top-level eval split."""
+    mesh_cfg = section(cfg, "mesh")
+    eval_cfg = section(cfg, "eval")
+    eval_mesh_cfg = eval_cfg.get("mesh", {}) or {}
+    if not isinstance(eval_mesh_cfg, Mapping):
+        return mesh_cfg
+    return merge_dicts(mesh_cfg, eval_mesh_cfg)
 
 
 def _infer_pred_mesh(cfg) -> str | None:

@@ -87,3 +87,7 @@ class TrainingMethod(ABC):
     def get_lr(self) -> dict[str, float]:
         """Get current learning rates for all parameter groups."""
         return {}
+
+    def set_step(self, step: int) -> None:
+        """Synchronize the current global training step with the method."""
+        self._step = step

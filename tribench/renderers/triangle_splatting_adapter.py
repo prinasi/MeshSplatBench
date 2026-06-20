@@ -381,6 +381,7 @@ class TriangleSplattingAdapter(RendererAdapter):
         path.parent.mkdir(parents=True, exist_ok=True)
 
         previous_sh_degree = self._model.active_sh_degree
+        # Match the native mesh.py export path: use diffuse color only for TSDF.
         self._model.active_sh_degree = 0
         pipe = SimpleNamespace(
             debug=False,
@@ -403,6 +404,8 @@ class TriangleSplattingAdapter(RendererAdapter):
             if int(num_cluster) > 0:
                 mesh = post_process_mesh(mesh, cluster_to_keep=int(num_cluster))
             o3d.io.write_triangle_mesh(str(path), mesh)
+        except Exception:
+            raise
         finally:
             self._model.active_sh_degree = previous_sh_degree
 

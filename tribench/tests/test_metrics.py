@@ -57,3 +57,10 @@ class TestSSIMLPIPS:
     def test_compute_all_metrics_import(self):
         from tribench.core.metrics import compute_all_metrics
         assert callable(compute_all_metrics)
+
+    def test_lpips_default_matches_triangle_splatting(self):
+        import inspect
+
+        from tribench.core.metrics import compute_lpips
+
+        assert inspect.signature(compute_lpips).parameters["net"].default == "vgg"

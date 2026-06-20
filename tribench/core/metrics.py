@@ -61,7 +61,7 @@ def compute_ssim(
 def compute_lpips(
     pred: torch.Tensor,
     target: torch.Tensor,
-    net: str = "alex",
+    net: str = "vgg",
 ) -> float:
     """Compute Learned Perceptual Image Patch Similarity.
     

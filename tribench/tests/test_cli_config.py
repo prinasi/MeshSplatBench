@@ -6,7 +6,13 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from tribench.cli.eval import _ensure_pred_mesh_exists, _infer_dtu_eval_target, _infer_pred_mesh
+from tribench.cli.eval import (
+    _ensure_pred_mesh_exists,
+    _infer_dtu_eval_target,
+    _infer_pred_mesh,
+    _mesh_export_config,
+)
+from tribench.cli.train import _triangle_splatting_native_argv
 from tribench.cli.main import app
 from tribench.cli.render import _mesh_export_kwargs
 from tribench.core.config import Config
@@ -86,6 +92,33 @@ def test_dtu_mesh_eval_can_infer_required_options_from_config():
     assert _infer_dtu_eval_target(cfg) == ("data/dtu", "scan24")
 
 
+def test_triangle_splatting_native_argv_maps_dtu_config():
+    cfg = Config.fromfile("configs/triangle-splatting/scan24.yaml")
+    trainer_cfg = cfg.trainer.to_dict()
+    dataset_cfg = cfg.dataset.to_dict()
+    trainer_cfg["images"] = dataset_cfg["image_dir"]
+    trainer_cfg["resolution"] = dataset_cfg["resolution"]
+    trainer_cfg["eval_split"] = dataset_cfg["eval_split"]
+
+    argv = _triangle_splatting_native_argv(
+        trainer_cfg=trainer_cfg,
+        dataset_root=dataset_cfg["root"],
+        output_dir=Path(cfg.output.dir),
+        max_steps=trainer_cfg["max_steps"],
+        quiet=False,
+    )
+
+    assert argv[argv.index("-s") + 1] == "data/dtu/scan24"
+    assert argv[argv.index("-m") + 1] == "outputs/triangle-splatting/dtu/scan24"
+    assert argv[argv.index("-r") + 1] == "2"
+    assert "--eval" in argv
+    assert "--no_dome" in argv
+    assert argv[argv.index("--max_shapes") + 1] == "500000"
+    assert argv[argv.index("--lambda_opacity") + 1] == "0.0044"
+    assert argv[argv.index("--importance_threshold") + 1] == "0.027"
+    assert argv[argv.index("--test_iterations") + 1] == "-1"
+
+
 def test_eval_mesh_exports_missing_configured_mesh(tmp_path: Path, monkeypatch):
     config = Config(
         {
@@ -136,6 +169,36 @@ def test_mesh_export_kwargs_resolve_dataset_and_mesh_options():
     assert kwargs["depth_trunc"] == 3.0
     assert kwargs["num_cluster"] == 1
     assert kwargs["depth_ratio"] == 1.0
+
+
+def test_eval_split_does_not_override_mesh_export_split():
+    cfg = Config(
+        {
+            "dataset": {
+                "type": "dtu",
+                "root": "data/dtu/scan24",
+                "image_dir": "images",
+                "resolution": 2,
+                "eval_every": 8,
+            },
+            "mesh": {
+                "split": "train",
+                "voxel_size": 0.004,
+            },
+            "eval": {
+                "split": "test",
+                "mesh": {
+                    "samples": 500000,
+                },
+            },
+        }
+    )
+
+    mesh_cfg = _mesh_export_config(cfg)
+    kwargs = _mesh_export_kwargs(cfg, mesh_cfg)
+
+    assert mesh_cfg["split"] == "train"
+    assert kwargs["split"] == "train"
 
 
 def test_export_adapter_mesh_uses_native_export_when_context_is_available(tmp_path: Path):

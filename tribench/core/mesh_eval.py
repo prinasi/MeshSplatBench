@@ -157,14 +157,13 @@ def dtu_mesh_metrics(
     else:
         warnings.append("DTU cameras.npz not found; evaluated without DTU scale transform.")
 
-    pred = _sample_points(obj, num_samples=num_samples)
     gt = _load_points(gt_path, num_samples=num_samples)
 
     obs_mask_path = _dtu_obs_mask_path(dtu_root, scan_id)
     plane_path = _dtu_plane_path(dtu_root, scan_id)
     if obs_mask_path.exists():
         metrics = _official_dtu_metrics(
-            pred,
+            obj,
             gt,
             obs_mask_path=obs_mask_path,
             plane_path=plane_path if plane_path.exists() else None,
@@ -176,6 +175,7 @@ def dtu_mesh_metrics(
         if not plane_path.exists():
             warnings.append("DTU Plane*.mat not found; completeness used all STL points.")
     else:
+        pred = _sample_points(obj, num_samples=num_samples)
         metrics = _chamfer_points(pred, gt)
         protocol = "dtu_scaled_chamfer_fallback" if scale_mat is not None else "raw_chamfer_fallback"
         warnings.append(
@@ -359,7 +359,7 @@ def _dtu_plane_path(dtu_root: Path, scan_id: str | int) -> Path:
 
 
 def _official_dtu_metrics(
-    pred: np.ndarray,
+    pred_obj: Any,
     gt: np.ndarray,
     *,
     obs_mask_path: Path,
@@ -370,11 +370,14 @@ def _official_dtu_metrics(
 ) -> dict[str, float]:
     try:
         from scipy.io import loadmat
-        from scipy.spatial import cKDTree
+        import sklearn.neighbors as skln
     except ImportError as exc:
-        raise ImportError("Official DTU mesh evaluation requires scipy.") from exc
+        raise ImportError("Official DTU mesh evaluation requires scipy and scikit-learn.") from exc
 
-    pred_down = _voxel_downsample(pred, downsample_density)
+    pred = _official_dtu_sample_geometry(pred_obj, downsample_density)
+    rng = np.random.default_rng()
+    rng.shuffle(pred, axis=0)
+    pred_down = _official_radius_downsample(pred, downsample_density)
     obs = loadmat(obs_mask_path)
     obs_mask, bb, resolution = [obs[key] for key in ("ObsMask", "BB", "Res")]
     bb = bb.astype(np.float32)
@@ -396,10 +399,11 @@ def _official_dtu_metrics(
         gt_h = np.concatenate([gt, np.ones_like(gt[:, :1])], axis=1)
         gt_eval = gt[(plane * gt_h).sum(axis=1) > 0]
 
-    gt_tree = cKDTree(gt)
-    d2s, _ = gt_tree.query(pred_in_obs, k=1)
-    pred_tree = cKDTree(pred_in)
-    s2d, _ = pred_tree.query(gt_eval, k=1)
+    nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=downsample_density, algorithm="kd_tree", n_jobs=-1)
+    nn_engine.fit(gt)
+    d2s, _ = nn_engine.kneighbors(pred_in_obs, n_neighbors=1, return_distance=True)
+    nn_engine.fit(pred_in)
+    s2d, _ = nn_engine.kneighbors(gt_eval, n_neighbors=1, return_distance=True)
     d2s = d2s[d2s < max_dist]
     s2d = s2d[s2d < max_dist]
     accuracy = float(np.mean(d2s)) if len(d2s) else float("nan")
@@ -415,6 +419,61 @@ def _official_dtu_metrics(
         "pred_points_downsampled": int(pred_down.shape[0]),
         "gt_points": int(gt_eval.shape[0]),
     }
+
+
+def _official_dtu_sample_geometry(obj: Any, downsample_density: float) -> np.ndarray:
+    vertices = np.asarray(getattr(obj, "vertices", []), dtype=np.float64)
+    faces = np.asarray(getattr(obj, "faces", []), dtype=np.int64) if hasattr(obj, "faces") else np.empty((0, 3), dtype=np.int64)
+    if len(vertices) == 0:
+        return vertices.reshape(0, 3)
+    if len(faces) == 0:
+        return vertices
+
+    tri_vert = vertices[faces]
+    v1 = tri_vert[:, 1] - tri_vert[:, 0]
+    v2 = tri_vert[:, 2] - tri_vert[:, 0]
+    l1 = np.linalg.norm(v1, axis=-1, keepdims=True)
+    l2 = np.linalg.norm(v2, axis=-1, keepdims=True)
+    area2 = np.linalg.norm(np.cross(v1, v2), axis=-1, keepdims=True)
+    valid = (area2 > 0)[:, 0]
+    l1, l2, area2, v1, v2, tri_vert = [
+        arr[valid] for arr in (l1, l2, area2, v1, v2, tri_vert)
+    ]
+    if len(tri_vert) == 0:
+        return vertices
+
+    thr = downsample_density * np.sqrt(l1 * l2 / area2)
+    n1 = np.floor(l1 / thr).astype(np.int64)[:, 0]
+    n2 = np.floor(l2 / thr).astype(np.int64)[:, 0]
+    sampled = []
+    for i in range(len(tri_vert)):
+        grid = np.mgrid[: n1[i] + 1, : n2[i] + 1].astype(np.float64)
+        grid += 0.5
+        grid[0] /= max(n1[i], 1e-7)
+        grid[1] /= max(n2[i], 1e-7)
+        bary = np.transpose(grid, (1, 2, 0))
+        bary = bary[bary.sum(axis=-1) < 1]
+        if len(bary):
+            sampled.append(v1[i] * bary[:, :1] + v2[i] * bary[:, 1:] + tri_vert[i, 0])
+    if sampled:
+        return np.concatenate([vertices, *sampled], axis=0)
+    return vertices
+
+
+def _official_radius_downsample(points: np.ndarray, radius: float) -> np.ndarray:
+    import sklearn.neighbors as skln
+
+    if len(points) == 0:
+        return points
+    nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=radius, algorithm="kd_tree", n_jobs=-1)
+    nn_engine.fit(points)
+    neighbors = nn_engine.radius_neighbors(points, radius=radius, return_distance=False)
+    keep = np.ones(points.shape[0], dtype=np.bool_)
+    for curr, idxs in enumerate(neighbors):
+        if keep[curr]:
+            keep[idxs] = False
+            keep[curr] = True
+    return points[keep]
 
 
 def _voxel_downsample(points: np.ndarray, voxel_size: float) -> np.ndarray:
