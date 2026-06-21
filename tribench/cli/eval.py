@@ -50,6 +50,7 @@ def evaluate_images(
     from tribench.core.config import save_config_snapshot
     from tribench.core.datasets import load_dataset
     from tribench.core.rendering import load_adapter, render_dataset_split
+    from tribench.core.runtime_stats import load_training_stats_for_checkpoint
 
     method_label = method
     checkpoint_label = checkpoint
@@ -112,12 +113,20 @@ def evaluate_images(
         save_aux=False,
         metrics=True,
     )
+    inference = manifest.get("timing", {})
+    training = load_training_stats_for_checkpoint(checkpoint_label, output)
     metrics = {
         "method": method_label,
         "checkpoint": checkpoint_label,
         "dataset": dataset_label,
         "split": split,
         "num_views": manifest["num_frames"],
+        "inference": inference,
+        "inference_fps": inference.get("fps"),
+        "inference_time_s": inference.get("time_s"),
+        "training": training,
+        "training_time_s": training.get("total_time_s") if training else None,
+        "training_peak_gpu_memory_mib": training.get("peak_gpu_memory_mib") if training else None,
         "aggregate": manifest["aggregate"],
         "per_view": [
             {"name": frame["name"], **(frame["metrics"] or {})}

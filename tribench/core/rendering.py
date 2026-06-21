@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -85,6 +86,11 @@ def render_sample(
     return output
 
 
+def _cuda_sync_if_available() -> None:
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
 def render_dataset_split(
     adapter: RendererAdapter,
     dataset: DatasetBase,
@@ -104,11 +110,36 @@ def render_dataset_split(
     depth_dir = output_dir / "depth"
     alpha_dir = output_dir / "alpha"
 
+    warmup_time_s = 0.0
+    warmup_frames = 0
+    if len(dataset) > 0 and torch.cuda.is_available():
+        sample = dataset.sample(0)
+        camera = sample.camera.to(device)
+        _cuda_sync_if_available()
+        warmup_start = time.perf_counter()
+        with torch.no_grad():
+            adapter.render(camera, mode="eval")
+        _cuda_sync_if_available()
+        warmup_time_s = time.perf_counter() - warmup_start
+        warmup_frames = 1
+
     records: list[RenderRecord] = []
     per_view: list[dict[str, float]] = []
+    inference_time_s = 0.0
+    frame_times_s: list[float] = []
+    wall_start = time.perf_counter()
     for idx in range(len(dataset)):
         sample = dataset.sample(idx)
-        output = render_sample(adapter, sample, device=device)
+        camera = sample.camera.to(device)
+        _cuda_sync_if_available()
+        render_start = time.perf_counter()
+        with torch.no_grad():
+            output = adapter.render(camera, mode="eval")
+        _cuda_sync_if_available()
+        frame_time_s = time.perf_counter() - render_start
+        inference_time_s += frame_time_s
+        frame_times_s.append(frame_time_s)
+
         stem = f"{idx:05d}_{sample.name}"
         render_path = save_image(render_dir / f"{stem}.png", output.rgb)
 
@@ -150,8 +181,22 @@ def render_dataset_split(
             aggregate[f"{key}_mean"] = float(np.mean(vals))
             aggregate[f"{key}_std"] = float(np.std(vals))
 
+    wall_time_s = time.perf_counter() - wall_start
+    num_frames = len(records)
+    timing = {
+        "num_frames": num_frames,
+        "time_s": inference_time_s,
+        "fps": num_frames / inference_time_s if inference_time_s > 0 else 0.0,
+        "mean_frame_time_ms": (inference_time_s / num_frames * 1000.0) if num_frames > 0 else 0.0,
+        "median_frame_time_ms": float(np.median(frame_times_s) * 1000.0) if frame_times_s else 0.0,
+        "warmup_frames": warmup_frames,
+        "warmup_time_s": warmup_time_s,
+        "wall_time_s": wall_time_s,
+        "wall_fps": num_frames / wall_time_s if wall_time_s > 0 else 0.0,
+    }
     manifest = {
-        "num_frames": len(records),
+        "num_frames": num_frames,
+        "timing": timing,
         "aggregate": aggregate,
         "frames": [
             {
@@ -169,7 +214,9 @@ def render_dataset_split(
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     if per_view:
-        (output_dir / "metrics.json").write_text(json.dumps({"per_view": per_view, "aggregate": aggregate}, indent=2))
+        (output_dir / "metrics.json").write_text(
+            json.dumps({"per_view": per_view, "aggregate": aggregate, "inference": timing}, indent=2)
+        )
     return manifest
 
 

@@ -16,6 +16,7 @@ import typer
 
 from tribench.core.builder import build_training_loop, build_training_method
 from tribench.core.config import Config, load_config, resolve_dataset_config, save_config_snapshot
+from tribench.core.runtime_stats import run_with_training_stats
 from tribench.trainers.loop import TrainingConfig, TrainingLoop
 from tribench.trainers.registry import get_training_method
 
@@ -180,7 +181,7 @@ def train(
         output_dir=str(output_dir),
     )
     loop = TrainingLoop(training_method, loop_config)
-    summary = loop.train()
+    summary = run_with_training_stats(loop.train, output_dir)
 
     if not quiet:
         typer.echo(f"Training complete: {summary['total_steps']} steps "
@@ -223,12 +224,15 @@ def _train_from_structured_config(
     method_name = str(trainer_cfg.get("type", trainer_cfg.get("name", ""))).replace("_", "-")
     native_loop = bool(trainer_cfg.pop("native_loop", method_name == "triangle-splatting"))
     if method_name == "triangle-splatting" and native_loop:
-        summary = _run_triangle_splatting_native_config(
-            trainer_cfg=trainer_cfg,
-            dataset_root=str(dataset_root),
-            output_dir=run_output_dir,
-            max_steps=max_steps,
-            quiet=quiet,
+        summary = run_with_training_stats(
+            lambda: _run_triangle_splatting_native_config(
+                trainer_cfg=trainer_cfg,
+                dataset_root=str(dataset_root),
+                output_dir=run_output_dir,
+                max_steps=max_steps,
+                quiet=quiet,
+            ),
+            run_output_dir,
         )
         if not quiet:
             typer.echo(f"Config snapshot saved to {run_output_dir / 'config.yaml'}")
@@ -243,7 +247,7 @@ def _train_from_structured_config(
         },
     )
     loop = build_training_loop(loop_cfg, training_method, output_dir=run_output_dir)
-    summary = loop.train()
+    summary = run_with_training_stats(loop.train, run_output_dir)
     if not quiet:
         typer.echo(f"Config snapshot saved to {run_output_dir / 'config.yaml'}")
     return summary

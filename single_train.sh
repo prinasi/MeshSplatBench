@@ -365,16 +365,44 @@ def fmt(v):
     except Exception:
         return "N/A"
 
+def fmt_mib(v):
+    try:
+        return str(int(round(float(v))))
+    except Exception:
+        return "N/A"
+
+def fmt_seconds(v):
+    try:
+        return f"{float(v):.1f}"
+    except Exception:
+        return "N/A"
+
 try:
     with open(sys.argv[1]) as f:
         d = json.load(f)
     agg = d.get("aggregate", {})
-    print(fmt(agg.get("psnr_mean")), fmt(agg.get("ssim_mean")), fmt(agg.get("lpips_mean")))
+    inference = d.get("inference", {}) or {}
+    training = d.get("training", {}) or {}
+    fps = d.get("inference_fps", inference.get("fps"))
+    train_mem = d.get("training_peak_gpu_memory_mib", training.get("peak_gpu_memory_mib"))
+    train_time = d.get("training_time_s", training.get("total_time_s"))
+    print(
+        fmt(agg.get("psnr_mean")),
+        fmt(agg.get("ssim_mean")),
+        fmt(agg.get("lpips_mean")),
+        fmt(fps),
+        fmt_mib(train_mem),
+        fmt_seconds(train_time),
+    )
 except Exception:
-    print("N/A N/A N/A")
+    print("N/A N/A N/A N/A N/A N/A")
 PY
 )
-    read -r LAST_PSNR LAST_SSIM LAST_LPIPS <<< "${values}"
+    local metric_fps metric_train_memory metric_train_time
+    read -r LAST_PSNR LAST_SSIM LAST_LPIPS metric_fps metric_train_memory metric_train_time <<< "${values}"
+    [[ "${metric_fps}" != "N/A" ]] && LAST_RENDER_FPS="${metric_fps}"
+    [[ "${metric_train_memory}" != "N/A" ]] && LAST_TRAIN_MEMORY="${metric_train_memory}"
+    [[ "${metric_train_time}" != "N/A" ]] && LAST_TRAIN_TIME="${metric_train_time}"
 }
 
 read_chamfer_from_json() {
