@@ -17,7 +17,7 @@ TriBench provides a single, consistent evaluation framework for comparing differ
 
 | Method                       | Adapter                    | Status  |
 | ---------------------------- | -------------------------- | ------- |
-| 2D Triangle Splatting (2DTS) | `D2TSAdapter`              | Planned |
+| 2D Triangle Splatting (2DTS) | `D2TSAdapter`              | Initial config/train/render/eval support |
 | Triangle Splatting           | `TriangleSplattingAdapter` | Planned |
 | MeshSplatting                | `MeshSplattingAdapter`     | Planned |
 | DiffSoup                     | `DiffSoupAdapter`          | Planned |
@@ -47,6 +47,9 @@ tribench render video --config configs/triangle-splatting/mipnerf360/bicycle.yam
 bash single_train.sh triangle-splatting mipnerf360/all 0
 bash single_train.sh triangle-splatting tandt/all 0
 bash single_train.sh triangle-splatting dtu/all 0
+bash single_train.sh 2dts mipnerf360/all 0
+bash single_train.sh 2dts tandt/all 0
+bash single_train.sh 2dts dtu/all 0
 ```
 
 ## Config Inheritance
@@ -63,6 +66,11 @@ Scene configs are grouped by method and dataset:
 configs/triangle-splatting/
 ├── dtu/scan24.yaml
 ├── mipnerf360/bicycle.yaml
+└── tandt/truck.yaml
+configs/2dts/
+├── dtu/scan24.yaml
+├── mipnerf360/bicycle.yaml
+├── native/dtu.yaml
 └── tandt/truck.yaml
 ```
 
@@ -96,6 +104,9 @@ exports videos, and prints a summary table:
 bash single_train.sh triangle-splatting mipnerf360/all 0
 bash single_train.sh triangle-splatting tandt/all 0
 bash single_train.sh triangle-splatting dtu/all 0
+bash single_train.sh 2dts mipnerf360/all 0
+bash single_train.sh 2dts tandt/all 0
+bash single_train.sh 2dts dtu/all 0
 ```
 
 Use `all` as the target to run all built-in datasets in one pass.

@@ -71,6 +71,7 @@ class D2TSAdapter(RendererAdapter):
 
         try:
             from tribench.vendor.d2ts.diff_recon.renderer.triangle_renderer import TriangleRenderer
+            from tribench.vendor.d2ts.diff_recon.models.raw_triangle import RawTriangle
             from tribench.vendor.d2ts.diff_recon.utils.camera import Camera
         except ImportError as exc:
             raise ImportError(
@@ -79,21 +80,38 @@ class D2TSAdapter(RendererAdapter):
             ) from exc
 
         self._TriangleRenderer = TriangleRenderer
+        self._RawTriangle = RawTriangle
         self._Camera = Camera
         self._initialized = True
 
     def load_checkpoint(self, path: str) -> None:
-        """Load a 2DTS checkpoint saved by ``VanillaTSModel.save_ckpt``."""
+        """Load a 2DTS checkpoint or exported point-cloud PLY."""
         self._ensure_imports()
 
         ckpt_path = Path(path)
         if ckpt_path.is_dir():
-            candidates = sorted(ckpt_path.glob("*.pth")) + sorted(ckpt_path.glob("*.pt"))
+            ckpt_candidates = [
+                *(ckpt_path / "ckpt").glob("*.ckpt"),
+                *ckpt_path.glob("*.ckpt"),
+                *ckpt_path.glob("*.pth"),
+                *ckpt_path.glob("*.pt"),
+            ]
+            candidates = sorted(ckpt_candidates, key=_checkpoint_sort_key)
             if not candidates:
-                raise FileNotFoundError(f"No .pt/.pth checkpoint found under {ckpt_path}")
+                ply_candidates = [
+                    *(ckpt_path / "point_cloud").glob("*.ply"),
+                    *ckpt_path.glob("*.ply"),
+                ]
+                candidates = sorted(ply_candidates, key=_checkpoint_sort_key)
+            if not candidates:
+                raise FileNotFoundError(f"No .ckpt/.pt/.pth checkpoint or point_cloud/*.ply found under {ckpt_path}")
             ckpt_path = candidates[-1]
         if not ckpt_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+        if ckpt_path.suffix.lower() == ".ply":
+            self._load_ply_checkpoint(ckpt_path)
+            return
 
         loaded = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
         if isinstance(loaded, tuple):
@@ -111,10 +129,11 @@ class D2TSAdapter(RendererAdapter):
         if missing:
             raise KeyError(f"2DTS checkpoint missing keys: {', '.join(missing)}")
 
-        vertex = state_dict["_vertex"].to("cuda", dtype=torch.float32).detach().clone()
-        opacity = state_dict["_opacity"].to("cuda", dtype=torch.float32).detach().clone()
-        f_dc = state_dict["_f_dc"].to("cuda", dtype=torch.float32).detach().clone()
-        f_rest = state_dict["_f_rest"].to("cuda", dtype=torch.float32).detach().clone()
+        device = _checkpoint_device()
+        vertex = state_dict["_vertex"].to(device, dtype=torch.float32).detach().clone()
+        opacity = state_dict["_opacity"].to(device, dtype=torch.float32).detach().clone()
+        f_dc = state_dict["_f_dc"].to(device, dtype=torch.float32).detach().clone()
+        f_rest = state_dict["_f_rest"].to(device, dtype=torch.float32).detach().clone()
 
         coeff_dim = f_rest.shape[-2] + 1
         self.max_sh_degree = int(math.sqrt(coeff_dim) - 1)
@@ -126,6 +145,33 @@ class D2TSAdapter(RendererAdapter):
             f_rest=f_rest.requires_grad_(True),
         )
         self._checkpoint_path = str(ckpt_path)
+
+    def _load_ply_checkpoint(self, path: Path) -> None:
+        triangle_model = self._RawTriangle(ply_path=str(path))
+        if len(triangle_model) == 0:
+            raise ValueError(f"2DTS point-cloud PLY contains no triangles: {path}")
+
+        device = _checkpoint_device()
+        vertex = torch.as_tensor(triangle_model.vertex, dtype=torch.float32, device=device)
+        opacity = torch.as_tensor(triangle_model.opacity, dtype=torch.float32, device=device)
+        shs = torch.as_tensor(triangle_model.shs, dtype=torch.float32, device=device)
+        if shs.ndim == 2:
+            shs = shs.view(shs.shape[0], -1, 3)
+        elif shs.ndim == 3:
+            raise ValueError("2DTS vertex-color PLY checkpoints are not supported by this adapter yet.")
+        else:
+            raise ValueError(f"Unsupported 2DTS SH tensor shape in PLY: {tuple(shs.shape)}")
+
+        coeff_dim = shs.shape[-2]
+        self.max_sh_degree = int(math.sqrt(coeff_dim) - 1)
+        self.active_sh_degree = self.max_sh_degree
+        self._model = SimpleNamespace(
+            vertex=vertex.requires_grad_(True),
+            opacity=opacity.requires_grad_(True),
+            f_dc=shs[:, :1, :].contiguous().requires_grad_(True),
+            f_rest=shs[:, 1:, :].contiguous().requires_grad_(True),
+        )
+        self._checkpoint_path = str(path)
 
     def load_scene(self, dataset_path: str, split: str = "test") -> None:
         raise NotImplementedError(
@@ -192,7 +238,7 @@ class D2TSAdapter(RendererAdapter):
             image_height=cameras.height,
             znear=cameras.near,
             zfar=cameras.far,
-        ).to(torch.device("cuda"))
+        ).to(_checkpoint_device())
 
     def render(self, cameras: CameraBatch, *, mode: str = "eval") -> RenderOutput:
         if self._model is None:
@@ -201,10 +247,12 @@ class D2TSAdapter(RendererAdapter):
 
         native_cam = self._build_native_camera(cameras, idx=0)
         vertex = self._model.vertex
+        if vertex.device.type != "cuda":
+            raise RuntimeError("2DTS image rendering requires an available CUDA GPU.")
         shs = torch.cat((self._model.f_dc, self._model.f_rest), dim=-2)
         opacity = torch.sigmoid(self._model.opacity)
         bg_depth = (native_cam.camera_center.view(1, 1, 3) - vertex).norm(dim=-1).max().item()
-        bg_color = torch.tensor([1.0, 1.0, 1.0], device="cuda")
+        bg_color = torch.tensor([1.0, 1.0, 1.0], device=vertex.device)
         renderer = self._TriangleRenderer(
             native_cam,
             bg_depth=bg_depth,
@@ -251,3 +299,14 @@ class D2TSAdapter(RendererAdapter):
             gamma=self.gamma,
             back_culling=self.back_culling,
         )
+
+
+def _checkpoint_sort_key(path: Path) -> tuple[int, str]:
+    try:
+        return int(path.stem), path.name
+    except ValueError:
+        return -1, path.name
+
+
+def _checkpoint_device() -> torch.device:
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")

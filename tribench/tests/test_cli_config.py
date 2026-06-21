@@ -119,6 +119,38 @@ def test_triangle_splatting_native_argv_maps_dtu_config():
     assert argv[argv.index("--test_iterations") + 1] == "-1"
 
 
+def test_2dts_config_resolves_native_training_paths():
+    cfg = Config.fromfile("configs/2dts/dtu/scan24.yaml")
+
+    assert cfg.trainer.type == "2dts"
+    assert cfg.adapter.checkpoint == "outputs/2dts/dtu/scan24"
+    assert cfg.dataset.root == "data/dtu/scan24"
+    assert cfg.d2ts.native_config == "configs/2dts/native/dtu.yaml"
+    assert cfg.d2ts.target_point_num == 1_000_000
+    assert cfg.output.mesh_file == "outputs/2dts/dtu/scan24/mesh_ply/30000_pcd.ply"
+
+
+def test_2dts_vanilla_ts_import_does_not_require_gaussian_rasterizer():
+    from tribench.vendor.d2ts.diff_recon import VanillaTSTrainer
+    from tribench.vendor.d2ts.diff_recon.renderer import GaussianRenderer, HybridRenderer, TriangleRenderer
+
+    assert VanillaTSTrainer.__name__ == "VanillaTSTrainer"
+    assert TriangleRenderer.__name__ == "TriangleRenderer"
+    assert GaussianRenderer is None or GaussianRenderer.__name__ == "GaussianRenderer"
+    assert HybridRenderer is None or HybridRenderer.__name__ == "HybridRenderer"
+
+
+def test_2dts_checkpoint_iterations_are_forced_for_final_step():
+    from tribench.trainers.d2ts_native import _retarget_iteration_list
+
+    class NativeTrainerConfig:
+        checkpoint_iterations = []
+
+    _retarget_iteration_list(NativeTrainerConfig, "checkpoint_iterations", 30_000, force=True)
+
+    assert NativeTrainerConfig.checkpoint_iterations == [30_000]
+
+
 def test_eval_mesh_exports_missing_configured_mesh(tmp_path: Path, monkeypatch):
     config = Config(
         {

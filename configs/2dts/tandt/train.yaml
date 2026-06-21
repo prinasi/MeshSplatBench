@@ -1,0 +1,19 @@
+# @format
+
+_base_:
+  - ../../base/tandt.yaml
+  - ../../base/2dts.yaml
+
+experiment:
+  name: 2dts_train
+
+dataset:
+  scene: train
+  resolution: 1
+
+trainer:
+  max_steps: 40000
+
+d2ts:
+  native_config: configs/2dts/native/tandt.yaml
+  target_point_num: 1000000

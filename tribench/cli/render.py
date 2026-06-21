@@ -111,7 +111,7 @@ def render_images(
             )
         adapter = _load(method, checkpoint)
         ds = _load_dataset(dataset, dataset_type, split, eval_every, image_dir, resolution)
-    manifest = render_dataset_split(adapter, ds, output_dir, save_gt=save_gt, save_aux=save_aux)
+    manifest = render_dataset_split(adapter, ds, output_dir, device=adapter.device, save_gt=save_gt, save_aux=save_aux)
     typer.echo(f"Rendered {manifest['num_frames']} frames to {output_dir}")
 
 
@@ -175,6 +175,7 @@ def render_split(
         adapter,
         ds,
         output_dir,
+        device=adapter.device,
         save_gt=save_gt,
         save_aux=save_aux,
         metrics=metrics,

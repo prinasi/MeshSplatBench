@@ -124,6 +124,42 @@ class TestBackendAwareAdapters:
             adapter.to_primitive()
 
 
+class TestD2TSAdapter:
+    """Tests for 2DTS checkpoint discovery fallbacks."""
+
+    def test_load_checkpoint_falls_back_to_point_cloud_ply(self, tmp_path):
+        run_dir = tmp_path / "scan24"
+        point_cloud = run_dir / "point_cloud"
+        point_cloud.mkdir(parents=True)
+        ply = point_cloud / "30000.ply"
+        ply.write_text(
+            "ply\n"
+            "format ascii 1.0\n"
+            "element vertex 1\n"
+            "property float x1\n"
+            "property float y1\n"
+            "property float z1\n"
+            "property float x2\n"
+            "property float y2\n"
+            "property float z2\n"
+            "property float x3\n"
+            "property float y3\n"
+            "property float z3\n"
+            "property float opacity\n"
+            "property float f_dc_0\n"
+            "property float f_dc_1\n"
+            "property float f_dc_2\n"
+            "end_header\n"
+            "0 0 0 1 0 0 0 1 0 0.5 0.1 0.2 0.3\n"
+        )
+
+        adapter = D2TSAdapter()
+        adapter.load_checkpoint(str(run_dir))
+
+        assert adapter._checkpoint_path == str(ply)
+        assert adapter.model_stats()["primitive_count"] == 1
+
+
 class TestTriangleSplattingAdapter:
     """Tests for the TriangleSplattingAdapter (real implementation)."""
 

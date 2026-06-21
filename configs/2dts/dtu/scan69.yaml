@@ -1,0 +1,19 @@
+# @format
+
+_base_: [../../base/dtu.yaml, ../../base/2dts.yaml]
+
+experiment:
+  name: 2dts_scan69
+
+dataset:
+  scene: scan69
+
+d2ts:
+  native_config: configs/2dts/native/dtu.yaml
+  target_point_num: 1000000
+
+mesh:
+  output: outputs/{method}/{dataset}/{scene}/mesh_ply/{max_steps}_pcd.ply
+
+output:
+  mesh_file: outputs/{method}/{dataset}/{scene}/mesh_ply/{max_steps}_pcd.ply

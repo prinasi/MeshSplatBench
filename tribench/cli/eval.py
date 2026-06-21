@@ -109,6 +109,7 @@ def evaluate_images(
         adapter,
         ds,
         render_dir,
+        device=adapter.device,
         save_gt=save_renders,
         save_aux=False,
         metrics=True,

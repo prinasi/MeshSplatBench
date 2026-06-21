@@ -1,0 +1,20 @@
+# @format
+
+trainer:
+  type: 2dts
+  max_steps: 30000
+
+adapter:
+  type: 2dts
+  checkpoint: outputs/{method}/{dataset}/{scene}
+
+output:
+  dir: outputs/{method}/{dataset}/{scene}
+  metrics_file: outputs/{method}/{dataset}/{scene}/metrics.json
+  mesh_metrics_file: outputs/{method}/{dataset}/{scene}/mesh_metrics.json
+  stats_file: outputs/{method}/{dataset}/{scene}/stats.json
+  report_file: outputs/{method}/{dataset}/{scene}/report.md
+
+d2ts:
+  clean_output_dir: false
+  use_tensorboard: true

@@ -339,6 +339,7 @@ PY
     [[ "${metric_fps}" != "N/A" ]] && LAST_RENDER_FPS="${metric_fps}"
     [[ "${metric_train_memory}" != "N/A" ]] && LAST_TRAIN_MEMORY="${metric_train_memory}"
     [[ "${metric_train_time}" != "N/A" ]] && LAST_TRAIN_TIME="${metric_train_time}"
+    return 0
 }
 
 read_chamfer_from_json() {

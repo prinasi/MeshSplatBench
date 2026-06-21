@@ -1,0 +1,16 @@
+# @format
+
+_base_:
+  - ../../base/mipnerf360.yaml
+  - ../../base/2dts.yaml
+
+experiment:
+  name: 2dts_counter
+
+dataset:
+  scene: counter
+  resolution: 2
+
+d2ts:
+  native_config: configs/2dts/native/mipnerf360.yaml
+  target_point_num: 1000000
