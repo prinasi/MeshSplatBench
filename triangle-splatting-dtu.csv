@@ -1,2 +1,0 @@
-Dataset,Scene,PSNR,SSIM,LPIPS,FPS,Training Memory (MiB),Training Time (s),CD,Metrics File
-dtu,scan24,22.8152,0.8632,0.2390,192.96,4007,707.2,1.0090,/home/zkx/Dev/tribench/outputs/triangle-splatting/dtu/scan24/metrics.json

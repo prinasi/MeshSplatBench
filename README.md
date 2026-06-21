@@ -34,14 +34,19 @@ pip install -e ".[dev]"
 
 ```bash
 # Train, render, evaluate, inspect, and profile from one experiment config
-tribench train --config configs/triangle-splatting/bicycle.yaml
-tribench render images --config configs/triangle-splatting/bicycle.yaml
-tribench eval images --config configs/triangle-splatting/bicycle.yaml
-tribench inspect --config configs/triangle-splatting/bicycle.yaml
-tribench profile --config configs/triangle-splatting/bicycle.yaml
+tribench train --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+tribench render images --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+tribench eval images --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+tribench inspect --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+tribench profile --config configs/triangle-splatting/mipnerf360/bicycle.yaml
 
 # Config values can still be overridden from the CLI
-tribench render video --config configs/triangle-splatting/bicycle.yaml --output-dir outputs/demo-video
+tribench render video --config configs/triangle-splatting/mipnerf360/bicycle.yaml --output-dir outputs/demo-video
+
+# Train complete datasets with the scene pipeline helper
+bash single_train.sh triangle-splatting mipnerf360/all 0
+bash single_train.sh triangle-splatting tandt/all 0
+bash single_train.sh triangle-splatting dtu/all 0
 ```
 
 ## Config Inheritance
@@ -49,17 +54,26 @@ tribench render video --config configs/triangle-splatting/bicycle.yaml --output-
 Experiment configs use `_base_` inheritance. Common defaults live in
 `configs/base/_base_.yaml`, dataset-level defaults live in files such as
 `configs/base/mipnerf360.yaml`, method-level shared settings live in files such
-as `configs/base/triangle-splatting.yaml`, and method/scene configs only keep
-the fields that are unique to that run.
+as `configs/base/triangle-splatting.yaml`, and method/dataset/scene configs
+only keep the fields that are unique to that run.
 
-For example, `configs/triangle-splatting/bicycle.yaml` inherits the MipNeRF360
-dataset defaults plus Triangle Splatting defaults, then only sets the scene and
-scene-specific training options:
+Scene configs are grouped by method and dataset:
+
+```text
+configs/triangle-splatting/
+├── dtu/scan24.yaml
+├── mipnerf360/bicycle.yaml
+└── tandt/truck.yaml
+```
+
+For example, `configs/triangle-splatting/mipnerf360/bicycle.yaml` inherits the
+MipNeRF360 dataset defaults plus Triangle Splatting defaults, then only sets the
+scene and scene-specific training options:
 
 ```yaml
 _base_:
-  - ../base/mipnerf360.yaml
-  - ../base/triangle-splatting.yaml
+  - ../../base/mipnerf360.yaml
+  - ../../base/triangle-splatting.yaml
 
 dataset:
   scene: bicycle
@@ -73,6 +87,18 @@ declare `root: data/mipnerf360` while a scene config declares `scene: bicycle`;
 the effective dataset path becomes `data/mipnerf360/bicycle`. String templates
 such as `outputs/{method}/{dataset}/{scene}` are resolved after all inherited
 configs are merged.
+
+To run a whole dataset, use `single_train.sh` with a dataset target ending in
+`/all`. It expands the configured scene list, trains each scene, renders/evals,
+exports videos, and prints a summary table:
+
+```bash
+bash single_train.sh triangle-splatting mipnerf360/all 0
+bash single_train.sh triangle-splatting tandt/all 0
+bash single_train.sh triangle-splatting dtu/all 0
+```
+
+Use `all` as the target to run all built-in datasets in one pass.
 
 Triangle Splatting configs inherit scene-specific triangle count caps from
 `configs/base/triangle-splatting-caps.yaml` through

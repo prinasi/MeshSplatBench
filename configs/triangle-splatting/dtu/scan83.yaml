@@ -1,0 +1,11 @@
+# @format
+
+_base_:
+  - ../../base/dtu.yaml
+  - ../../base/triangle-splatting.yaml
+
+experiment:
+  name: triangle_splatting_scan83
+
+dataset:
+  scene: scan83

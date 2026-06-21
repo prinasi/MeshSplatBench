@@ -1,8 +1,8 @@
 # @format
 
 _base_:
-  - ../base/tandt.yaml
-  - ../base/triangle-splatting.yaml
+  - ../../base/tandt.yaml
+  - ../../base/triangle-splatting.yaml
 
 experiment:
   name: triangle_splatting_truck

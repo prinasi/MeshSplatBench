@@ -84,7 +84,7 @@ def test_mesh_eval_subcommands_accept_config_options(tmp_path: Path):
 
 
 def test_dtu_mesh_eval_can_infer_required_options_from_config():
-    config = "configs/triangle-splatting/scan24.yaml"
+    config = "configs/triangle-splatting/dtu/scan24.yaml"
 
     cfg = Config.fromfile(config)
 
@@ -93,7 +93,7 @@ def test_dtu_mesh_eval_can_infer_required_options_from_config():
 
 
 def test_triangle_splatting_native_argv_maps_dtu_config():
-    cfg = Config.fromfile("configs/triangle-splatting/scan24.yaml")
+    cfg = Config.fromfile("configs/triangle-splatting/dtu/scan24.yaml")
     trainer_cfg = cfg.trainer.to_dict()
     dataset_cfg = cfg.dataset.to_dict()
     trainer_cfg["images"] = dataset_cfg["image_dir"]
@@ -157,7 +157,7 @@ def test_eval_mesh_missing_mesh_without_adapter_is_left_for_metrics(tmp_path: Pa
 
 
 def test_mesh_export_kwargs_resolve_dataset_and_mesh_options():
-    cfg = Config.fromfile("configs/triangle-splatting/scan24.yaml")
+    cfg = Config.fromfile("configs/triangle-splatting/dtu/scan24.yaml")
 
     kwargs = _mesh_export_kwargs(cfg, cfg.mesh.to_dict())
 
@@ -218,7 +218,7 @@ def test_export_adapter_mesh_uses_native_export_when_context_is_available(tmp_pa
 
 
 def test_eval_chamfer_command_is_removed():
-    result = CliRunner().invoke(app, ["eval", "chamfer", "--config", "configs/triangle-splatting/scan24.yaml"])
+    result = CliRunner().invoke(app, ["eval", "chamfer", "--config", "configs/triangle-splatting/dtu/scan24.yaml"])
 
     assert result.exit_code != 0
     assert "No such command" in result.output
@@ -227,7 +227,7 @@ def test_eval_chamfer_command_is_removed():
 def test_eval_dtu_mesh_command_is_removed():
     result = CliRunner().invoke(
         app,
-        ["eval", "dtu-mesh", "--config", "configs/triangle-splatting/scan24.yaml"],
+        ["eval", "dtu-mesh", "--config", "configs/triangle-splatting/dtu/scan24.yaml"],
     )
 
     assert result.exit_code != 0

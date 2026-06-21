@@ -1,8 +1,8 @@
 # @format
 
 _base_:
-  - ../base/mipnerf360.yaml
-  - ../base/triangle-splatting.yaml
+  - ../../base/mipnerf360.yaml
+  - ../../base/triangle-splatting.yaml
 
 experiment:
   name: triangle_splatting_flowers
