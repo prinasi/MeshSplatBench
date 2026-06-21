@@ -44,6 +44,18 @@ def evaluate_images(
         help="1/2/4/8 downscale factor; other positive values are target width; -1 caps large images",
     ),
     eval_every: int = typer.Option(8, "--eval-every"),
+    ste_threshold: Optional[float] = typer.Option(
+        None, "--ste-threshold",
+        help="Opacity STE binarisation threshold (e.g. 0.3 for DTU).",
+    ),
+    sort_level: Optional[int] = typer.Option(
+        None, "--sort-level",
+        help="Depth-sort granularity: 0=per-triangle, 1=per-tile, 2=per-pixel.",
+    ),
+    bg_color: Optional[str] = typer.Option(
+        None, "--bg-color",
+        help="Background colour for rendering: white or black.",
+    ),
 ):
     """Evaluate rendering quality on a dataset split."""
     from tribench.core.builder import build_adapter, build_dataset
@@ -97,6 +109,8 @@ def evaluate_images(
                 "Use --config, or provide --method, --checkpoint, and --dataset."
             )
         adapter = load_adapter(method, checkpoint)
+        # Apply CLI overrides for rendering fidelity params
+        _apply_render_overrides(adapter, ste_threshold, sort_level, bg_color)
         ds = load_dataset(
             dataset,
             dataset_type=dataset_type,
@@ -312,3 +326,23 @@ def _infer_dtu_scene_root(cfg) -> str | None:
         candidate = root_path / str(scene)
         return str(candidate)
     return None
+
+
+def _apply_render_overrides(
+    adapter,
+    ste_threshold: float | None,
+    sort_level: int | None,
+    bg_color: str | None,
+) -> None:
+    """Forward CLI render-param overrides to the adapter if it supports them."""
+    if not hasattr(adapter, "configure"):
+        return
+    overrides = {}
+    if ste_threshold is not None:
+        overrides["ste_threshold"] = ste_threshold
+    if sort_level is not None:
+        overrides["sort_level"] = sort_level
+    if bg_color is not None:
+        overrides["bg_color"] = bg_color
+    if overrides:
+        adapter.configure(**overrides)

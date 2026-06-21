@@ -1,6 +1,6 @@
 # @format
 
-_base_: [../../base/dtu.yaml, ../../base/2dts.yaml]
+_base_: [../../base/dtu.yaml, ../../base/2dts.yaml, ../../base/2dts-dtu.yaml]
 
 experiment:
   name: 2dts_scan105

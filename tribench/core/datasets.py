@@ -31,11 +31,18 @@ def _resolve_resolution(
     width: int,
     height: int,
     resolution: int = 1,
+    rounding: str = "round",
 ) -> tuple[int, int]:
     """Match the native 3DGS/triangle-splatting resolution semantics."""
+    if rounding not in {"round", "floor"}:
+        raise ValueError("resolution rounding must be 'round' or 'floor'")
     if resolution in {1, 2, 4, 8}:
-        new_width = round(width / resolution)
-        new_height = round(height / resolution)
+        if rounding == "floor":
+            new_width = width // resolution
+            new_height = height // resolution
+        else:
+            new_width = round(width / resolution)
+            new_height = round(height / resolution)
     else:
         if resolution == -1:
             global_down = width / 1600 if width > 1600 else 1
@@ -54,6 +61,8 @@ def _pil_rgb_array(
     resample: int | None = None,
 ) -> np.ndarray:
     """Load RGB values without compositing or premultiplying alpha."""
+    if resample is None:
+        resample = Image.BILINEAR
     bands = image.getbands()
     if len(bands) >= 3 and bands[:3] == ("R", "G", "B"):
         channels = image.split()[:3]
@@ -72,10 +81,22 @@ def _pil_rgb_array(
     return np.asarray(rgb)
 
 
-def _load_image(path: Path | None, size: tuple[int, int] | None = None) -> torch.Tensor | None:
+def _load_image(path: Path | None, size: tuple[int, int] | None = None, bg_color: tuple[float, ...] | None = None) -> torch.Tensor | None:
     if path is None or not path.exists():
         return None
     with Image.open(path) as image:
+        bands = image.getbands()
+        has_alpha = len(bands) >= 4 and bands[3] == "A"
+        if has_alpha and bg_color is not None:
+            if size is not None and image.size != size:
+                image = image.resize(size, Image.BILINEAR)
+            arr = np.array(image, dtype=np.float32) / 255.0
+            rgb = arr[..., :3]
+            alpha = arr[..., 3:4]
+            bg = np.array(bg_color, dtype=np.float32).reshape(1, 1, 3)
+            rgb = rgb * alpha + bg * (1.0 - alpha)
+            return torch.from_numpy(rgb).contiguous()
+
         arr = _pil_rgb_array(image, size)
     arr = arr.astype(np.float32) / 255.0
     return torch.from_numpy(arr[..., :3]).contiguous()
@@ -180,11 +201,13 @@ class ColmapDataset(DatasetBase):
         eval_every: int = 8,
         image_dir: str = "images",
         resolution: int = 1,
+        resolution_rounding: str = "round",
     ):
         super().__init__(dataset_path, split)
         self.eval_every = eval_every
         self.image_dir = image_dir
         self.resolution = resolution
+        self.resolution_rounding = resolution_rounding
         self._samples = self._load_samples()
 
     def _load_samples(self) -> list[DatasetSample]:
@@ -231,7 +254,12 @@ class ColmapDataset(DatasetBase):
             else:
                 image_width, image_height = colmap_width, colmap_height
 
-            width, height = _resolve_resolution(image_width, image_height, self.resolution)
+            width, height = _resolve_resolution(
+                image_width,
+                image_height,
+                self.resolution,
+                self.resolution_rounding,
+            )
             scale_x = width / colmap_width
             scale_y = height / colmap_height
             fx *= scale_x
@@ -270,9 +298,11 @@ class NerfSyntheticDataset(DatasetBase):
         dataset_path: str | Path,
         split: str = "train",
         resolution: int = 1,
+        resolution_rounding: str = "round",
     ):
         super().__init__(dataset_path, split)
         self.resolution = resolution
+        self.resolution_rounding = resolution_rounding
         self._samples = self._load_samples()
 
     def _load_samples(self) -> list[DatasetSample]:
@@ -300,7 +330,12 @@ class NerfSyntheticDataset(DatasetBase):
                 else:
                     image_width = int(meta.get("w", 800))
                     image_height = int(meta.get("h", 800))
-                width, height = _resolve_resolution(image_width, image_height, self.resolution)
+                width, height = _resolve_resolution(
+                    image_width,
+                    image_height,
+                    self.resolution,
+                    self.resolution_rounding,
+                )
                 if gt is not None and (gt.shape[1], gt.shape[0]) != (width, height):
                     gt = _load_image(image_path, size=(width, height))
                 fx = 0.5 * width / np.tan(0.5 * camera_angle_x)
@@ -336,10 +371,12 @@ class DTUDataset(DatasetBase):
         split: str = "train",
         eval_every: int = 8,
         resolution: int = 1,
+        resolution_rounding: str = "round",
     ):
         super().__init__(dataset_path, split)
         self.eval_every = eval_every
         self.resolution = resolution
+        self.resolution_rounding = resolution_rounding
         self._samples = self._load_samples()
 
     def _load_samples(self) -> list[DatasetSample]:
@@ -359,13 +396,18 @@ class DTUDataset(DatasetBase):
         samples: list[DatasetSample] = []
         for out_idx, image_idx in enumerate(selected):
             image_path = image_paths[image_idx]
-            gt = _load_image(image_path)
+            gt = _load_image(image_path, bg_color=(1.0, 1.0, 1.0))
             if gt is None:
                 continue
             image_height, image_width = gt.shape[:2]
-            width, height = _resolve_resolution(image_width, image_height, self.resolution)
+            width, height = _resolve_resolution(
+                image_width,
+                image_height,
+                self.resolution,
+                self.resolution_rounding,
+            )
             if (image_width, image_height) != (width, height):
-                gt = _load_image(image_path, size=(width, height))
+                gt = _load_image(image_path, size=(width, height), bg_color=(1.0, 1.0, 1.0))
             world_mat = data[f"world_mat_{image_idx}"].astype(np.float32)
             scale_key = f"scale_mat_{image_idx}"
             scale_mat = (
@@ -423,6 +465,7 @@ def load_dataset(
     eval_every: int = 8,
     image_dir: str = "images",
     resolution: int = 1,
+    resolution_rounding: str = "round",
 ) -> DatasetBase:
     dtype = infer_dataset_type(dataset_path, dataset_type)
     if dtype in {"colmap", "mipnerf360", "tanks", "tanksandtemples", "tankstemple"}:
@@ -432,11 +475,23 @@ def load_dataset(
             eval_every=eval_every,
             image_dir=image_dir,
             resolution=resolution,
+            resolution_rounding=resolution_rounding,
         )
     if dtype in {"blender", "nerf-synthetic", "nerf_synthetic"}:
-        return NerfSyntheticDataset(dataset_path, split=split, resolution=resolution)
+        return NerfSyntheticDataset(
+            dataset_path,
+            split=split,
+            resolution=resolution,
+            resolution_rounding=resolution_rounding,
+        )
     if dtype == "dtu":
-        return DTUDataset(dataset_path, split=split, eval_every=eval_every, resolution=resolution)
+        return DTUDataset(
+            dataset_path,
+            split=split,
+            eval_every=eval_every,
+            resolution=resolution,
+            resolution_rounding=resolution_rounding,
+        )
     raise KeyError(f"Unknown dataset type '{dtype}'")
 
 

@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import numpy as np
+import scipy.special
 import torch
 
 from tribench.core.cameras import CameraBatch
@@ -48,6 +50,15 @@ class D2TSAdapter(RendererAdapter):
         self.active_sh_degree = 0
         self.back_culling = False
         self.sort_level = 0
+        # Rendering fidelity options (mirror VanillaTSModel.forward).
+        # gamma_rescale: shrink triangles to keep opacity integral invariant.
+        self.gamma_rescale: bool = False
+        # ste_threshold: straight-through opacity binarisation threshold.
+        # Triangles with sigmoid(opacity) < threshold are zeroed at eval time.
+        self.ste_threshold: float | None = None
+        # opacity_floor: minimum opacity after sigmoid mapping [floor, 1].
+        self.opacity_floor: float = 0.0
+        self._bg_color_str: str = "white"
 
     @property
     def name(self) -> str:
@@ -124,6 +135,11 @@ class D2TSAdapter(RendererAdapter):
         else:
             raise TypeError(f"Unsupported 2DTS checkpoint type: {type(loaded)!r}")
 
+        # Auto-detect gamma_rescale: if gamma was annealed beyond 1.0 the
+        # model was almost certainly trained with triangle rescaling enabled.
+        if self.gamma > 1.0 and not self.gamma_rescale:
+            self.gamma_rescale = True
+
         required = {"_vertex", "_opacity", "_f_dc", "_f_rest"}
         missing = sorted(required.difference(state_dict))
         if missing:
@@ -180,6 +196,35 @@ class D2TSAdapter(RendererAdapter):
             "the 2dts/ dataset loader (src/diff_recon/datasets/)."
         )
 
+    def configure(self, **kwargs: Any) -> None:
+        """Set rendering parameters that mirror the original training config.
+
+        Accepted keys:
+            gamma_rescale (bool): Enable triangle vertex rescaling. Native
+                2DTS applies this whenever configured, even when gamma == 1.
+            ste_threshold (float | None): Straight-through estimator
+                threshold for opacity binarisation (e.g. 0.3 for DTU).
+            opacity_floor (float): Minimum opacity after sigmoid mapping.
+            sort_level (int): Depth-sort granularity (0/1/2).
+            back_culling (bool): Enable back-face culling.
+            bg_color (str): Background colour name ("white"/"black").
+        """
+        for key, value in kwargs.items():
+            if key == "gamma_rescale":
+                self.gamma_rescale = bool(value)
+            elif key == "ste_threshold":
+                self.ste_threshold = float(value) if value is not None else None
+            elif key == "opacity_floor":
+                self.opacity_floor = float(value)
+            elif key == "sort_level":
+                self.sort_level = int(value)
+            elif key == "back_culling":
+                self.back_culling = bool(value)
+            elif key == "bg_color":
+                self._bg_color_str = str(value)
+            else:
+                raise KeyError(f"Unknown D2TSAdapter config key: {key!r}")
+
     def model_stats(self) -> dict[str, Any]:
         if self._model is None:
             raise RuntimeError("No model loaded. Call load_checkpoint() first.")
@@ -213,10 +258,14 @@ class D2TSAdapter(RendererAdapter):
             "opacity_histogram": tri_stats.get("opacity_histogram", []),
             "backend_extra": {
                 "gamma": float(self.gamma),
+                "gamma_rescale": bool(self.gamma_rescale),
+                "ste_threshold": self.ste_threshold,
+                "opacity_floor": float(self.opacity_floor),
                 "max_sh_degree": int(self.max_sh_degree),
                 "active_sh_degree": int(self.active_sh_degree),
                 "back_culling": bool(self.back_culling),
                 "sort_level": int(self.sort_level),
+                "bg_color": self._bg_color_str,
             },
         }
 
@@ -250,22 +299,49 @@ class D2TSAdapter(RendererAdapter):
         if vertex.device.type != "cuda":
             raise RuntimeError("2DTS image rendering requires an available CUDA GPU.")
         shs = torch.cat((self._model.f_dc, self._model.f_rest), dim=-2)
-        opacity = torch.sigmoid(self._model.opacity)
-        bg_depth = (native_cam.camera_center.view(1, 1, 3) - vertex).norm(dim=-1).max().item()
-        bg_color = torch.tensor([1.0, 1.0, 1.0], device=vertex.device)
+
+        # --- Opacity: sigmoid → floor → optional STE binarisation ----------
+        opacity = (
+            torch.sigmoid(self._model.opacity) * (1.0 - self.opacity_floor)
+            + self.opacity_floor
+        )
+        if self.ste_threshold is not None:
+            opacity = (
+                (opacity >= self.ste_threshold).float() - opacity
+            ).detach() + opacity
+
+        # --- Gamma rescale: shrink triangles to keep opacity integral -------
+        # invariant under gamma annealing.  Must match the training-time
+        # rescaling so that the learned geometry renders sharply.
+        gamma = self.gamma
+        render_vertex = vertex
+        if self.gamma_rescale:
+            beta = 1.0 / gamma
+            rescale_ratio = 1.0 / np.sqrt(
+                (2.0 ** beta) * beta * scipy.special.gamma(beta)
+            )
+            t_center = vertex.mean(dim=1, keepdim=True)
+            render_vertex = (vertex - t_center) * rescale_ratio + t_center
+
+        # --- Background colour ---------------------------------------------
+        bg_color = _resolve_bg_color(self._bg_color_str, vertex.device)
+        bg_depth = (
+            native_cam.camera_center.view(1, 1, 3) - vertex
+        ).norm(dim=-1).max().item()
+
         renderer = self._TriangleRenderer(
             native_cam,
             bg_depth=bg_depth,
             bg_color=bg_color,
             sh_degree=min(self.active_sh_degree, self.max_sh_degree),
-            gamma=self.gamma,
+            gamma=gamma,
             back_culling=self.back_culling,
             rich_info=mode == "train",
             sort_level=self.sort_level,
         )
         grad_ctx = torch.no_grad() if mode == "eval" else torch.enable_grad()
         with grad_ctx:
-            rendering = renderer.render(vertex, shs, None, opacity)
+            rendering = renderer.render(render_vertex, shs, None, opacity)
 
         rendered_image = rendering["render"]
         return RenderOutput(
@@ -310,3 +386,20 @@ def _checkpoint_sort_key(path: Path) -> tuple[int, str]:
 
 def _checkpoint_device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+_BG_COLORS: dict[str, tuple[float, float, float]] = {
+    "white": (1.0, 1.0, 1.0),
+    "black": (0.0, 0.0, 0.0),
+}
+
+
+def _resolve_bg_color(name: str, device: torch.device) -> torch.Tensor:
+    """Return a [3] background colour tensor from a colour name."""
+    rgb = _BG_COLORS.get(name.lower())
+    if rgb is None:
+        raise ValueError(
+            f"Unknown background colour {name!r}. "
+            f"Available: {sorted(_BG_COLORS)}"
+        )
+    return torch.tensor(rgb, device=device)

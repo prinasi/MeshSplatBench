@@ -54,14 +54,19 @@ def build_adapter(cfg: Mapping[str, Any]):
         adapter:
           type: triangle-splatting
           checkpoint: outputs/model
-          params:
-            some_adapter_arg: value
+          render_params:
+            gamma_rescale: true
+            ste_threshold: 0.3
+            sort_level: 2
     """
     from tribench.core.registry import get_adapter
 
     plain_cfg = Config(cfg).to_dict()
     checkpoint = plain_cfg.pop("checkpoint", None)
+    render_params = plain_cfg.pop("render_params", None)
     adapter = build_from_cfg(plain_cfg, get_adapter)
+    if render_params and hasattr(adapter, "configure"):
+        adapter.configure(**render_params)
     if checkpoint is not None:
         adapter.load_checkpoint(str(Path(checkpoint).expanduser()))
     return adapter

@@ -130,6 +130,21 @@ def test_2dts_config_resolves_native_training_paths():
     assert cfg.output.mesh_file == "outputs/2dts/dtu/scan24/mesh_ply/30000_pcd.ply"
 
 
+def test_2dts_render_params_follow_native_dataset_configs():
+    bicycle = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")
+    scan24 = Config.fromfile("configs/2dts/dtu/scan24.yaml")
+
+    assert bicycle.dataset.resolution_rounding == "floor"
+    assert bicycle.adapter.render_params.gamma_rescale is True
+    assert bicycle.adapter.render_params.ste_threshold is None
+    assert bicycle.adapter.render_params.sort_level == 0
+
+    assert scan24.dataset.resolution_rounding == "floor"
+    assert scan24.adapter.render_params.gamma_rescale is True
+    assert scan24.adapter.render_params.ste_threshold == 0.3
+    assert scan24.adapter.render_params.sort_level == 2
+
+
 def test_2dts_vanilla_ts_import_does_not_require_gaussian_rasterizer():
     from tribench.vendor.d2ts.diff_recon import VanillaTSTrainer
     from tribench.vendor.d2ts.diff_recon.renderer import GaussianRenderer, HybridRenderer, TriangleRenderer

@@ -7,6 +7,14 @@ trainer:
 adapter:
   type: 2dts
   checkpoint: outputs/{method}/{dataset}/{scene}
+  render_params:
+    gamma_rescale: true
+    ste_threshold: null
+    sort_level: 0
+    bg_color: white
+
+dataset:
+  resolution_rounding: floor
 
 output:
   dir: outputs/{method}/{dataset}/{scene}

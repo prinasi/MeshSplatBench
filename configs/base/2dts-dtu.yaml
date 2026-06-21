@@ -1,0 +1,8 @@
+# @format
+
+adapter:
+  render_params:
+    gamma_rescale: true
+    ste_threshold: 0.3
+    sort_level: 2
+    bg_color: white
