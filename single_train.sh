@@ -46,6 +46,8 @@ EXPLICIT_SKIP_TRAINING=0
 EXPLICIT_SKIP_RENDERING=0
 EXPLICIT_SKIP_METRICS=0
 EXPLICIT_SKIP_VIDEO=0
+FORCE_RETRAIN=0
+FORCE_RERUN_EXISTING=0
 
 SUMMARY_ROWS=()
 SUMMARY_CONFIGS=()
@@ -97,12 +99,19 @@ Options:
   --skip_rendering         Skip configured image rendering
   --skip_metrics           Skip image metrics
   --skip_video             Skip video export
+  --retrain                Delete existing scene output and train again
+  --force_retrain          Alias for --retrain
+  --rerun_existing         Rerun render/metrics/video/mesh even if outputs exist
   --python PATH            Python executable
   -h, --help               Show this help
 
 Each stage reads configs/<method>/<dataset>/<scene>.yaml. Dataset roots,
 image dirs, resolutions, max steps, eval stride, output paths, and video
-settings should be set in the YAML config files.
+settings should be set in the YAML config files. When training is selected,
+scenes with existing training outputs are skipped by default; pass --retrain
+to remove the old scene output directory before training again. Rendering,
+metrics, video, and DTU mesh metrics are also skipped when their outputs
+already exist; pass --rerun_existing to rebuild those outputs.
 EOF
 }
 
@@ -250,6 +259,182 @@ config_output_dir() {
     local out_dir
     out_dir="$(config_value "${config_file}" "output.dir")"
     [[ -n "${out_dir}" ]] && echo "${out_dir}" || echo ""
+}
+
+first_config_value() {
+    local config_file="$1"; shift
+    local value key
+    for key in "$@"; do
+        value="$(config_value "${config_file}" "${key}")"
+        if [[ -n "${value}" ]]; then
+            echo "${value}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+path_has_contents() {
+    local path="$1"
+    if [[ -f "${path}" ]]; then
+        [[ -s "${path}" ]]
+        return
+    fi
+    if [[ -d "${path}" ]]; then
+        [[ -n "$(find "${path}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]
+        return
+    fi
+    return 1
+}
+
+training_complete_marker() {
+    local config_file="$1" model_path="$2"
+    local max_steps checkpoint candidate
+
+    candidate="${model_path}/train_stats.json"
+    if path_has_contents "${candidate}"; then
+        echo "${candidate}"
+        return 0
+    fi
+
+    checkpoint="$(config_value "${config_file}" "adapter.checkpoint")"
+    if [[ -n "${checkpoint}" && "${checkpoint}" != "${model_path}" ]] && path_has_contents "${checkpoint}"; then
+        echo "${checkpoint}"
+        return 0
+    fi
+
+    max_steps="$(config_value "${config_file}" "trainer.max_steps")"
+    if [[ -n "${max_steps}" ]]; then
+        for candidate in \
+            "${model_path}/point_cloud/iteration_${max_steps}" \
+            "${model_path}/point_cloud/${max_steps}.ply" \
+            "${model_path}/ckpt/${max_steps}.ckpt" \
+            "${model_path}/mesh_ply/${max_steps}_pcd.ply" \
+            "${model_path}/mesh_ply/${max_steps}_mesh.ply"
+        do
+            if path_has_contents "${candidate}"; then
+                echo "${candidate}"
+                return 0
+            fi
+        done
+    fi
+
+    return 1
+}
+
+render_output_dir() {
+    local config_file="$1" model_path="$2"
+    local out_dir
+    out_dir="$(first_config_value "${config_file}" \
+        "render.images.output_dir" \
+        "render.images.dir" \
+        "render.output_dir" \
+        "render.dir" || true)"
+    [[ -n "${out_dir}" ]] && echo "${out_dir}" || echo "${model_path}"
+}
+
+rendering_complete_marker() {
+    local config_file="$1" model_path="$2"
+    local out_dir
+    out_dir="$(render_output_dir "${config_file}" "${model_path}")"
+    if path_has_contents "${out_dir}/manifest.json" && path_has_contents "${out_dir}/renders"; then
+        echo "${out_dir}/manifest.json"
+        return 0
+    fi
+    if path_has_contents "${out_dir}/renders"; then
+        echo "${out_dir}/renders"
+        return 0
+    fi
+    return 1
+}
+
+metrics_output_file() {
+    local config_file="$1" model_path="$2"
+    local metrics_file
+    metrics_file="$(first_config_value "${config_file}" \
+        "eval.output" \
+        "eval.metrics_file" \
+        "output.metrics_file" || true)"
+    [[ -n "${metrics_file}" ]] && echo "${metrics_file}" || echo "${model_path}/metrics.json"
+}
+
+metrics_complete_marker() {
+    local config_file="$1" model_path="$2"
+    local metrics_file
+    metrics_file="$(metrics_output_file "${config_file}" "${model_path}")"
+    if path_has_contents "${metrics_file}"; then
+        echo "${metrics_file}"
+        return 0
+    fi
+    return 1
+}
+
+video_output_file() {
+    local config_file="$1" model_path="$2"
+    local video_dir
+    video_dir="$(first_config_value "${config_file}" \
+        "render.video.output_dir" \
+        "render.video.dir" || true)"
+    [[ -n "${video_dir}" ]] || video_dir="${model_path}/video"
+    echo "${video_dir}/render_traj.mp4"
+}
+
+video_complete_marker() {
+    local config_file="$1" model_path="$2"
+    local video_file
+    video_file="$(video_output_file "${config_file}" "${model_path}")"
+    if path_has_contents "${video_file}"; then
+        echo "${video_file}"
+        return 0
+    fi
+    return 1
+}
+
+mesh_output_file() {
+    local config_file="$1" model_path="$2"
+    local mesh_file
+    mesh_file="$(first_config_value "${config_file}" \
+        "mesh.output" \
+        "output.mesh_file" || true)"
+    [[ -n "${mesh_file}" ]] && echo "${mesh_file}" || echo "${model_path}/mesh.ply"
+}
+
+mesh_metrics_output_file() {
+    local config_file="$1" model_path="$2"
+    local mesh_metrics_file
+    mesh_metrics_file="$(first_config_value "${config_file}" \
+        "eval.dtu_mesh.output" \
+        "eval.mesh.output" \
+        "dtu_mesh.output" \
+        "mesh_eval.output" \
+        "output.mesh_metrics_file" \
+        "output.dtu_mesh_metrics_file" || true)"
+    [[ -n "${mesh_metrics_file}" ]] && echo "${mesh_metrics_file}" || echo "${model_path}/mesh_metrics.json"
+}
+
+mesh_metrics_complete_marker() {
+    local config_file="$1" model_path="$2"
+    local metrics_file mesh_file
+    metrics_file="$(mesh_metrics_output_file "${config_file}" "${model_path}")"
+    mesh_file="$(mesh_output_file "${config_file}" "${model_path}")"
+    if path_has_contents "${metrics_file}" && path_has_contents "${mesh_file}"; then
+        echo "${metrics_file}"
+        return 0
+    fi
+    return 1
+}
+
+delete_existing_training_output() {
+    local model_path="$1"
+    case "${model_path}" in
+        ""|"/"|".")
+            echo "Refusing to delete unsafe output path: '${model_path}'" >&2
+            exit 1
+            ;;
+    esac
+    if [[ -e "${model_path}" ]]; then
+        rm -rf -- "${model_path}"
+    fi
 }
 
 expand_targets() {
@@ -467,8 +652,9 @@ run_render() {
 # ---------------------------------------------------------------------------
 run_metrics() {
     local dataset="$1" scene="$2" config_file="$3" model_path="$4"
-    local metrics_file="${model_path}/metrics.json"
+    local metrics_file
     local prefix metrics_log
+    metrics_file="$(metrics_output_file "${config_file}" "${model_path}")"
     prefix="$(log_prefix "${dataset}" "${scene}")"
     metrics_log="${LOG_DIR}/${prefix}_metrics.log"
 
@@ -501,8 +687,9 @@ run_metrics() {
 # ---------------------------------------------------------------------------
 run_video() {
     local dataset="$1" scene="$2" config_file="$3" model_path="$4"
-    local video_dir="${model_path}/video/render_traj.mp4"
+    local video_file
     local prefix video_log
+    video_file="$(video_output_file "${config_file}" "${model_path}")"
     prefix="$(log_prefix "${dataset}" "${scene}")"
     video_log="${LOG_DIR}/${prefix}_video.log"
     LAST_VIDEO="N/A"
@@ -527,7 +714,7 @@ run_video() {
         return "${exit_code}"
     fi
 
-    LAST_VIDEO="${video_dir}"
+    LAST_VIDEO="${video_file}"
     echo "${LAST_VIDEO}" > "${LOG_DIR}/${prefix}_video.txt"
     echo "[${dataset}/${scene}] Video export done. ${LAST_VIDEO}"
 }
@@ -542,7 +729,7 @@ run_dtu_chamfer() {
     prefix="$(log_prefix "${dataset}" "${scene}")"
     chamfer_log="${LOG_DIR}/${prefix}_chamfer.log"
     chamfer_file="${LOG_DIR}/${prefix}_chamfer.txt"
-    results_path="${model_path}/mesh_metrics.json"
+    results_path="$(mesh_metrics_output_file "${config_file}" "${model_path}")"
 
     LAST_CHAMFER="N/A"
 
@@ -606,6 +793,8 @@ while [[ $# -gt 0 ]]; do
         --skip_rendering|--skip-rendering) EXPLICIT_SKIP_RENDERING=1; shift ;;
         --skip_metrics|--skip-metrics) EXPLICIT_SKIP_METRICS=1; shift ;;
         --skip_video|--skip-video) EXPLICIT_SKIP_VIDEO=1; shift ;;
+        --retrain|--force_retrain|--force-retrain) FORCE_RETRAIN=1; shift ;;
+        --rerun_existing|--rerun-existing|--force_existing|--force-existing) FORCE_RERUN_EXISTING=1; shift ;;
         --python)            require_value "$@"; PYTHON_BIN="$2"; shift 2 ;;
         -h|--help)           usage; exit 0 ;;
         *)
@@ -688,6 +877,44 @@ for TARGET in "${EXPANDED_TARGETS[@]}"; do
     fi
     PREFIX="$(log_prefix "${DATASET}" "${SCENE}")"
 
+    TRAINING_ALREADY_DONE=0
+    TRAINING_MARKER=""
+    if [[ "${SKIP_TRAINING}" -eq 0 ]] && TRAINING_MARKER="$(training_complete_marker "${CONFIG_FILE}" "${MODEL_PATH}")"; then
+        if [[ "${FORCE_RETRAIN}" -eq 1 ]]; then
+            echo
+            echo "[${DATASET}/${SCENE}] Existing training output found: ${TRAINING_MARKER}"
+            echo "[${DATASET}/${SCENE}] --retrain set; deleting ${MODEL_PATH} before training."
+            delete_existing_training_output "${MODEL_PATH}"
+            TRAINING_MARKER=""
+        else
+            TRAINING_ALREADY_DONE=1
+        fi
+    fi
+
+    RENDERING_ALREADY_DONE=0
+    RENDERING_MARKER=""
+    if [[ "${SKIP_RENDERING}" -eq 0 && "${FORCE_RERUN_EXISTING}" -eq 0 ]] && RENDERING_MARKER="$(rendering_complete_marker "${CONFIG_FILE}" "${MODEL_PATH}")"; then
+        RENDERING_ALREADY_DONE=1
+    fi
+
+    METRICS_ALREADY_DONE=0
+    METRICS_MARKER=""
+    if [[ "${SKIP_METRICS}" -eq 0 && "${FORCE_RERUN_EXISTING}" -eq 0 ]] && METRICS_MARKER="$(metrics_complete_marker "${CONFIG_FILE}" "${MODEL_PATH}")"; then
+        METRICS_ALREADY_DONE=1
+    fi
+
+    MESH_METRICS_ALREADY_DONE=0
+    MESH_METRICS_MARKER=""
+    if [[ "${SKIP_METRICS}" -eq 0 && "$(normalize_dataset "${DATASET}")" == "dtu" && "${FORCE_RERUN_EXISTING}" -eq 0 ]] && MESH_METRICS_MARKER="$(mesh_metrics_complete_marker "${CONFIG_FILE}" "${MODEL_PATH}")"; then
+        MESH_METRICS_ALREADY_DONE=1
+    fi
+
+    VIDEO_ALREADY_DONE=0
+    VIDEO_MARKER=""
+    if [[ "${SKIP_VIDEO}" -eq 0 && "${FORCE_RERUN_EXISTING}" -eq 0 ]] && VIDEO_MARKER="$(video_complete_marker "${CONFIG_FILE}" "${MODEL_PATH}")"; then
+        VIDEO_ALREADY_DONE=1
+    fi
+
     mkdir -p "${LOG_DIR}" "${MODEL_PATH}"
 
     echo
@@ -696,6 +923,16 @@ for TARGET in "${EXPANDED_TARGETS[@]}"; do
     echo "[${DATASET}/${SCENE}] config=${CONFIG_FILE}"
     echo "[${DATASET}/${SCENE}] output=${MODEL_PATH}"
     echo "[${DATASET}/${SCENE}] logs=${LOG_DIR}"
+    if [[ "${TRAINING_ALREADY_DONE}" -eq 1 ]]; then
+        echo "[${DATASET}/${SCENE}] training=skipped existing output (${TRAINING_MARKER})"
+    elif [[ "${SKIP_TRAINING}" -eq 0 && "${FORCE_RETRAIN}" -eq 1 ]]; then
+        echo "[${DATASET}/${SCENE}] training=retrain enabled"
+    fi
+    [[ "${RENDERING_ALREADY_DONE}" -eq 1 ]] && echo "[${DATASET}/${SCENE}] rendering=skipped existing output (${RENDERING_MARKER})"
+    [[ "${METRICS_ALREADY_DONE}" -eq 1 ]] && echo "[${DATASET}/${SCENE}] metrics=skipped existing output (${METRICS_MARKER})"
+    [[ "${MESH_METRICS_ALREADY_DONE}" -eq 1 ]] && echo "[${DATASET}/${SCENE}] mesh_metrics=skipped existing output (${MESH_METRICS_MARKER})"
+    [[ "${VIDEO_ALREADY_DONE}" -eq 1 ]] && echo "[${DATASET}/${SCENE}] video=skipped existing output (${VIDEO_MARKER})"
+    [[ "${FORCE_RERUN_EXISTING}" -eq 1 ]] && echo "[${DATASET}/${SCENE}] rerun_existing=enabled"
     echo "--------------------------------------------------------------------------------"
 
     LAST_TRAIN_MEMORY="N/A"
@@ -703,28 +940,53 @@ for TARGET in "${EXPANDED_TARGETS[@]}"; do
     LAST_RENDER_FPS="N/A"
     LAST_CHAMFER="$(read_metric_cache "${LOG_DIR}/${PREFIX}_chamfer.txt")"
     LAST_VIDEO="$(read_metric_cache "${LOG_DIR}/${PREFIX}_video.txt")"
-    read_metrics_from_json "${MODEL_PATH}/metrics.json"
+    read_metrics_from_json "$(metrics_output_file "${CONFIG_FILE}" "${MODEL_PATH}")"
 
     if [[ "${SKIP_TRAINING}" -eq 0 ]]; then
-        run_train_config "${DATASET}" "${SCENE}" "${CONFIG_FILE}"
+        if [[ "${TRAINING_ALREADY_DONE}" -eq 1 ]]; then
+            echo "[${DATASET}/${SCENE}] Training skipped; existing output detected at ${TRAINING_MARKER}. Use --retrain to rebuild."
+        else
+            run_train_config "${DATASET}" "${SCENE}" "${CONFIG_FILE}"
+        fi
     fi
 
     if [[ "${SKIP_RENDERING}" -eq 0 ]]; then
-        run_render "${DATASET}" "${SCENE}" "${CONFIG_FILE}"
+        if [[ "${RENDERING_ALREADY_DONE}" -eq 1 ]]; then
+            echo "[${DATASET}/${SCENE}] Rendering skipped; existing output detected at ${RENDERING_MARKER}. Use --rerun_existing to rebuild."
+        else
+            run_render "${DATASET}" "${SCENE}" "${CONFIG_FILE}"
+        fi
     fi
 
     if [[ "${SKIP_METRICS}" -eq 0 ]]; then
-        run_metrics "${DATASET}" "${SCENE}" "${CONFIG_FILE}" "${MODEL_PATH}"
+        if [[ "${METRICS_ALREADY_DONE}" -eq 1 ]]; then
+            read_metrics_from_json "${METRICS_MARKER}"
+            echo "[${DATASET}/${SCENE}] Metrics skipped; existing output detected at ${METRICS_MARKER}. Use --rerun_existing to rebuild."
+        else
+            run_metrics "${DATASET}" "${SCENE}" "${CONFIG_FILE}" "${MODEL_PATH}"
+        fi
         if [[ "$(normalize_dataset "${DATASET}")" == "dtu" ]]; then
-            run_dtu_chamfer "${DATASET}" "${SCENE}" "${CONFIG_FILE}" "${MODEL_PATH}"
+            if [[ "${MESH_METRICS_ALREADY_DONE}" -eq 1 ]]; then
+                read_chamfer_from_json "${MESH_METRICS_MARKER}"
+                echo "${LAST_CHAMFER}" > "${LOG_DIR}/${PREFIX}_chamfer.txt"
+                echo "[${DATASET}/${SCENE}] DTU mesh metrics skipped; existing output detected at ${MESH_METRICS_MARKER}. Use --rerun_existing to rebuild."
+            else
+                run_dtu_chamfer "${DATASET}" "${SCENE}" "${CONFIG_FILE}" "${MODEL_PATH}"
+            fi
         fi
     fi
 
     if [[ "${SKIP_VIDEO}" -eq 0 ]]; then
-        run_video "${DATASET}" "${SCENE}" "${CONFIG_FILE}" "${MODEL_PATH}"
+        if [[ "${VIDEO_ALREADY_DONE}" -eq 1 ]]; then
+            LAST_VIDEO="${VIDEO_MARKER}"
+            echo "${LAST_VIDEO}" > "${LOG_DIR}/${PREFIX}_video.txt"
+            echo "[${DATASET}/${SCENE}] Video export skipped; existing output detected at ${VIDEO_MARKER}. Use --rerun_existing to rebuild."
+        else
+            run_video "${DATASET}" "${SCENE}" "${CONFIG_FILE}" "${MODEL_PATH}"
+        fi
     fi
 
-    read_metrics_from_json "${MODEL_PATH}/metrics.json"
+    read_metrics_from_json "$(metrics_output_file "${CONFIG_FILE}" "${MODEL_PATH}")"
     echo "[${DATASET}/${SCENE}] Summary: PSNR=${LAST_PSNR} SSIM=${LAST_SSIM} LPIPS=${LAST_LPIPS} FPS=${LAST_RENDER_FPS} Mem=${LAST_TRAIN_MEMORY}MiB Time=${LAST_TRAIN_TIME}s Chamfer=${LAST_CHAMFER} Video=${LAST_VIDEO}"
     SUMMARY_ROWS+=("${DATASET}/${SCENE}|${LAST_PSNR}|${LAST_SSIM}|${LAST_LPIPS}|${LAST_RENDER_FPS}|${LAST_TRAIN_MEMORY}|${LAST_TRAIN_TIME}|${LAST_CHAMFER}|${LAST_VIDEO}")
     SUMMARY_CONFIGS+=("${CONFIG_FILE}")
