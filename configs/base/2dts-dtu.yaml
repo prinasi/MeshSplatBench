@@ -6,3 +6,10 @@ adapter:
     ste_threshold: 0.3
     sort_level: 2
     bg_color: white
+
+dataset:
+  resolution: 1
+
+eval:
+  mesh:
+    geometry_mode: pcd

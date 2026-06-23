@@ -64,6 +64,7 @@ class TriangleSplattingAdapter(RendererAdapter):
         self._dataset_path: str | None = None
         self._checkpoint_path: str | None = None
         self._background_color = [0.0, 0.0, 0.0]
+        self._background_color_override: list[float] | None = None
 
         # Lazy-imported modules
         self._TriangleModel = None
@@ -83,6 +84,23 @@ class TriangleSplattingAdapter(RendererAdapter):
 
     def backend_status(self) -> dict[str, Any]:
         return self._backend.status(self.repo_root)
+
+    def configure(self, **kwargs: Any) -> None:
+        """Set render-time options used by TriBench evaluation."""
+        for key, value in kwargs.items():
+            if key == "bg_color":
+                color_name = str(value).lower()
+                if color_name in {"white", "1", "1.0"}:
+                    self._background_color = [1.0, 1.0, 1.0]
+                elif color_name in {"black", "0", "0.0"}:
+                    self._background_color = [0.0, 0.0, 0.0]
+                else:
+                    raise ValueError(
+                        "TriangleSplattingAdapter bg_color must be 'white' or 'black'."
+                    )
+                self._background_color_override = list(self._background_color)
+            else:
+                raise KeyError(f"Unknown TriangleSplattingAdapter config key: {key!r}")
 
     def _ensure_imports(self) -> None:
         """Import bundled triangle-splatting modules."""
@@ -161,7 +179,11 @@ class TriangleSplattingAdapter(RendererAdapter):
             raise FileNotFoundError(f"Checkpoint not found: {state_path}")
 
         self._checkpoint_path = str(state_path)
-        self._background_color = self._load_background_color(ckpt_path)
+        self._background_color = (
+            list(self._background_color_override)
+            if self._background_color_override is not None
+            else self._load_background_color(ckpt_path)
+        )
 
         # Load state dict
         state_dict = torch.load(str(state_path), map_location="cpu", weights_only=False)
@@ -563,6 +585,7 @@ class TriangleSplattingAdapter(RendererAdapter):
             radii=radii,
             visibility=visibility,
             extras={
+                "background_color": list(self._background_color),
                 "scaling": rendering.get("scaling"),
                 "density_factor": rendering.get("density_factor"),
                 "max_blending": rendering.get("max_blending"),

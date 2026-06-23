@@ -86,6 +86,37 @@ def render_sample(
     return output
 
 
+def _metric_rgb_for_sample(
+    output: RenderOutput,
+    sample: DatasetSample,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    pred = output.rgb.clamp(0, 1)
+    target = sample.image.to(pred.device).clamp(0, 1) if sample.image is not None else None
+    metadata = sample.metadata or getattr(sample.camera, "metadata", None) or {}
+    bg_color = metadata.get("eval_background_color")
+    if bg_color is not None and output.alpha is not None:
+        bg = torch.tensor(bg_color, dtype=pred.dtype, device=pred.device).view(1, 1, 3)
+        alpha = output.alpha.to(pred.device, dtype=pred.dtype).clamp(0, 1).unsqueeze(-1)
+        source_bg = getattr(output, "background_color", None)
+        if source_bg is None:
+            source_bg = output.extras.get("background_color") if output.extras else None
+        if source_bg is None:
+            source_bg = [0.0, 0.0, 0.0]
+        src = torch.tensor(source_bg, dtype=pred.dtype, device=pred.device).view(1, 1, 3)
+        color = pred - src * (1.0 - alpha)
+        pred = (color + bg * (1.0 - alpha)).clamp(0, 1)
+    if bg_color is not None and sample.mask is not None:
+        mask = sample.mask.to(pred.device, dtype=pred.dtype)
+        if mask.dim() == 3:
+            mask = mask[..., 0]
+        mask = (mask > 0.5).to(dtype=pred.dtype).unsqueeze(-1)
+        bg = torch.tensor(bg_color, dtype=pred.dtype, device=pred.device).view(1, 1, 3)
+        pred = pred * mask + bg * (1.0 - mask)
+        if target is not None:
+            target = target * mask + bg * (1.0 - mask)
+    return pred, target
+
+
 def _cuda_sync_if_available() -> None:
     if torch.cuda.is_available():
         torch.cuda.synchronize()
@@ -141,7 +172,8 @@ def render_dataset_split(
         frame_times_s.append(frame_time_s)
 
         stem = f"{idx:05d}_{sample.name}"
-        render_path = save_image(render_dir / f"{stem}.png", output.rgb)
+        render_rgb, _ = _metric_rgb_for_sample(output, sample)
+        render_path = save_image(render_dir / f"{stem}.png", render_rgb)
 
         gt_path = None
         if save_gt and sample.image is not None:
@@ -157,8 +189,9 @@ def render_dataset_split(
 
         view_metrics = None
         if metrics and sample.image is not None:
-            target = sample.image.to(output.rgb.device)
-            view_metrics = compute_all_metrics(output.rgb.clamp(0, 1), target.clamp(0, 1))
+            pred, target = render_rgb, sample.image.to(render_rgb.device).clamp(0, 1)
+            assert target is not None
+            view_metrics = compute_all_metrics(pred, target)
             per_view.append({"name": sample.name, **view_metrics})
 
         records.append(

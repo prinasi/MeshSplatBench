@@ -86,6 +86,7 @@ def evaluate_images(
             stage="eval",
         )
         adapter = build_adapter(adapter_cfg)
+        _apply_render_overrides(adapter, ste_threshold, sort_level, bg_color)
         ds = build_dataset(dataset_cfg)
         split = str(dataset_cfg.get("split", split))
         method_label = adapter_cfg.get("type")
@@ -165,6 +166,11 @@ def evaluate_mesh(
     downsample_density: Optional[float] = typer.Option(None, "--downsample-density"),
     max_dist: Optional[float] = typer.Option(None, "--max-dist"),
     cull_masks: Optional[bool] = typer.Option(None, "--cull-masks/--no-cull-masks"),
+    geometry_mode: Optional[str] = typer.Option(
+        None,
+        "--geometry-mode",
+        help="DTU predicted geometry interpretation: auto, mesh, or pcd.",
+    ),
     force_export: Optional[bool] = typer.Option(
         None,
         "--force-export/--no-force-export",
@@ -202,6 +208,7 @@ def evaluate_mesh(
         )
         max_dist = float(max_dist if max_dist is not None else eval_cfg.get("max_dist", 20.0))
         cull_masks = bool(cull_masks if cull_masks is not None else eval_cfg.get("cull_masks", True))
+        geometry_mode = geometry_mode or eval_cfg.get("geometry_mode") or eval_cfg.get("mode")
     if pred is None or dtu_root is None or scan_id is None:
         raise typer.BadParameter("Use --config, or provide --pred, --dtu-root, and --scan-id.")
 
@@ -209,6 +216,7 @@ def evaluate_mesh(
     downsample_density = 0.2 if downsample_density is None else downsample_density
     max_dist = 20.0 if max_dist is None else max_dist
     cull_masks = True if cull_masks is None else cull_masks
+    geometry_mode = geometry_mode or "auto"
     if cfg is not None:
         pred = _ensure_pred_mesh_exists(
             cfg,
@@ -225,6 +233,7 @@ def evaluate_mesh(
         downsample_density=downsample_density,
         max_dist=max_dist,
         cull_masks=cull_masks,
+        geometry_mode=geometry_mode,
     )
     write_mesh_metrics(metrics, output)
     typer.echo(json.dumps(metrics, indent=2))

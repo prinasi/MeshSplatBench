@@ -173,6 +173,13 @@ class TestTriangleSplattingAdapter:
         adapter = TriangleSplattingAdapter(repo_root=str(tmp_path))
         assert adapter.repo_root == tmp_path
 
+    def test_configure_bg_color_overrides_checkpoint_background(self):
+        adapter = TriangleSplattingAdapter()
+        adapter.configure(bg_color="white")
+
+        assert adapter._background_color == [1.0, 1.0, 1.0]
+        assert adapter._background_color_override == [1.0, 1.0, 1.0]
+
     def test_model_stats_no_model_raises(self):
         adapter = TriangleSplattingAdapter()
         with pytest.raises(RuntimeError, match="No model loaded"):

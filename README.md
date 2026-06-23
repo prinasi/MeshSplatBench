@@ -15,12 +15,12 @@ TriBench provides a single, consistent evaluation framework for comparing differ
 
 ## Supported Methods
 
-| Method                       | Adapter                    | Status  |
-| ---------------------------- | -------------------------- | ------- |
+| Method                       | Adapter                    | Status                                   |
+| ---------------------------- | -------------------------- | ---------------------------------------- |
 | 2D Triangle Splatting (2DTS) | `D2TSAdapter`              | Initial config/train/render/eval support |
-| Triangle Splatting           | `TriangleSplattingAdapter` | Planned |
-| MeshSplatting                | `MeshSplattingAdapter`     | Planned |
-| DiffSoup                     | `DiffSoupAdapter`          | Planned |
+| Triangle Splatting           | `TriangleSplattingAdapter` | Planned                                  |
+| MeshSplatting                | `MeshSplattingAdapter`     | Planned                                  |
+| DiffSoup                     | `DiffSoupAdapter`          | Planned                                  |
 
 ## Installation
 

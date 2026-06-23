@@ -78,6 +78,16 @@ def _sample_points(obj: Any, *, num_samples: int = 500_000) -> np.ndarray:
     return np.asarray(pts, dtype=np.float32)
 
 
+def _resolve_dtu_geometry_mode(pred_path: str | Path, geometry_mode: str = "auto") -> str:
+    mode = str(geometry_mode or "auto").lower()
+    if mode not in {"auto", "mesh", "pcd"}:
+        raise ValueError(f"DTU geometry_mode must be 'auto', 'mesh', or 'pcd', got {geometry_mode!r}.")
+    if mode != "auto":
+        return mode
+    stem = Path(pred_path).stem.lower()
+    return "pcd" if stem.endswith("_pcd") or "_pcd_" in stem else "mesh"
+
+
 def _load_points(path: str | Path, *, num_samples: int = 500_000) -> np.ndarray:
     return _sample_points(_load_mesh_object(path), num_samples=num_samples)
 
@@ -131,6 +141,7 @@ def dtu_mesh_metrics(
     patch_size: float = 60.0,
     max_dist: float = 20.0,
     cull_masks: bool = True,
+    geometry_mode: str = "auto",
 ) -> dict[str, Any]:
     """Evaluate a DTU mesh in the official DTU coordinate frame.
 
@@ -140,6 +151,7 @@ def dtu_mesh_metrics(
     ``Plane`` files when they are present under ``dtu_root``.
     """
     dtu_root = Path(dtu_root)
+    resolved_geometry_mode = _resolve_dtu_geometry_mode(pred_path, geometry_mode)
     gt_path = find_dtu_ground_truth(dtu_root, scan_id)
     scene_dir = _find_dtu_scene_root(dtu_root, scan_id, scene_root)
     warnings: list[str] = []
@@ -170,12 +182,17 @@ def dtu_mesh_metrics(
             downsample_density=downsample_density,
             patch_size=patch_size,
             max_dist=max_dist,
+            geometry_mode=resolved_geometry_mode,
         )
         protocol = "dtu_official"
         if not plane_path.exists():
             warnings.append("DTU Plane*.mat not found; completeness used all STL points.")
     else:
-        pred = _sample_points(obj, num_samples=num_samples)
+        pred = (
+            np.asarray(obj.vertices, dtype=np.float32)
+            if resolved_geometry_mode == "pcd"
+            else _sample_points(obj, num_samples=num_samples)
+        )
         metrics = _chamfer_points(pred, gt)
         protocol = "dtu_scaled_chamfer_fallback" if scale_mat is not None else "raw_chamfer_fallback"
         warnings.append(
@@ -190,6 +207,7 @@ def dtu_mesh_metrics(
             "scene_root": str(scene_dir) if scene_dir is not None else None,
             "scale_mat_path": str(scale_path) if scale_path is not None else None,
             "scale_transform_applied": scale_mat is not None,
+            "geometry_mode": resolved_geometry_mode,
             "samples": int(num_samples),
             **cull_info,
         }
@@ -265,9 +283,7 @@ def _cull_dtu_mesh_with_scene_masks(obj: Any, scene_root: Path | None) -> tuple[
     if not camera_file.exists() or not mask_dir.exists() or not image_dir.exists():
         info["warnings"].append("DTU cameras/images/mask directory incomplete; skipped scene-mask culling.")
         return obj, info
-    if not hasattr(obj, "faces") or getattr(obj, "faces", None) is None or len(obj.faces) == 0:
-        info["warnings"].append("Predicted geometry is a point cloud; skipped mesh face culling.")
-        return obj, info
+    has_faces = hasattr(obj, "faces") and getattr(obj, "faces", None) is not None and len(obj.faces) > 0
 
     try:
         import cv2
@@ -328,18 +344,23 @@ def _cull_dtu_mesh_with_scene_masks(obj: Any, scene_root: Path | None) -> tuple[
         info["vertices_after_cull"] = info["vertices_before_cull"]
         info["faces_after_cull"] = info["faces_before_cull"]
         return obj, info
-    face_keep = keep[np.asarray(obj.faces)].all(axis=1)
-    obj.update_faces(face_keep)
-    obj.update_vertices(keep)
+    if has_faces:
+        face_keep = keep[np.asarray(obj.faces)].all(axis=1)
+        obj.update_faces(face_keep)
+        obj.update_vertices(keep)
+        if len(obj.faces) == 0:
+            raise ValueError("DTU scene-mask culling removed all predicted mesh faces.")
+    else:
+        obj.vertices = np.asarray(obj.vertices)[keep]
+        if len(obj.vertices) == 0:
+            raise ValueError("DTU scene-mask culling removed all predicted point-cloud vertices.")
     info.update(
         {
             "mask_culled": True,
             "vertices_after_cull": int(len(obj.vertices)),
-            "faces_after_cull": int(len(obj.faces)),
+            "faces_after_cull": int(len(obj.faces)) if has_faces else 0,
         }
     )
-    if len(obj.faces) == 0:
-        raise ValueError("DTU scene-mask culling removed all predicted mesh faces.")
     return obj, info
 
 
@@ -367,6 +388,7 @@ def _official_dtu_metrics(
     downsample_density: float,
     patch_size: float,
     max_dist: float,
+    geometry_mode: str,
 ) -> dict[str, float]:
     try:
         from scipy.io import loadmat
@@ -374,7 +396,7 @@ def _official_dtu_metrics(
     except ImportError as exc:
         raise ImportError("Official DTU mesh evaluation requires scipy and scikit-learn.") from exc
 
-    pred = _official_dtu_sample_geometry(pred_obj, downsample_density)
+    pred = _official_dtu_sample_geometry(pred_obj, downsample_density, geometry_mode=geometry_mode)
     rng = np.random.default_rng()
     rng.shuffle(pred, axis=0)
     pred_down = _official_radius_downsample(pred, downsample_density)
@@ -421,11 +443,20 @@ def _official_dtu_metrics(
     }
 
 
-def _official_dtu_sample_geometry(obj: Any, downsample_density: float) -> np.ndarray:
+def _official_dtu_sample_geometry(
+    obj: Any,
+    downsample_density: float,
+    *,
+    geometry_mode: str = "mesh",
+) -> np.ndarray:
     vertices = np.asarray(getattr(obj, "vertices", []), dtype=np.float64)
     faces = np.asarray(getattr(obj, "faces", []), dtype=np.int64) if hasattr(obj, "faces") else np.empty((0, 3), dtype=np.int64)
     if len(vertices) == 0:
         return vertices.reshape(0, 3)
+    if geometry_mode == "pcd":
+        return vertices
+    if geometry_mode != "mesh":
+        raise ValueError(f"DTU geometry_mode must be 'mesh' or 'pcd', got {geometry_mode!r}.")
     if len(faces) == 0:
         return vertices
 

@@ -21,6 +21,10 @@ trainer:
   lambda_size: 0.0
   no_dome: true
 
+adapter:
+  render_params:
+    bg_color: white
+
 mesh:
   output: outputs/{method}/{dataset}/{scene}/fuse_post.ply
   split: train

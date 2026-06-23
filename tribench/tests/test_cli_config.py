@@ -76,6 +76,7 @@ def test_mesh_eval_subcommands_accept_config_options(tmp_path: Path):
         "    dtu_root: missing_dtu\n"
         "    scan_id: 24\n"
         "    samples: 1\n"
+        "    geometry_mode: pcd\n"
     )
 
     result = CliRunner().invoke(app, ["eval", "mesh", "--config", str(config)])
@@ -90,6 +91,7 @@ def test_dtu_mesh_eval_can_infer_required_options_from_config():
 
     assert _infer_pred_mesh(cfg) == "outputs/triangle-splatting/dtu/scan24/fuse_post.ply"
     assert _infer_dtu_eval_target(cfg) == ("data/dtu", "scan24")
+    assert cfg.adapter.render_params.bg_color == "white"
 
 
 def test_triangle_splatting_native_argv_maps_dtu_config():
@@ -125,8 +127,10 @@ def test_2dts_config_resolves_native_training_paths():
     assert cfg.trainer.type == "2dts"
     assert cfg.adapter.checkpoint == "outputs/2dts/dtu/scan24"
     assert cfg.dataset.root == "data/dtu/scan24"
+    assert cfg.dataset.resolution == 1
     assert cfg.d2ts.native_config == "configs/2dts/native/dtu.yaml"
     assert cfg.d2ts.target_point_num == 1_000_000
+    assert cfg.eval.mesh.geometry_mode == "pcd"
     assert cfg.output.mesh_file == "outputs/2dts/dtu/scan24/mesh_ply/30000_pcd.ply"
 
 

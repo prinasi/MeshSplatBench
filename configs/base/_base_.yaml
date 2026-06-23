@@ -20,7 +20,7 @@ render:
   video:
     split: train
     output_dir: outputs/{method}/{dataset}/{scene}/video
-    frames: 240
+    frames: 1200
     fps: 30
     zoom: 1.0
     z_variation: 0.0

@@ -12,7 +12,7 @@ dataset:
   resolution: 1
 
 trainer:
-  max_steps: 40000
+  max_steps: 30000
 
 d2ts:
   native_config: configs/2dts/native/tandt.yaml
