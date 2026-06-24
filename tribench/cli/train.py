@@ -52,6 +52,12 @@ def _coerce_value(value: str) -> object:
         return value
 
 
+def _force_dtu_white_background(dataset_root: str | Path, trainer_cfg: dict) -> None:
+    root = Path(dataset_root).expanduser()
+    if (root / "cameras.npz").is_file():
+        trainer_cfg["white_background"] = True
+
+
 def _parse_extra_args(raw_args: list[str]) -> dict[str, object]:
     """Parse ``--key value`` pairs from ``typer.Context.args`` into a dict."""
     result: dict[str, object] = {}
@@ -150,6 +156,8 @@ def train(
         canonical_method = canonical_backend_name(method)
     except KeyError:
         canonical_method = method.lower().replace("_", "-")
+
+    _force_dtu_white_background(dataset.expanduser(), kwargs)
 
     if canonical_method == "diffsoup":
         from tribench.trainers.diffsoup_native import run_diffsoup_native_config
@@ -255,6 +263,7 @@ def _train_from_structured_config(
             trainer_cfg[key] = dataset_cfg[key]
 
     method_name = str(trainer_cfg.get("type", trainer_cfg.get("name", ""))).replace("_", "-")
+    _force_dtu_white_background(dataset_root, trainer_cfg)
     native_loop = bool(
         trainer_cfg.pop(
             "native_loop",

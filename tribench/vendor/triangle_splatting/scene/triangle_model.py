@@ -222,6 +222,13 @@ class TriangleModel:
 
         self.setup_functions()
 
+    def reset_training_statistics(self):
+        count = self.get_triangles_points.shape[0]
+        device = self.get_triangles_points.device
+        self.triangle_area = torch.zeros(count, dtype=torch.float, device=device)
+        self.image_size = torch.zeros(count, dtype=torch.float, device=device)
+        self.importance_score = torch.zeros(count, dtype=torch.float, device=device)
+
     def save(self, path):
 
         mkdir_p(path)
@@ -291,6 +298,7 @@ class TriangleModel:
         ]
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+        self.reset_training_statistics()
 
     def capture(self):
         return (
@@ -461,9 +469,7 @@ class TriangleModel:
         self.max_radii2D = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
         self.max_density_factor = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
         self._mask = nn.Parameter(torch.ones((fused_point_cloud.shape[0], 1), device="cuda").requires_grad_(True))
-        self.triangle_area = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
-        self.image_size = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
-        self.importance_score = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
+        self.reset_training_statistics()
 
     def training_setup(self, training_args, lr_mask, lr_features, lr_opacity, lr_sigma, lr_triangles_points_init):
 

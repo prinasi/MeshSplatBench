@@ -9,7 +9,7 @@ dataset:
     type: "Colmap"
     local_dir: null
     scene_id: null
-    background: "random"
+    background: "white"
     test_background: "white"
     num_workers: 10
     prefetch: True

@@ -11,6 +11,7 @@ dataset:
   eval_every: 8
 
 trainer:
+  white_background: true
   depth_ratio: 1.0
   lambda_normals: 0.0028
   lambda_dist: 0.014

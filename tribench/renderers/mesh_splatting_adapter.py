@@ -296,6 +296,7 @@ class MeshSplattingAdapter(RendererAdapter):
             radii=rendering.get("radii"),
             visibility=rendering.get("visibility_filter"),
             extras={
+                "background_color": list(self._background_color),
                 "scaling": rendering.get("scaling"),
                 "max_blending": rendering.get("max_blending"),
                 "vertex_rendered": rendering.get("vertex_rendered"),

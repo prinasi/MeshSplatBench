@@ -13,8 +13,10 @@ from tribench.vendor.triangle_splatting.scene.cameras import Camera
 import numpy as np
 from tribench.vendor.triangle_splatting.utils.general_utils import PILtoTorch
 from tribench.vendor.triangle_splatting.utils.graphics_utils import fov2focal
+from tribench.vendor.training_images import is_dtu_scene, load_rgba_for_training
 
 WARNED = False
+
 
 def loadCam(args, id, cam_info, resolution_scale):
     orig_w, orig_h = cam_info.image.size
@@ -39,9 +41,12 @@ def loadCam(args, id, cam_info, resolution_scale):
         resolution = (int(orig_w / scale), int(orig_h / scale))
 
     if len(cam_info.image.split()) > 3:
-        import torch
-        resized_image_rgb = torch.cat([PILtoTorch(im, resolution) for im in cam_info.image.split()[:3]], dim=0)
-        loaded_mask = PILtoTorch(cam_info.image.split()[3], resolution)
+        resized_image_rgb, loaded_mask = load_rgba_for_training(
+            cam_info.image,
+            resolution,
+            PILtoTorch,
+            composite_white=is_dtu_scene(args),
+        )
         gt_image = resized_image_rgb
     else:
         resized_image_rgb = PILtoTorch(cam_info.image, resolution)

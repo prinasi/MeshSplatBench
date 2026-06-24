@@ -335,7 +335,11 @@ class TriangleSplattingAdapter(RendererAdapter):
                 cam_infos = [c for i, c in enumerate(cam_infos) if i % eval_every != 0]
 
             # Build Camera objects
-            model_args = SimpleNamespace(data_device="cuda", resolution=resolution)
+            model_args = SimpleNamespace(
+                data_device="cuda",
+                resolution=resolution,
+                source_path=str(dataset_path),
+            )
             self._cameras = cameraList_from_camInfos(cam_infos, 1.0, model_args)
 
         elif (dataset_path / "transforms_test.json").exists():

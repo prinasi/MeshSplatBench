@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import torch
 
 from tribench.trainers.triangle_splatting_method import TriangleSplattingTrainingMethod
+from tribench.vendor.triangle_splatting.scene.triangle_model import TriangleModel
 
 
 class _FakeTriangleModel:
@@ -76,3 +77,17 @@ def test_update_structure_runs_densify_below_triangle_cap():
     assert update["type"] == "densify"
     assert method._model.add_calls == 1
     assert method._model.prune_calls == 0
+
+
+def test_triangle_model_reset_training_statistics_initializes_tensor_buffers():
+    model = TriangleModel.__new__(TriangleModel)
+    model._triangles_points = torch.zeros(7, 3, 3)
+    model.triangle_area = 0
+    model.image_size = 0
+    model.importance_score = 0
+
+    model.reset_training_statistics()
+
+    assert torch.equal(model.triangle_area, torch.zeros(7))
+    assert torch.equal(model.image_size, torch.zeros(7))
+    assert torch.equal(model.importance_score, torch.zeros(7))

@@ -102,48 +102,6 @@ def _load_image(path: Path | None, size: tuple[int, int] | None = None, bg_color
     return torch.from_numpy(arr[..., :3]).contiguous()
 
 
-def _load_mask(path: Path | None, size: tuple[int, int] | None = None) -> torch.Tensor | None:
-    if path is None or not path.exists():
-        return None
-    with Image.open(path) as image:
-        mask = image.convert("L")
-        if size is not None and mask.size != size:
-            mask = mask.resize(size, Image.NEAREST)
-        arr = np.asarray(mask, dtype=np.float32) / 255.0
-    return torch.from_numpy(arr).contiguous()
-
-
-def _resolve_dtu_mask_path(mask_dir: Path, image_path: Path, image_idx: int) -> Path | None:
-    candidates = [
-        mask_dir / image_path.name,
-        mask_dir / f"{image_idx:03d}{image_path.suffix}",
-        mask_dir / f"{image_idx:04d}{image_path.suffix}",
-        mask_dir / f"{image_idx:03d}.png",
-        mask_dir / f"{image_idx:04d}.png",
-    ]
-    for path in candidates:
-        if path.exists() and not path.name.startswith("._"):
-            return path
-    for path in sorted(mask_dir.glob(f"*{image_idx:03d}*")):
-        if path.is_file() and not path.name.startswith("._"):
-            return path
-    return None
-
-
-def _composite_image_with_mask(
-    image: torch.Tensor,
-    mask: torch.Tensor | None,
-    bg_color: tuple[float, float, float],
-) -> torch.Tensor:
-    if mask is None:
-        return image
-    if mask.dim() == 3:
-        mask = mask[..., 0]
-    alpha = (mask > 0.5).to(dtype=image.dtype).unsqueeze(-1)
-    bg = torch.tensor(bg_color, dtype=image.dtype).view(1, 1, 3)
-    return image * alpha + bg * (1.0 - alpha)
-
-
 def _camera_batch_from_w2c(
     w2c: np.ndarray,
     K: np.ndarray,
@@ -222,6 +180,17 @@ class DatasetBase(ABC):
 
     def get_all_cameras(self) -> CameraBatch:
         samples = [self.sample(i) for i in range(len(self))]
+        metadata: dict[str, Any] = {"split": self.split}
+        background_colors = [
+            (s.metadata or s.camera.metadata or {}).get("eval_background_color")
+            for s in samples
+        ]
+        if (
+            background_colors
+            and background_colors[0] is not None
+            and all(color == background_colors[0] for color in background_colors)
+        ):
+            metadata["eval_background_color"] = background_colors[0]
         return CameraBatch(
             viewmats=torch.cat([s.camera.viewmats for s in samples], dim=0),
             camtoworlds=torch.cat([s.camera.camtoworlds for s in samples], dim=0),
@@ -230,7 +199,7 @@ class DatasetBase(ABC):
             height=samples[0].camera.height,
             near=samples[0].camera.near,
             far=samples[0].camera.far,
-            metadata={"split": self.split},
+            metadata=metadata,
         )
 
 
@@ -460,9 +429,6 @@ class DTUDataset(DatasetBase):
             )
             if (image_width, image_height) != (width, height):
                 gt = _load_image(image_path, size=(width, height), bg_color=(1.0, 1.0, 1.0))
-            mask_path = _resolve_dtu_mask_path(self.dataset_path / "mask", image_path, image_idx)
-            mask = _load_mask(mask_path, size=(width, height)) if mask_path is not None else None
-            gt = _composite_image_with_mask(gt, mask, (1.0, 1.0, 1.0))
             world_mat = data[f"world_mat_{image_idx}"].astype(np.float32)
             scale_key = f"scale_mat_{image_idx}"
             scale_mat = (
@@ -500,7 +466,7 @@ class DTUDataset(DatasetBase):
                     image=gt,
                     name=image_path.stem,
                     image_path=image_path,
-                    mask=mask,
+                    mask=None,
                     metadata=metadata,
                 )
             )

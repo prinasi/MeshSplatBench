@@ -86,34 +86,38 @@ def render_sample(
     return output
 
 
+def _background_color_from_output(output: RenderOutput) -> Any:
+    source_bg = getattr(output, "background_color", None)
+    if source_bg is None:
+        source_bg = output.extras.get("background_color") if output.extras else None
+    if source_bg is None:
+        source_bg = [0.0, 0.0, 0.0]
+    return source_bg
+
+
+def _composite_output_rgb(output: RenderOutput, bg_color: Any) -> torch.Tensor:
+    pred = output.rgb.clamp(0, 1)
+    if bg_color is not None and output.alpha is not None:
+        bg = torch.tensor(bg_color, dtype=pred.dtype, device=pred.device).view(1, 1, 3)
+        alpha = output.alpha.to(pred.device, dtype=pred.dtype).clamp(0, 1).unsqueeze(-1)
+        src = torch.tensor(
+            _background_color_from_output(output),
+            dtype=pred.dtype,
+            device=pred.device,
+        ).view(1, 1, 3)
+        color = pred - src * (1.0 - alpha)
+        pred = (color + bg * (1.0 - alpha)).clamp(0, 1)
+    return pred
+
+
 def _metric_rgb_for_sample(
     output: RenderOutput,
     sample: DatasetSample,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    pred = output.rgb.clamp(0, 1)
-    target = sample.image.to(pred.device).clamp(0, 1) if sample.image is not None else None
+    target = sample.image.to(output.rgb.device).clamp(0, 1) if sample.image is not None else None
     metadata = sample.metadata or getattr(sample.camera, "metadata", None) or {}
     bg_color = metadata.get("eval_background_color")
-    if bg_color is not None and output.alpha is not None:
-        bg = torch.tensor(bg_color, dtype=pred.dtype, device=pred.device).view(1, 1, 3)
-        alpha = output.alpha.to(pred.device, dtype=pred.dtype).clamp(0, 1).unsqueeze(-1)
-        source_bg = getattr(output, "background_color", None)
-        if source_bg is None:
-            source_bg = output.extras.get("background_color") if output.extras else None
-        if source_bg is None:
-            source_bg = [0.0, 0.0, 0.0]
-        src = torch.tensor(source_bg, dtype=pred.dtype, device=pred.device).view(1, 1, 3)
-        color = pred - src * (1.0 - alpha)
-        pred = (color + bg * (1.0 - alpha)).clamp(0, 1)
-    if bg_color is not None and sample.mask is not None:
-        mask = sample.mask.to(pred.device, dtype=pred.dtype)
-        if mask.dim() == 3:
-            mask = mask[..., 0]
-        mask = (mask > 0.5).to(dtype=pred.dtype).unsqueeze(-1)
-        bg = torch.tensor(bg_color, dtype=pred.dtype, device=pred.device).view(1, 1, 3)
-        pred = pred * mask + bg * (1.0 - mask)
-        if target is not None:
-            target = target * mask + bg * (1.0 - mask)
+    pred = _composite_output_rgb(output, bg_color)
     return pred, target
 
 
@@ -413,6 +417,8 @@ def generate_ellipse_cameras(
     Returns:
         A list of single-camera ``CameraBatch`` instances.
     """
+    base_metadata = dict(base_cameras.metadata or {})
+
     # -- 1. Extract c2w -----------------------------------------------
     c2ws = base_cameras.camtoworlds.detach().cpu().numpy()  # [N, 4, 4]
 
@@ -442,6 +448,7 @@ def generate_ellipse_cameras(
         c2w = c2w_gl @ flip  # back to COLMAP
         w2c = np.linalg.inv(c2w).astype(np.float32)
         c2w = c2w.astype(np.float32)
+        metadata = {**base_metadata, "trajectory": "ellipse_pca", "frame": i}
         frames.append(CameraBatch(
             viewmats=torch.from_numpy(w2c).unsqueeze(0),
             camtoworlds=torch.from_numpy(c2w).unsqueeze(0),
@@ -450,7 +457,7 @@ def generate_ellipse_cameras(
             height=base_cameras.height,
             near=base_cameras.near,
             far=base_cameras.far,
-            metadata={"trajectory": "ellipse_pca", "frame": i},
+            metadata=metadata,
         ))
     return frames
 
@@ -478,7 +485,8 @@ def render_video(
     frames = []
     for idx, camera in enumerate(cameras):
         output = adapter.render(camera.to(device), mode="eval")
-        arr = tensor_to_uint8(output.rgb)
+        metadata = camera.metadata or {}
+        arr = tensor_to_uint8(_composite_output_rgb(output, metadata.get("eval_background_color")))
         frames.append(arr)
         if write_frames:
             Image.fromarray(arr).save(frame_dir / f"{idx:05d}.png")

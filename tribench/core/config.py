@@ -143,7 +143,8 @@ def finalize_config(config: Mapping[str, Any]) -> dict[str, Any]:
     """
     resolved = _apply_scene_triangle_caps(_to_plain_dict(config))
     resolved = _format_config_templates(resolved)
-    return _resolve_dataset_scene(resolved)
+    resolved = _resolve_dataset_scene(resolved)
+    return _force_dtu_white_background(resolved)
 
 
 def resolve_dataset_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -206,6 +207,20 @@ def _apply_scene_triangle_caps(config: dict[str, Any]) -> dict[str, Any]:
 
     trainer_cfg = dict(config.get("trainer", {}) or {})
     trainer_cfg.setdefault("max_shapes", cap)
+    config["trainer"] = trainer_cfg
+    return config
+
+
+def _force_dtu_white_background(config: dict[str, Any]) -> dict[str, Any]:
+    dataset_cfg = config.get("dataset", {})
+    if not isinstance(dataset_cfg, Mapping):
+        return config
+    dataset_type = str(dataset_cfg.get("type", "")).lower()
+    dataset_name = str(dataset_cfg.get("name", "")).lower()
+    if dataset_type != "dtu" and dataset_name != "dtu":
+        return config
+    trainer_cfg = dict(config.get("trainer", {}) or {})
+    trainer_cfg["white_background"] = True
     config["trainer"] = trainer_cfg
     return config
 

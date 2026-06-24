@@ -168,24 +168,10 @@ reference pipelines before broadening adapter coverage further. This gives the
 remaining methods a concrete standard for training, rendering, evaluation,
 profiling, and configuration behavior.
 
-1. **Formalize loss configuration**
-   - Add an explicit `loss:` section to experiment configs instead of relying only on trainer extra arguments.
-   - Record pixel loss type and weights such as `lambda_dssim`, `lambda_opacity`, `lambda_size`, `lambda_normals`, and `lambda_dist`.
-   - Wire `TriangleSplattingTrainingMethod` to read the normalized loss config while preserving existing defaults.
-
-2. **Make profiling functional**
+1. **Make profiling functional**
    - Extend `tribench profile --config ...` beyond metadata output.
    - Report forward latency, FPS, peak CUDA memory, primitive count, checkpoint size, and optional backward latency.
    - Start with Triangle Splatting, then reuse the same profile schema for other adapters.
-
-3. **Add parity validation**
-   - Compare TriBench rendering against the upstream Triangle Splatting renderer on the same scene and checkpoint.
-   - Track camera consistency, image PSNR, max pixel difference, primitive counts, and checkpoint loading behavior.
-   - Add a small train/render/eval smoke test, such as a 100-step run, to catch pipeline regressions.
-
-4. **Clean up known test debt**
-   - Fix existing renderer test mismatches around DiffSoup no-model errors and Triangle Splatting missing-checkpoint exceptions.
-   - Keep the full `tribench/tests` suite green before expanding adapter work.
 
 ## License
 

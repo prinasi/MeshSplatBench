@@ -1,6 +1,7 @@
 """Tests for evaluation metrics."""
 
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import torch
@@ -8,8 +9,14 @@ import pytest
 from PIL import Image
 
 from tribench.core.metrics import compute_psnr
+from tribench.core.cameras import CameraBatch
 from tribench.core.datasets import DatasetBase, DatasetSample
-from tribench.core.rendering import _metric_rgb_for_sample, render_dataset_split
+from tribench.core.rendering import (
+    _metric_rgb_for_sample,
+    generate_ellipse_cameras,
+    render_dataset_split,
+    render_video,
+)
 from tribench.core.mesh_eval import _official_dtu_sample_geometry, _resolve_dtu_geometry_mode
 from tribench.renderers.base import RendererAdapter
 from tribench.renderers.base import RenderOutput
@@ -96,7 +103,7 @@ class TestMetricPreprocessing:
         assert torch.allclose(pred, torch.ones(1, 1, 3))
         assert torch.allclose(target, torch.ones(1, 1, 3))
 
-    def test_dtu_mask_forces_render_background_to_white(self):
+    def test_dataset_mask_does_not_force_render_background(self):
         output = RenderOutput(
             rgb=torch.zeros(1, 2, 3),
             alpha=torch.ones(1, 2),
@@ -113,29 +120,8 @@ class TestMetricPreprocessing:
         pred, target = _metric_rgb_for_sample(output, sample)
 
         assert torch.allclose(pred[0, 0], torch.zeros(3))
-        assert torch.allclose(pred[0, 1], torch.ones(3))
-        assert torch.allclose(target[0, 1], torch.ones(3))
-
-    def test_camera_metadata_triggers_dtu_mask_background(self):
-        class DummyCamera:
-            metadata = {"eval_background_color": (1.0, 1.0, 1.0)}
-
-        output = RenderOutput(
-            rgb=torch.zeros(1, 1, 3),
-            alpha=torch.ones(1, 1),
-            extras={"background_color": [1.0, 1.0, 1.0]},
-        )
-        sample = DatasetSample(
-            camera=DummyCamera(),
-            image=torch.zeros(1, 1, 3),
-            mask=torch.zeros(1, 1),
-            name="000000",
-        )
-
-        pred, target = _metric_rgb_for_sample(output, sample)
-
-        assert torch.allclose(pred[0, 0], torch.ones(3))
-        assert torch.allclose(target[0, 0], torch.ones(3))
+        assert torch.allclose(pred[0, 1], torch.zeros(3))
+        assert torch.allclose(target[0, 1], torch.zeros(3))
 
     def test_saved_render_uses_dtu_white_background(self, tmp_path):
         class DummyCamera:
@@ -189,6 +175,100 @@ class TestMetricPreprocessing:
         render_path = manifest["frames"][0]["render_path"]
 
         assert Image.open(render_path).getpixel((0, 0)) == (255, 255, 255)
+
+    def test_video_render_uses_dtu_white_background(self, tmp_path, monkeypatch):
+        imageio = ModuleType("imageio")
+        imageio.__path__ = []
+        imageio_v3 = ModuleType("imageio.v3")
+        written = {}
+
+        def imwrite(path, frames, fps):
+            written["path"] = path
+            written["frames"] = frames
+            written["fps"] = fps
+
+        imageio_v3.imwrite = imwrite
+        imageio.v3 = imageio_v3
+        monkeypatch.setitem(sys.modules, "imageio", imageio)
+        monkeypatch.setitem(sys.modules, "imageio.v3", imageio_v3)
+
+        class DummyAdapter(RendererAdapter):
+            @property
+            def name(self):
+                return "dummy"
+
+            def load_checkpoint(self, path):
+                raise NotImplementedError
+
+            def load_scene(self, dataset_path, split="test"):
+                raise NotImplementedError
+
+            def model_stats(self):
+                return {}
+
+            def render(self, cameras, *, mode="eval"):
+                return RenderOutput(
+                    rgb=torch.zeros(1, 1, 3),
+                    alpha=torch.zeros(1, 1),
+                    extras={"background_color": [0.0, 0.0, 0.0]},
+                )
+
+        camera = CameraBatch(
+            viewmats=torch.eye(4).unsqueeze(0),
+            camtoworlds=torch.eye(4).unsqueeze(0),
+            Ks=torch.eye(3).unsqueeze(0),
+            width=1,
+            height=1,
+            metadata={"eval_background_color": (1.0, 1.0, 1.0)},
+        )
+
+        render_video(DummyAdapter(), [camera], tmp_path / "video", fps=12, device="cpu")
+
+        assert Image.open(tmp_path / "video" / "frames" / "00000.png").getpixel((0, 0)) == (255, 255, 255)
+        assert written["frames"][0, 0, 0].tolist() == [255, 255, 255]
+        assert written["fps"] == 12
+
+    def test_ellipse_cameras_preserve_background_metadata(self):
+        def look_at_colmap(position):
+            position = np.asarray(position, dtype=np.float32)
+            forward = -position / (np.linalg.norm(position) + 1e-8)
+            up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+            right = np.cross(forward, up)
+            right = right / (np.linalg.norm(right) + 1e-8)
+            cam_up = np.cross(right, forward)
+            cam_up = cam_up / (np.linalg.norm(cam_up) + 1e-8)
+            c2w_gl = np.eye(4, dtype=np.float32)
+            c2w_gl[:3, 0] = right
+            c2w_gl[:3, 1] = cam_up
+            c2w_gl[:3, 2] = -forward
+            c2w_gl[:3, 3] = position
+            flip = np.diag([1.0, -1.0, -1.0, 1.0]).astype(np.float32)
+            return c2w_gl @ flip
+
+        c2ws_np = np.stack(
+            [
+                look_at_colmap((1.0, 0.0, 0.0)),
+                look_at_colmap((0.0, 1.0, 0.0)),
+                look_at_colmap((-1.0, 0.0, 0.0)),
+                look_at_colmap((0.0, -1.0, 0.0)),
+            ]
+        )
+        c2ws = torch.from_numpy(c2ws_np)
+        viewmats = torch.from_numpy(np.linalg.inv(c2ws_np).astype(np.float32))
+        ks = torch.eye(3).unsqueeze(0).repeat(4, 1, 1)
+        base = CameraBatch(
+            viewmats=viewmats,
+            camtoworlds=c2ws,
+            Ks=ks,
+            width=4,
+            height=4,
+            metadata={"split": "train", "eval_background_color": (1.0, 1.0, 1.0)},
+        )
+
+        cameras = generate_ellipse_cameras(base, n_frames=2)
+
+        assert cameras[0].metadata["eval_background_color"] == (1.0, 1.0, 1.0)
+        assert cameras[0].metadata["trajectory"] == "ellipse_pca"
 
 
 class TestDTUGeometryMode:
