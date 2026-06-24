@@ -168,38 +168,24 @@ reference pipelines before broadening adapter coverage further. This gives the
 remaining methods a concrete standard for training, rendering, evaluation,
 profiling, and configuration behavior.
 
-1. **Stabilize Triangle Splatting as the canonical baseline**
-   - Ensure `tribench train/render/eval/inspect/profile --config ...` works end-to-end for one COLMAP scene.
-   - Keep the single experiment YAML as the source of truth for train, render, eval, profile, mesh export, and inspect outputs.
-
-2. **Formalize loss configuration**
+1. **Formalize loss configuration**
    - Add an explicit `loss:` section to experiment configs instead of relying only on trainer extra arguments.
    - Record pixel loss type and weights such as `lambda_dssim`, `lambda_opacity`, `lambda_size`, `lambda_normals`, and `lambda_dist`.
    - Wire `TriangleSplattingTrainingMethod` to read the normalized loss config while preserving existing defaults.
 
-3. **Make profiling functional**
+2. **Make profiling functional**
    - Extend `tribench profile --config ...` beyond metadata output.
    - Report forward latency, FPS, peak CUDA memory, primitive count, checkpoint size, and optional backward latency.
    - Start with Triangle Splatting, then reuse the same profile schema for other adapters.
 
-4. **Add parity validation**
+3. **Add parity validation**
    - Compare TriBench rendering against the upstream Triangle Splatting renderer on the same scene and checkpoint.
    - Track camera consistency, image PSNR, max pixel difference, primitive counts, and checkpoint loading behavior.
    - Add a small train/render/eval smoke test, such as a 100-step run, to catch pipeline regressions.
 
-5. **Clean up known test debt**
+4. **Clean up known test debt**
    - Fix existing renderer test mismatches around DiffSoup no-model errors and Triangle Splatting missing-checkpoint exceptions.
    - Keep the full `tribench/tests` suite green before expanding adapter work.
-
-6. **Add full checkpoint resume state**
-   - Keep the current fallback that resumes from `point_cloud/iteration_*/point_cloud_state_dict.pt` for existing runs.
-   - Add a TriBench-owned training state file, such as `tribench_training_state.pt`, alongside each saved point-cloud checkpoint.
-   - Save the completed step, optimizer state, method-local scheduler/topology state, and RNG state so interrupted runs can resume as closely as possible to an uninterrupted training run.
-   - Prefer the full training state when present, and fall back to model-weight-only resume for older checkpoints.
-
-7. **Then expand adapter coverage**
-   - Bring 2DTS and DiffSoup up to the same adapter contract.
-   - For each method, add a unified config, render/eval/profile smoke path, and parity notes.
 
 ## License
 

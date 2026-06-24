@@ -62,6 +62,7 @@ diffsoup = "tribench.renderers.diffsoup_adapter"
 
 [project.entry-points."tribench.training_methods"]
 triangle_splatting = "tribench.trainers.triangle_splatting_method"
+diffsoup = "tribench.trainers.diffsoup_native"
 
 [tool.setuptools.packages.find]
 include = ["tribench*"]

@@ -1,0 +1,15 @@
+# @format
+
+trainer:
+  type: diffsoup
+  native_loop: true
+  max_steps: 10000
+  batch_size: 4
+  n_points: 15000
+  downscale: 4
+  flip_z: true
+  skip_completed: true
+
+adapter:
+  type: diffsoup
+  checkpoint: outputs/{method}/{dataset}/{scene}/final_params.pt

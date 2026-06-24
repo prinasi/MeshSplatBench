@@ -43,6 +43,12 @@ class TestRegistry:
         cls = get_adapter("diffsoup")
         assert hasattr(cls, "render")
 
+    def test_get_diffsoup_training_method(self):
+        from tribench.trainers.registry import get_training_method
+
+        cls = get_training_method("diffsoup")
+        assert cls.__name__ == "DiffSoupNativeTrainingMethod"
+
     def test_get_nonexistent_raises(self):
         with pytest.raises(KeyError, match="not found"):
             get_adapter("nonexistent_method")

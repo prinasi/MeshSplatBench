@@ -188,6 +188,60 @@ class TestMeshSplattingAdapter:
         assert adapter._background_color_override == [1.0, 1.0, 1.0]
 
 
+class TestDiffSoupAdapter:
+    """Tests for DiffSoup render-time configuration and camera conventions."""
+
+    def test_configure_bg_color(self):
+        adapter = DiffSoupAdapter()
+
+        adapter.configure(bg_color="white")
+        assert adapter._background_color_override == [1.0, 1.0, 1.0]
+
+        adapter.configure(bg_color="black")
+        assert adapter._background_color_override == [0.0, 0.0, 0.0]
+
+    def test_background_defaults_match_native_layout(self):
+        adapter = DiffSoupAdapter()
+
+        adapter._checkpoint = {"dataset_type": "colmap", "flip_z": True}
+        assert torch.equal(adapter._background_color(torch.device("cpu")), torch.zeros(3))
+
+        adapter._checkpoint = {"dataset_type": "dtu", "flip_z": True}
+        assert torch.equal(adapter._background_color(torch.device("cpu")), torch.ones(3))
+
+        adapter._checkpoint = {}
+        assert torch.equal(adapter._background_color(torch.device("cpu")), torch.ones(3))
+
+    def test_near_plane_uses_native_test_split(self, dummy_camera_batch):
+        adapter = DiffSoupAdapter()
+        adapter._checkpoint = {"dataset_type": "colmap", "flip_z": True}
+        dummy_camera_batch.metadata = {"split": "test"}
+
+        assert adapter._near_plane(dummy_camera_batch) == 0.5
+
+        dummy_camera_batch.metadata = {"split": "train"}
+        assert adapter._near_plane(dummy_camera_batch) == dummy_camera_batch.near
+
+    def test_build_mvp_matches_diffsoup_colmap_projection(self, dummy_camera_batch):
+        adapter = DiffSoupAdapter()
+        adapter._checkpoint = {"dataset_type": "colmap", "flip_z": True}
+        dummy_camera_batch.metadata = {"split": "train"}
+
+        actual = adapter._build_mvp(dummy_camera_batch, device=torch.device("cpu"))
+        projection = adapter._opengl_projection_from_K(
+            dummy_camera_batch.Ks[0],
+            dummy_camera_batch.height,
+            dummy_camera_batch.width,
+            dummy_camera_batch.near,
+            dummy_camera_batch.far,
+        )
+        zf = torch.eye(4)
+        zf[2, 2] = -1.0
+        expected = projection @ zf @ dummy_camera_batch.viewmats[0]
+
+        assert torch.allclose(actual[0], expected)
+
+
 class TestTriangleSplattingAdapter:
     """Tests for the TriangleSplattingAdapter (real implementation)."""
 
@@ -226,15 +280,13 @@ class TestTriangleSplattingAdapter:
     def test_load_checkpoint_bad_path(self):
         """load_checkpoint with nonexistent path raises ImportError or FileNotFoundError."""
         adapter = TriangleSplattingAdapter(repo_root="/nonexistent/repo")
-        with pytest.raises(ImportError):
+        with pytest.raises((ImportError, FileNotFoundError)):
             adapter.load_checkpoint("/nonexistent/checkpoint")
 
     @pytest.mark.skipif(not (_has_cuda and _has_ts_cuda),
                         reason="Requires CUDA + built diff-triangle-rasterization")
     def test_load_checkpoint_from_state_dict(self, tmp_path):
         """Test loading a synthetic checkpoint through the full pipeline."""
-        import math
-
         # Create a minimal synthetic checkpoint
         N = 100  # number of triangles
         sh_degree = 3

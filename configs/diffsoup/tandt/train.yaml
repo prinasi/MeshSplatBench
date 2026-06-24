@@ -1,0 +1,16 @@
+# @format
+
+_base_:
+  - ../../base/tandt.yaml
+  - ../../base/diffsoup.yaml
+
+experiment:
+  name: diffsoup_train
+
+dataset:
+  scene: train
+  resolution: 1
+
+trainer:
+  dataset_type: colmap
+  downscale: 1

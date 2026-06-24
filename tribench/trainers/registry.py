@@ -66,6 +66,11 @@ def _discover_plugins() -> None:
         pass
 
     try:
+        __import__("tribench.trainers.diffsoup_native")
+    except Exception:
+        pass
+
+    try:
         from importlib.metadata import entry_points
     except ImportError:
         return

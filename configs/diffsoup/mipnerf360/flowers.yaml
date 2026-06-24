@@ -1,0 +1,17 @@
+# @format
+
+_base_:
+  - ../../base/mipnerf360.yaml
+  - ../../base/diffsoup.yaml
+
+experiment:
+  name: diffsoup_flowers
+
+dataset:
+  scene: flowers
+  image_dir: images_4
+  resolution: 1
+
+trainer:
+  dataset_type: colmap
+  downscale: 4

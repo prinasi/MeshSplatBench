@@ -114,6 +114,17 @@ def test_scene_triangle_caps_do_not_override_explicit_max_shapes(tmp_path: Path)
     assert cfg["trainer"]["max_shapes"] == 10
 
 
+def test_diffsoup_config_resolves_final_params_checkpoint():
+    cfg = load_config(Path("configs/diffsoup/mipnerf360/room.yaml"))
+
+    assert cfg["trainer"]["type"] == "diffsoup"
+    assert cfg["trainer"]["downscale"] == 4
+    assert cfg["dataset"]["root"].endswith("data/mipnerf360/room")
+    assert cfg["dataset"]["image_dir"] == "images_4"
+    assert cfg["dataset"]["resolution"] == 1
+    assert cfg["adapter"]["checkpoint"] == "outputs/diffsoup/mipnerf360/room/final_params.pt"
+
+
 def test_scene_triangle_caps_support_scan_pattern(tmp_path: Path):
     base = tmp_path / "caps.yaml"
     child = tmp_path / "child.yaml"
@@ -136,23 +147,23 @@ def test_scene_triangle_caps_support_scan_pattern(tmp_path: Path):
 
 def test_triangle_splatting_scene_configs_apply_full_eval_caps():
     expected = {
-        "bicycle": 6_400_000,
-        "flowers": 5_500_000,
-        "garden": 5_200_000,
-        "stump": 4_750_000,
-        "treehill": 5_000_000,
-        "room": 2_100_000,
-        "counter": 2_500_000,
-        "kitchen": 2_400_000,
-        "bonsai": 3_000_000,
-        "truck": 2_000_000,
-        "train": 2_500_000,
-        "scan24": 500_000,
+        "mipnerf360/bicycle": 6_400_000,
+        "mipnerf360/flowers": 5_500_000,
+        "mipnerf360/garden": 5_200_000,
+        "mipnerf360/stump": 4_750_000,
+        "mipnerf360/treehill": 5_000_000,
+        "mipnerf360/room": 2_100_000,
+        "mipnerf360/counter": 2_500_000,
+        "mipnerf360/kitchen": 2_400_000,
+        "mipnerf360/bonsai": 3_000_000,
+        "tandt/truck": 2_000_000,
+        "tandt/train": 2_500_000,
+        "dtu/scan24": 500_000,
     }
     config_dir = Path(__file__).resolve().parents[2] / "configs" / "triangle-splatting"
 
-    for scene, cap in expected.items():
-        cfg = load_config(config_dir / f"{scene}.yaml")
+    for scene_path, cap in expected.items():
+        cfg = load_config(config_dir / f"{scene_path}.yaml")
         assert cfg["trainer"]["max_shapes"] == cap
 
 

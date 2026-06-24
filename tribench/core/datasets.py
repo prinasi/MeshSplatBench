@@ -230,6 +230,7 @@ class DatasetBase(ABC):
             height=samples[0].camera.height,
             near=samples[0].camera.near,
             far=samples[0].camera.far,
+            metadata={"split": self.split},
         )
 
 
@@ -320,7 +321,12 @@ class ColmapDataset(DatasetBase):
                 K,
                 width,
                 height,
-                metadata={"image_name": im.name, "index": image_idx, "split_index": out_idx},
+                metadata={
+                    "image_name": im.name,
+                    "index": image_idx,
+                    "split_index": out_idx,
+                    "split": self.split,
+                },
             )
             samples.append(DatasetSample(camera=camera, image=gt, name=Path(im.name).stem, image_path=image_path))
         return samples
@@ -392,7 +398,11 @@ class NerfSyntheticDataset(DatasetBase):
                     K,
                     width,
                     height,
-                    metadata={"image_name": image_path.name, "source_json": path.name},
+                    metadata={
+                        "image_name": image_path.name,
+                        "source_json": path.name,
+                        "split": self.split,
+                    },
                 )
                 samples.append(DatasetSample(camera=camera, image=gt, name=image_path.stem, image_path=image_path))
         return samples
@@ -474,6 +484,7 @@ class DTUDataset(DatasetBase):
                 "image_name": image_path.name,
                 "index": image_idx,
                 "split_index": out_idx,
+                "split": self.split,
                 "eval_background_color": (1.0, 1.0, 1.0),
             }
             camera = _camera_batch_from_w2c(

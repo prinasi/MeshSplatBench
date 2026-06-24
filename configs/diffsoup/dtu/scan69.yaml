@@ -1,0 +1,15 @@
+# @format
+
+_base_:
+  - ../../base/dtu.yaml
+  - ../../base/diffsoup.yaml
+
+experiment:
+  name: diffsoup_scan69
+
+dataset:
+  scene: scan69
+
+trainer:
+  dataset_type: dtu
+  downscale: 2

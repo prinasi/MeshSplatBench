@@ -16,6 +16,7 @@ import typer
 
 from tribench.core.builder import build_training_loop, build_training_method
 from tribench.core.config import Config, load_config, resolve_dataset_config, save_config_snapshot
+from tribench.renderers.backends import canonical_backend_name
 from tribench.core.runtime_stats import run_with_training_stats
 from tribench.trainers.checkpoints import find_latest_point_cloud_checkpoint
 from tribench.trainers.loop import TrainingConfig, TrainingLoop
@@ -145,6 +146,37 @@ def train(
     else:
         kwargs.setdefault("outdoor", outdoor)
 
+    try:
+        canonical_method = canonical_backend_name(method)
+    except KeyError:
+        canonical_method = method.lower().replace("_", "-")
+
+    if canonical_method == "diffsoup":
+        from tribench.trainers.diffsoup_native import run_diffsoup_native_config
+
+        trainer_cfg = {"type": "diffsoup", **kwargs}
+        summary = run_with_training_stats(
+            lambda: run_diffsoup_native_config(
+                trainer_cfg=trainer_cfg,
+                dataset_cfg={
+                    "type": trainer_cfg.get("dataset_type", "auto"),
+                    "scene": dataset.name,
+                    "resolution": trainer_cfg.get("resolution", resolution),
+                },
+                dataset_root=str(dataset.expanduser()),
+                output_dir=output_dir,
+                max_steps=max_steps,
+                quiet=quiet,
+            ),
+            output_dir,
+        )
+        if not quiet:
+            typer.echo(
+                f"Training complete: {summary['total_steps']} steps "
+                f"in {summary['total_time_s']:.1f}s"
+            )
+        return
+
     # Separate "extra" args that the TrainingMethod may not know about
     import inspect
 
@@ -248,6 +280,24 @@ def _train_from_structured_config(
         summary = run_with_training_stats(
             lambda: _run_mesh_splatting_native_config(
                 trainer_cfg=trainer_cfg,
+                dataset_root=str(dataset_root),
+                output_dir=run_output_dir,
+                max_steps=max_steps,
+                quiet=quiet,
+            ),
+            run_output_dir,
+        )
+        if not quiet:
+            typer.echo(f"Config snapshot saved to {run_output_dir / 'config.yaml'}")
+        return summary
+
+    if method_name == "diffsoup":
+        from tribench.trainers.diffsoup_native import run_diffsoup_native_config
+
+        summary = run_with_training_stats(
+            lambda: run_diffsoup_native_config(
+                trainer_cfg=trainer_cfg,
+                dataset_cfg=dataset_cfg,
                 dataset_root=str(dataset_root),
                 output_dir=run_output_dir,
                 max_steps=max_steps,
