@@ -149,6 +149,33 @@ def test_2dts_render_params_follow_native_dataset_configs():
     assert scan24.adapter.render_params.sort_level == 2
 
 
+def test_mesh_splatting_render_scaling_matches_native_render_script():
+    bicycle = Config.fromfile("configs/mesh-splatting/mipnerf360/bicycle.yaml")
+    scan24 = Config.fromfile("configs/mesh-splatting/dtu/scan24.yaml")
+
+    assert bicycle.adapter.render_params.render_scaling == 4
+    assert scan24.adapter.render_params.render_scaling == 4
+    assert scan24.adapter.render_params.bg_color == "white"
+    assert scan24.mesh.eval_split is False
+    assert scan24.mesh.render_scaling == 1
+
+
+def test_mesh_splatting_mesh_export_kwargs_follow_native_mesh_script():
+    from tribench.cli.render import _mesh_export_kwargs
+
+    cfg = Config.fromfile("configs/mesh-splatting/dtu/scan24.yaml")
+    kwargs = _mesh_export_kwargs(cfg, cfg.mesh.to_dict(), method="mesh-splatting")
+
+    assert kwargs["dataset_path"] == "data/dtu/scan24"
+    assert kwargs["voxel_size"] == 0.004
+    assert kwargs["sdf_trunc"] == 0.016
+    assert kwargs["depth_trunc"] == 3.0
+    assert kwargs["num_cluster"] == 1
+    assert kwargs["depth_ratio"] == 1.0
+    assert kwargs["eval_split"] is False
+    assert kwargs["render_scaling"] == 1
+
+
 def test_2dts_vanilla_ts_import_does_not_require_gaussian_rasterizer():
     from tribench.vendor.d2ts.diff_recon import VanillaTSTrainer
     from tribench.vendor.d2ts.diff_recon.renderer import GaussianRenderer, HybridRenderer, TriangleRenderer
@@ -197,6 +224,41 @@ def test_eval_mesh_exports_missing_configured_mesh(tmp_path: Path, monkeypatch):
     assert _ensure_pred_mesh_exists(config, str(pred)) == str(pred)
     assert pred.exists()
     assert calls["adapter_cfg"]["type"] == "triangle-splatting"
+    assert calls["export_path"] == pred
+
+
+def test_eval_mesh_reexports_existing_mesh_splatting_mesh_without_native_metadata(
+    tmp_path: Path,
+    monkeypatch,
+):
+    config = Config(
+        {
+            "adapter": {
+                "type": "mesh-splatting",
+                "checkpoint": str(tmp_path / "point_cloud" / "iteration_30000"),
+            }
+        }
+    )
+    pred = tmp_path / "fuse_post.ply"
+    pred.write_text("old primitive mesh\n")
+    calls = {}
+
+    def fake_build_adapter(adapter_cfg):
+        calls["adapter_cfg"] = adapter_cfg
+        return object()
+
+    def fake_export_adapter_mesh(adapter, path, **kwargs):
+        calls["export_path"] = Path(path)
+        calls["kwargs"] = kwargs
+        Path(path).write_text("native tsdf mesh\n")
+        return Path(path)
+
+    monkeypatch.setattr("tribench.core.builder.build_adapter", fake_build_adapter)
+    monkeypatch.setattr("tribench.core.mesh_eval.export_adapter_mesh", fake_export_adapter_mesh)
+
+    assert _ensure_pred_mesh_exists(config, str(pred)) == str(pred)
+    assert pred.read_text() == "native tsdf mesh\n"
+    assert calls["adapter_cfg"]["type"] == "mesh-splatting"
     assert calls["export_path"] == pred
 
 

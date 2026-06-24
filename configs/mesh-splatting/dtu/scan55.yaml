@@ -1,0 +1,28 @@
+# @format
+
+_base_:
+  - ../../base/dtu.yaml
+  - ../../base/mesh-splatting.yaml
+
+experiment:
+  name: mesh_splatting_scan55
+
+dataset:
+  scene: scan55
+
+trainer:
+  feature_lr: 0.004
+  size_probs_zero: 0.0
+  splitt_large_triangles: 500
+  start_pruning: 3000
+  weight_lr: 0.05
+  lambda_weight: 0.0
+  prune_size: 1300
+  densify_until_iter: 10000
+  run_restricted_delaunay: 11000
+  iteration_mesh: 8000
+  lambda_normals: 0.000001
+  max_points: 650000
+  lambda_vertex: 0.0
+  lr_triangles_points_init: 0.00052
+  prune_triangles_threshold: 0.17

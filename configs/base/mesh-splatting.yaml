@@ -1,0 +1,18 @@
+# @format
+
+trainer:
+  type: mesh-splatting
+  max_steps: 30000
+  white_background: false
+  densify_until_iter: 10000
+  run_restricted_delaunay: -1
+
+adapter:
+  type: mesh-splatting
+  checkpoint: outputs/{method}/{dataset}/{scene}/point_cloud/iteration_{max_steps}
+  render_params:
+    render_scaling: 4
+
+mesh:
+  eval_split: false
+  render_scaling: 1

@@ -1,0 +1,17 @@
+# @format
+
+_base_:
+  - ../../base/mipnerf360.yaml
+  - ../../base/mesh-splatting.yaml
+
+experiment:
+  name: mesh_splatting_bonsai
+
+dataset:
+  scene: bonsai
+  image_dir: images_2
+  resolution: -1
+
+trainer:
+  indoor: true
+  data_device: cpu

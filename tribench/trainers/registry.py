@@ -61,6 +61,11 @@ def _discover_plugins() -> None:
         pass
 
     try:
+        __import__("tribench.trainers.mesh_splatting_method")
+    except Exception:
+        pass
+
+    try:
         from importlib.metadata import entry_points
     except ImportError:
         return

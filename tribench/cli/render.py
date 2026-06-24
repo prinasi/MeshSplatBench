@@ -336,7 +336,11 @@ def mesh(
         if output == "mesh.ply":
             output = str(mesh_cfg.get("output") or section(cfg, "output").get("mesh_file", output))
         adapter = build_adapter(adapter_cfg)
-        export_kwargs = _mesh_export_kwargs(cfg, mesh_cfg)
+        export_kwargs = _mesh_export_kwargs(
+            cfg,
+            mesh_cfg,
+            method=str(adapter_cfg.get("type", "")),
+        )
         save_config_snapshot(cfg, Path(output).parent)
     else:
         if method is None or checkpoint is None:
@@ -347,7 +351,7 @@ def mesh(
     typer.echo(f"Mesh saved to {path}")
 
 
-def _mesh_export_kwargs(cfg, mesh_cfg: dict) -> dict:
+def _mesh_export_kwargs(cfg, mesh_cfg: dict, method: str | None = None) -> dict:
     try:
         dataset_cfg = dataset_config(
             cfg,
@@ -361,7 +365,7 @@ def _mesh_export_kwargs(cfg, mesh_cfg: dict) -> dict:
     if dataset_path is None:
         return {}
 
-    return {
+    kwargs = {
         "dataset_path": str(dataset_path),
         "split": str(dataset_cfg.get("split", mesh_cfg.get("split", "train"))),
         "image_dir": str(dataset_cfg.get("image_dir", "images")),
@@ -373,3 +377,7 @@ def _mesh_export_kwargs(cfg, mesh_cfg: dict) -> dict:
         "num_cluster": int(mesh_cfg.get("num_cluster", mesh_cfg.get("clusters", 1))),
         "depth_ratio": float(mesh_cfg.get("depth_ratio", 1.0)),
     }
+    if str(method or "").replace("_", "-") == "mesh-splatting":
+        kwargs["eval_split"] = bool(mesh_cfg.get("eval_split", False))
+        kwargs["render_scaling"] = int(mesh_cfg.get("render_scaling", 1))
+    return kwargs

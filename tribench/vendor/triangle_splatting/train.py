@@ -49,6 +49,7 @@ def build_parser():
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default=None)
+    parser.add_argument("--load_iteration", type=int, default=None)
     parser.add_argument("--no_dome", action="store_true", default=False)
     parser.add_argument("--outdoor", action="store_true", default=False)
     return parser, model_params, opt_params, pipe_params
@@ -176,6 +177,7 @@ def training(
     testing_iterations,
     save_iterations,
     checkpoint,
+    load_iteration,
     debug_from,
     lpips_fn,
 ):
@@ -191,6 +193,7 @@ def training(
         opt.nb_points,
         opt.set_sigma,
         no_dome,
+        load_iteration=load_iteration,
     )
     triangles.training_setup(
         opt,
@@ -200,6 +203,8 @@ def training(
         opt.lr_sigma,
         opt.lr_triangles_points_init,
     )
+    if scene.loaded_iter:
+        first_iter = int(scene.loaded_iter)
 
     if checkpoint:
         model_params, first_iter = torch.load(checkpoint)
@@ -389,6 +394,7 @@ def run_training(argv: Sequence[str] | None = None):
         testing_iterations=args.test_iterations,
         save_iterations=args.save_iterations,
         checkpoint=args.start_checkpoint,
+        load_iteration=args.load_iteration,
         debug_from=args.debug_from,
         lpips_fn=lpips_fn,
     )

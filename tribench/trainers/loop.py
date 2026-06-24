@@ -82,11 +82,16 @@ class TrainingLoop:
 
         start_time = time.time()
         step_times = []
+        start_step = self.method.resume_from_checkpoint(output_dir, cfg.max_steps)
+        start_step = max(0, min(int(start_step), cfg.max_steps))
+        self._step = start_step
 
+        if start_step > 0:
+            print(f"Resuming training from step {start_step}.")
         print(f"Starting training for {cfg.max_steps} steps...")
         print(f"Output directory: {output_dir}")
 
-        for step in range(1, cfg.max_steps + 1):
+        for step in range(start_step + 1, cfg.max_steps + 1):
             self._step = step
             self.method.set_step(step)
             t0 = time.perf_counter()
@@ -137,6 +142,8 @@ class TrainingLoop:
 
         summary = {
             "total_steps": cfg.max_steps,
+            "start_step": start_step,
+            "trained_steps": max(cfg.max_steps - start_step, 0),
             "total_time_s": total_time,
             "avg_step_time_ms": avg_step_time * 1000,
             "final_losses": self._history[-1] if self._history else {},

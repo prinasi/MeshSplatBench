@@ -17,6 +17,7 @@ import typer
 from tribench.core.builder import build_training_loop, build_training_method
 from tribench.core.config import Config, load_config, resolve_dataset_config, save_config_snapshot
 from tribench.core.runtime_stats import run_with_training_stats
+from tribench.trainers.checkpoints import find_latest_point_cloud_checkpoint
 from tribench.trainers.loop import TrainingConfig, TrainingLoop
 from tribench.trainers.registry import get_training_method
 
@@ -222,10 +223,30 @@ def _train_from_structured_config(
             trainer_cfg[key] = dataset_cfg[key]
 
     method_name = str(trainer_cfg.get("type", trainer_cfg.get("name", ""))).replace("_", "-")
-    native_loop = bool(trainer_cfg.pop("native_loop", method_name == "triangle-splatting"))
+    native_loop = bool(
+        trainer_cfg.pop(
+            "native_loop",
+            method_name in {"triangle-splatting", "mesh-splatting"},
+        )
+    )
     if method_name == "triangle-splatting" and native_loop:
         summary = run_with_training_stats(
             lambda: _run_triangle_splatting_native_config(
+                trainer_cfg=trainer_cfg,
+                dataset_root=str(dataset_root),
+                output_dir=run_output_dir,
+                max_steps=max_steps,
+                quiet=quiet,
+            ),
+            run_output_dir,
+        )
+        if not quiet:
+            typer.echo(f"Config snapshot saved to {run_output_dir / 'config.yaml'}")
+        return summary
+
+    if method_name == "mesh-splatting" and native_loop:
+        summary = run_with_training_stats(
+            lambda: _run_mesh_splatting_native_config(
                 trainer_cfg=trainer_cfg,
                 dataset_root=str(dataset_root),
                 output_dir=run_output_dir,
@@ -299,6 +320,57 @@ def _run_triangle_splatting_native_config(
     }
 
 
+def _run_mesh_splatting_native_config(
+    *,
+    trainer_cfg: dict,
+    dataset_root: str,
+    output_dir: Path,
+    max_steps: int,
+    quiet: bool,
+) -> dict:
+    """Run MeshSplatting with its native training loop."""
+    from tribench.vendor.mesh_splatting.train import run_training
+
+    latest = find_latest_point_cloud_checkpoint(output_dir)
+    start_step = 0
+    if latest is not None:
+        start_step, ckpt_dir = latest
+        if start_step >= max_steps:
+            typer.echo(
+                f"Found checkpoint at {ckpt_dir}; requested max_steps={max_steps} "
+                "is already reached."
+            )
+            return {
+                "total_steps": max_steps,
+                "start_step": start_step,
+                "trained_steps": 0,
+                "total_time_s": 0.0,
+                "avg_step_time_ms": 0.0,
+                "final_losses": {},
+            }
+
+    start = time.time()
+    argv = _mesh_splatting_native_argv(
+        trainer_cfg=trainer_cfg,
+        dataset_root=dataset_root,
+        output_dir=output_dir,
+        max_steps=max_steps,
+        quiet=quiet,
+        load_iteration=start_step if start_step > 0 else None,
+    )
+    run_training(argv)
+    total_time = time.time() - start
+    trained_steps = max(max_steps - start_step, 0)
+    return {
+        "total_steps": max_steps,
+        "start_step": start_step,
+        "trained_steps": trained_steps,
+        "total_time_s": total_time,
+        "avg_step_time_ms": total_time * 1000.0 / max(trained_steps, 1),
+        "final_losses": {},
+    }
+
+
 def _triangle_splatting_native_argv(
     *,
     trainer_cfg: dict,
@@ -337,6 +409,11 @@ def _triangle_splatting_native_argv(
         argv.append("--outdoor")
     if quiet:
         argv.append("--quiet")
+    latest = find_latest_point_cloud_checkpoint(output_dir)
+    if latest is not None:
+        step, ckpt_dir = latest
+        argv.extend(["--load_iteration", str(step)])
+        print(f"Loaded checkpoint: {ckpt_dir}")
 
     passthrough = {
         "depth_ratio",
@@ -360,6 +437,91 @@ def _triangle_splatting_native_argv(
         "position_lr_max_steps",
         "densification_interval",
         "densify_from_iter",
+    }
+    for key in sorted(passthrough):
+        if key in trainer_cfg:
+            argv.extend([f"--{key}", str(trainer_cfg[key])])
+    if bool(trainer_cfg.get("random_background", False)):
+        argv.append("--random_background")
+    return argv
+
+
+def _mesh_splatting_native_argv(
+    *,
+    trainer_cfg: dict,
+    dataset_root: str,
+    output_dir: Path,
+    max_steps: int,
+    quiet: bool,
+    load_iteration: int | None = None,
+) -> list[str]:
+    argv = [
+        "-s",
+        str(Path(dataset_root).expanduser()),
+        "-m",
+        str(output_dir),
+        "--iterations",
+        str(max_steps),
+        "--test_iterations",
+        "-1",
+    ]
+
+    images = trainer_cfg.get("images")
+    if images is not None:
+        argv.extend(["-i", str(images)])
+    resolution = trainer_cfg.get("resolution")
+    if resolution is not None:
+        argv.extend(["-r", str(resolution)])
+    if bool(trainer_cfg.get("white_background", False)):
+        argv.append("--white_background")
+    if bool(trainer_cfg.get("eval_split", True)):
+        argv.append("--eval")
+    if bool(trainer_cfg.get("indoor", False)):
+        argv.append("--indoor")
+    if quiet:
+        argv.append("--quiet")
+    if load_iteration is not None:
+        argv.extend(["--load_iteration", str(load_iteration)])
+
+    passthrough = {
+        "add_percentage",
+        "data_device",
+        "densification_interval",
+        "densify_from_iter",
+        "densify_until_iter",
+        "depth_lambda_final",
+        "depth_lambda_init",
+        "depth_ratio",
+        "feature_lr",
+        "final_opacity_iter",
+        "intervall_add_triangles",
+        "iteration_mesh",
+        "lamba_depth",
+        "lambda_dssim",
+        "lambda_normals",
+        "lambda_normals_super",
+        "lambda_vertex",
+        "lambda_weight",
+        "lr_triangles_points_init",
+        "max_diff_threshold",
+        "max_points",
+        "position_lr_delay_mult",
+        "position_lr_max_steps",
+        "prune_size",
+        "prune_triangles_threshold",
+        "set_sigma",
+        "set_weight",
+        "sigma_start",
+        "sigma_until",
+        "size_probs_zero",
+        "size_probs_zero_image_space",
+        "splitt_large_triangles",
+        "start_opacity_floor",
+        "start_pruning",
+        "start_upsampling",
+        "start_vertex_opt",
+        "upscaling_factor",
+        "weight_lr",
     }
     for key in sorted(passthrough):
         if key in trainer_cfg:

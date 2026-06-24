@@ -1,5 +1,7 @@
 """Tests for renderer adapters."""
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -158,6 +160,32 @@ class TestD2TSAdapter:
 
         assert adapter._checkpoint_path == str(ply)
         assert adapter.model_stats()["primitive_count"] == 1
+
+
+class TestMeshSplattingAdapter:
+    """Tests for MeshSplatting render-time configuration."""
+
+    def test_default_render_scaling_matches_native_render_script(self):
+        adapter = MeshSplattingAdapter()
+
+        assert adapter._render_scaling == 4
+
+    def test_configure_render_scaling_updates_loaded_model(self):
+        adapter = MeshSplattingAdapter()
+        adapter._model = SimpleNamespace(scaling=1)
+
+        adapter.configure(render_scaling=2)
+
+        assert adapter._render_scaling == 2
+        assert adapter._model.scaling == 2
+
+    def test_configure_bg_color_preserves_override_for_checkpoint_load(self):
+        adapter = MeshSplattingAdapter()
+
+        adapter.configure(bg_color="white")
+
+        assert adapter._background_color == [1.0, 1.0, 1.0]
+        assert adapter._background_color_override == [1.0, 1.0, 1.0]
 
 
 class TestTriangleSplattingAdapter:

@@ -17,6 +17,7 @@ import torch
 
 from tribench.core.cameras import CameraBatch
 from tribench.renderers.base import RenderOutput
+from tribench.trainers.checkpoints import find_latest_point_cloud_checkpoint
 from tribench.trainers.hooks import TrainingMethod
 from tribench.trainers.registry import register_training_method
 
@@ -501,6 +502,37 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         (ckpt_dir / "tribench_metadata.json").write_text(
             json.dumps(metadata, indent=2), encoding="utf-8"
         )
+
+    def resume_from_checkpoint(self, output_dir: str | Path, max_steps: int) -> int:
+        latest = find_latest_point_cloud_checkpoint(output_dir)
+        if latest is None:
+            return 0
+        step, ckpt_dir = latest
+        if step <= 0:
+            return 0
+
+        self._ensure_initialized()
+        self._model.load(str(ckpt_dir))
+        self._model.training_setup(
+            self._opt,
+            lr_mask=self._opt.lr_mask,
+            lr_features=self._opt.feature_lr,
+            lr_opacity=self._opt.opacity_lr,
+            lr_sigma=self._opt.lr_sigma,
+            lr_triangles_points_init=self._opt.lr_triangles_points_init,
+        )
+        count = self._model.get_triangles_points.shape[0]
+        self._model.max_radii2D = torch.zeros(count, device="cuda")
+        self._model.max_density_factor = torch.zeros(count, device="cuda")
+        self._model.max_scaling = torch.zeros(count, device="cuda")
+        self._model.triangle_area = torch.zeros(count, dtype=torch.float, device="cuda")
+        self._model.image_size = torch.zeros(count, dtype=torch.float, device="cuda")
+        self._model.importance_score = torch.zeros(count, dtype=torch.float, device="cuda")
+        self._optimizer = self._model.optimizer
+        self._viewpoint_stack = self._train_cameras.copy()
+        self.set_step(step)
+        print(f"Loaded checkpoint: {ckpt_dir}")
+        return step
 
     def get_lr(self) -> dict[str, float]:
         if self._optimizer is None:

@@ -1,0 +1,13 @@
+# @format
+
+_base_:
+  - ../../base/mipnerf360.yaml
+  - ../../base/mesh-splatting.yaml
+
+experiment:
+  name: mesh_splatting_flowers
+
+dataset:
+  scene: flowers
+  image_dir: images_4
+  resolution: -1

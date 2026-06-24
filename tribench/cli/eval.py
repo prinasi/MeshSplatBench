@@ -250,10 +250,18 @@ def _ensure_pred_mesh_exists(
     pred_path = Path(pred).expanduser()
     adapter_cfg = adapter_config(cfg)
     checkpoint = adapter_cfg.get("checkpoint")
+    method = str(adapter_cfg.get("type", "")).replace("_", "-")
     should_export = force_export is True or not pred_path.exists()
     if pred_path.exists() and force_export is None and checkpoint is not None:
         checkpoint_mtime = _checkpoint_mtime(Path(str(checkpoint)).expanduser())
         should_export = checkpoint_mtime is not None and checkpoint_mtime > pred_path.stat().st_mtime
+    if (
+        pred_path.exists()
+        and force_export is None
+        and method == "mesh-splatting"
+        and not _has_current_mesh_splatting_export_metadata(pred_path)
+    ):
+        should_export = True
     if pred_path.exists() and not should_export:
         return str(pred_path)
 
@@ -265,12 +273,32 @@ def _ensure_pred_mesh_exists(
     from tribench.cli.render import _mesh_export_kwargs
 
     if pred_path.exists():
-        typer.echo(f"Predicted mesh at {pred_path} is stale; re-exporting mesh.")
+        typer.echo(f"Predicted mesh at {pred_path} is stale or from an older pipeline; re-exporting mesh.")
     else:
         typer.echo(f"Predicted mesh not found at {pred_path}; exporting mesh first.")
     adapter = build_adapter(adapter_cfg)
-    export_kwargs = _mesh_export_kwargs(cfg, mesh_cfg or section(cfg, "mesh"))
+    export_kwargs = _mesh_export_kwargs(
+        cfg,
+        mesh_cfg or section(cfg, "mesh"),
+        method=str(adapter_cfg.get("type", "")),
+    )
     return str(export_adapter_mesh(adapter, pred_path, **export_kwargs))
+
+
+def _has_current_mesh_splatting_export_metadata(pred_path: Path) -> bool:
+    metadata_path = pred_path.with_suffix(pred_path.suffix + ".tribench.json")
+    if not metadata_path.exists():
+        return False
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    export = metadata.get("tribench_mesh_export", metadata)
+    return (
+        export.get("method") == "mesh-splatting"
+        and export.get("pipeline") == "native_tsdf"
+        and int(export.get("version", 0)) >= 1
+    )
 
 
 def _checkpoint_mtime(path: Path) -> float | None:

@@ -18,8 +18,8 @@ TriBench provides a single, consistent evaluation framework for comparing differ
 | Method                       | Adapter                    | Status                                   |
 | ---------------------------- | -------------------------- | ---------------------------------------- |
 | 2D Triangle Splatting (2DTS) | `D2TSAdapter`              | Initial config/train/render/eval support |
-| Triangle Splatting           | `TriangleSplattingAdapter` | Planned                                  |
-| MeshSplatting                | `MeshSplattingAdapter`     | Planned                                  |
+| Triangle Splatting           | `TriangleSplattingAdapter` | Config/train/render/eval support         |
+| MeshSplatting                | `MeshSplattingAdapter`     | Config/train/render/eval support         |
 | DiffSoup                     | `DiffSoupAdapter`          | Planned                                  |
 
 ## Installation
@@ -47,6 +47,9 @@ tribench render video --config configs/triangle-splatting/mipnerf360/bicycle.yam
 bash single_train.sh triangle-splatting mipnerf360/all 0
 bash single_train.sh triangle-splatting tandt/all 0
 bash single_train.sh triangle-splatting dtu/all 0
+bash single_train.sh mesh-splatting mipnerf360/all 0
+bash single_train.sh mesh-splatting tandt/all 0
+bash single_train.sh mesh-splatting dtu/all 0
 bash single_train.sh 2dts mipnerf360/all 0
 bash single_train.sh 2dts tandt/all 0
 bash single_train.sh 2dts dtu/all 0
@@ -64,6 +67,10 @@ Scene configs are grouped by method and dataset:
 
 ```text
 configs/triangle-splatting/
+├── dtu/scan24.yaml
+├── mipnerf360/bicycle.yaml
+└── tandt/truck.yaml
+configs/mesh-splatting/
 ├── dtu/scan24.yaml
 ├── mipnerf360/bicycle.yaml
 └── tandt/truck.yaml
@@ -104,6 +111,9 @@ exports videos, and prints a summary table:
 bash single_train.sh triangle-splatting mipnerf360/all 0
 bash single_train.sh triangle-splatting tandt/all 0
 bash single_train.sh triangle-splatting dtu/all 0
+bash single_train.sh mesh-splatting mipnerf360/all 0
+bash single_train.sh mesh-splatting tandt/all 0
+bash single_train.sh mesh-splatting dtu/all 0
 bash single_train.sh 2dts mipnerf360/all 0
 bash single_train.sh 2dts tandt/all 0
 bash single_train.sh 2dts dtu/all 0
@@ -116,6 +126,13 @@ Triangle Splatting configs inherit scene-specific triangle count caps from
 `configs/base/triangle-splatting.yaml`. During config finalization, the cap for
 `dataset.scene` is written to `trainer.max_shapes` unless the scene config
 explicitly overrides it.
+
+MeshSplatting configs live under `configs/mesh-splatting/` for MipNeRF360,
+Tanks&Temples, and DTU. They use the bundled MeshSplatting renderer and a
+method-specific trainer that preserves shared-vertex topology updates. DTU
+configs follow the upstream DTU settings, including restricted Delaunay at
+iteration 11000; that stage requires the MeshSplatting `effrdel` dependency to
+be installed in the active environment.
 
 ## Project Structure
 
@@ -141,15 +158,15 @@ The project is organized into four phases:
 
 1. **Phase 1 -- Foundation**: Core abstractions (cameras, stats, registry), primitive types, and the first adapter (2DTS).
 2. **Phase 2 -- Training & Evaluation**: Unified training loop, loss functions, full metric suite, and dataset loaders.
-3. **Phase 3 -- Remaining Adapters**: Triangle Splatting, MeshSplatting, and DiffSoup adapters with parity validation.
+3. **Phase 3 -- Remaining Adapters**: Triangle Splatting and MeshSplatting adapter coverage with parity validation, followed by DiffSoup.
 4. **Phase 4 -- Polish & Release**: CLI refinement, experiment configs, documentation, and public release.
 
 ### Next Development Steps
 
-The immediate goal is to make Triangle Splatting the first complete, trusted
-reference pipeline before broadening adapter coverage. This gives the remaining
-methods a concrete standard for training, rendering, evaluation, profiling, and
-configuration behavior.
+The immediate goal is to keep Triangle Splatting and MeshSplatting as trusted
+reference pipelines before broadening adapter coverage further. This gives the
+remaining methods a concrete standard for training, rendering, evaluation,
+profiling, and configuration behavior.
 
 1. **Stabilize Triangle Splatting as the canonical baseline**
    - Ensure `tribench train/render/eval/inspect/profile --config ...` works end-to-end for one COLMAP scene.
@@ -174,8 +191,14 @@ configuration behavior.
    - Fix existing renderer test mismatches around DiffSoup no-model errors and Triangle Splatting missing-checkpoint exceptions.
    - Keep the full `tribench/tests` suite green before expanding adapter work.
 
-6. **Then expand adapter coverage**
-   - Bring 2DTS, MeshSplatting, and DiffSoup up to the same adapter contract.
+6. **Add full checkpoint resume state**
+   - Keep the current fallback that resumes from `point_cloud/iteration_*/point_cloud_state_dict.pt` for existing runs.
+   - Add a TriBench-owned training state file, such as `tribench_training_state.pt`, alongside each saved point-cloud checkpoint.
+   - Save the completed step, optimizer state, method-local scheduler/topology state, and RNG state so interrupted runs can resume as closely as possible to an uninterrupted training run.
+   - Prefer the full training state when present, and fall back to model-weight-only resume for older checkpoints.
+
+7. **Then expand adapter coverage**
+   - Bring 2DTS and DiffSoup up to the same adapter contract.
    - For each method, add a unified config, render/eval/profile smoke path, and parity notes.
 
 ## License

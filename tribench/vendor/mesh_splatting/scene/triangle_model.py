@@ -803,7 +803,11 @@ class TriangleModel:
 
         self.densification_postfix(new_vertices, new_vertex_weight, new_features_dc, new_features_rest, new_triangles)
 
-        mask = torch.ones(self._triangle_indices.shape[0], dtype=torch.bool)
+        mask = torch.ones(
+            self._triangle_indices.shape[0],
+            dtype=torch.bool,
+            device=self._triangle_indices.device,
+        )
         mask[add_idx] = False
         self.prune_triangles(mask)
 

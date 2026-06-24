@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -91,3 +92,11 @@ class TrainingMethod(ABC):
     def set_step(self, step: int) -> None:
         """Synchronize the current global training step with the method."""
         self._step = step
+
+    def resume_from_checkpoint(self, output_dir: str | Path, max_steps: int) -> int:
+        """Optionally resume from an existing checkpoint.
+
+        Returns the last completed training step. The default implementation
+        keeps existing trainers opt-in and preserves from-scratch behavior.
+        """
+        return 0

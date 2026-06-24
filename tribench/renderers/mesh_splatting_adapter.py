@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -43,7 +45,13 @@ class MeshSplattingAdapter(RendererAdapter):
         self._initialized = False
         self._model = None
         self._checkpoint_path: str | None = None
+        self._checkpoint_dir: Path | None = None
+        self._model_path: Path | None = None
+        self._loaded_iteration: int | None = None
         self._dataset_path: str | None = None
+        self._background_color = [0.0, 0.0, 0.0]
+        self._background_color_override: list[float] | None = None
+        self._render_scaling = 4
 
         self._TriangleModel = None
         self._render = None
@@ -64,6 +72,34 @@ class MeshSplattingAdapter(RendererAdapter):
 
     def backend_status(self) -> dict[str, Any]:
         return self._backend.status(self.repo_root)
+
+    def configure(self, **kwargs: Any) -> None:
+        """Set render-time options used by TriBench evaluation.
+
+        Accepted keys:
+            render_scaling (int): MeshSplatting triangle scaling used by the
+                native render.py script. Defaults to 4.
+            scaling (int): Alias for render_scaling.
+            bg_color (str): Background colour name ("white"/"black").
+        """
+        for key, value in kwargs.items():
+            if key in {"render_scaling", "scaling"}:
+                self._render_scaling = int(value)
+                if self._model is not None:
+                    self._model.scaling = self._render_scaling
+            elif key == "bg_color":
+                color_name = str(value).lower()
+                if color_name in {"white", "1", "1.0"}:
+                    self._background_color = [1.0, 1.0, 1.0]
+                elif color_name in {"black", "0", "0.0"}:
+                    self._background_color = [0.0, 0.0, 0.0]
+                else:
+                    raise ValueError(
+                        "MeshSplattingAdapter bg_color must be 'white' or 'black'."
+                    )
+                self._background_color_override = list(self._background_color)
+            else:
+                raise KeyError(f"Unknown MeshSplattingAdapter config key: {key!r}")
 
     def _ensure_imports(self) -> None:
         if self._initialized:
@@ -104,9 +140,48 @@ class MeshSplattingAdapter(RendererAdapter):
 
         model = self._TriangleModel(max_sh_degree)
         model.load_parameters(str(ckpt_dir), device="cuda")
+        model.scaling = self._render_scaling
 
         self._model = model
         self._checkpoint_path = str(state_path)
+        self._checkpoint_dir = ckpt_dir
+        self._model_path, self._loaded_iteration = self._infer_native_run_checkpoint(ckpt_dir)
+        if self._background_color_override is None:
+            self._background_color = self._load_background_color(ckpt_dir)
+        else:
+            self._background_color = list(self._background_color_override)
+
+    def _infer_native_run_checkpoint(self, ckpt_dir: Path) -> tuple[Path | None, int | None]:
+        match = re.fullmatch(r"iteration_(\d+)", ckpt_dir.name)
+        if match and ckpt_dir.parent.name == "point_cloud":
+            return ckpt_dir.parent.parent, int(match.group(1))
+        return None, None
+
+    def _load_background_color(self, ckpt_dir: Path) -> list[float]:
+        metadata_path = ckpt_dir / "tribench_metadata.json"
+        if metadata_path.exists():
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                color = metadata.get("background_color")
+                if isinstance(color, list) and len(color) == 3:
+                    return [float(v) for v in color]
+                if metadata.get("white_background"):
+                    return [1.0, 1.0, 1.0]
+            except (OSError, ValueError, TypeError):
+                pass
+
+        cfg_args = ckpt_dir.parent.parent / "cfg_args"
+        if cfg_args.exists():
+            try:
+                match = re.search(
+                    r"white_background=(True|False)",
+                    cfg_args.read_text(encoding="utf-8"),
+                )
+                if match and match.group(1) == "True":
+                    return [1.0, 1.0, 1.0]
+            except OSError:
+                pass
+        return [0.0, 0.0, 0.0]
 
     def load_scene(self, dataset_path: str, split: str = "test") -> None:
         raise NotImplementedError(
@@ -203,7 +278,7 @@ class MeshSplattingAdapter(RendererAdapter):
 
         native_cam = self._build_native_camera(cameras, idx=0)
         pipe = SimpleNamespace(debug=False, convert_SHs_python=False)
-        bg_color = torch.tensor([1.0, 1.0, 1.0], device="cuda")
+        bg_color = torch.tensor(self._background_color, dtype=torch.float32, device="cuda")
         grad_ctx = torch.no_grad() if mode == "eval" else torch.enable_grad()
 
         with grad_ctx:
@@ -228,6 +303,173 @@ class MeshSplattingAdapter(RendererAdapter):
                 "surf_normal": rendering.get("surf_normal"),
             },
         )
+
+    def export_mesh(
+        self,
+        path: str | Path,
+        *,
+        dataset_path: str,
+        split: str = "train",
+        image_dir: str = "images",
+        resolution: int = 1,
+        eval_every: int = 8,
+        voxel_size: float = 0.004,
+        sdf_trunc: float = 0.016,
+        depth_trunc: float = 3.0,
+        num_cluster: int = 1,
+        depth_ratio: float = 1.0,
+        eval_split: bool = False,
+        render_scaling: int = 1,
+    ) -> Path:
+        """Export a TSDF-fused mesh following the native MeshSplatting mesh.py path."""
+        if self._model is None:
+            raise RuntimeError("No model loaded. Call load_checkpoint() first.")
+        if self._model_path is None or self._loaded_iteration is None:
+            raise RuntimeError(
+                "Native MeshSplatting mesh export requires a checkpoint directory "
+                "like point_cloud/iteration_<N>."
+            )
+
+        self._ensure_imports()
+        try:
+            import open3d as o3d
+        except ImportError as exc:
+            raise ImportError("MeshSplatting TSDF mesh export requires open3d.") from exc
+
+        from tribench.vendor.mesh_splatting.scene import Scene
+        from tribench.vendor.mesh_splatting.utils.mesh_utils import (
+            GaussianExtractor,
+            post_process_mesh,
+        )
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path = path.with_name(path.name.replace("_post.ply", ".ply")) if path.name.endswith("_post.ply") else path
+
+        native_args = self._native_scene_args(
+            dataset_path=dataset_path,
+            image_dir=image_dir,
+            resolution=resolution,
+            eval_split=eval_split,
+        )
+        triangles = self._TriangleModel(native_args.sh_degree)
+        triangles.scaling = int(render_scaling)
+        scene = Scene(
+            native_args,
+            triangles,
+            init_opacity=None,
+            set_sigma=None,
+            load_iteration=self._loaded_iteration,
+            shuffle=False,
+        )
+
+        previous_sh_degree = triangles.active_sh_degree
+        previous_scaling = triangles.scaling
+        triangles.active_sh_degree = 0
+        triangles.scaling = int(render_scaling)
+        pipe = SimpleNamespace(
+            debug=False,
+            convert_SHs_python=False,
+            compute_cov3D_python=False,
+            depth_ratio=float(depth_ratio),
+        )
+        bg_color = [1.0, 1.0, 1.0] if native_args.white_background else [0.0, 0.0, 0.0]
+        extractor = GaussianExtractor(triangles, self._render, pipe, bg_color=bg_color)
+        try:
+            # Match native mesh.py: it always reconstructs from getTrainCameras().
+            # With eval_split=False, those "train" cameras are the full DTU image set.
+            extractor.reconstruction(scene.getTrainCameras())
+            mesh = extractor.extract_mesh_bounded(
+                voxel_size=float(voxel_size),
+                sdf_trunc=float(sdf_trunc),
+                depth_trunc=float(depth_trunc),
+            )
+            o3d.io.write_triangle_mesh(str(raw_path), mesh)
+            mesh_post = post_process_mesh(mesh, cluster_to_keep=int(num_cluster))
+            o3d.io.write_triangle_mesh(str(path), mesh_post)
+            self._write_mesh_export_metadata(
+                path,
+                eval_split=eval_split,
+                render_scaling=render_scaling,
+                voxel_size=voxel_size,
+                sdf_trunc=sdf_trunc,
+                depth_trunc=depth_trunc,
+                num_cluster=num_cluster,
+                depth_ratio=depth_ratio,
+            )
+        finally:
+            triangles.active_sh_degree = previous_sh_degree
+            triangles.scaling = previous_scaling
+
+        return path
+
+    def _write_mesh_export_metadata(
+        self,
+        path: Path,
+        *,
+        eval_split: bool,
+        render_scaling: int,
+        voxel_size: float,
+        sdf_trunc: float,
+        depth_trunc: float,
+        num_cluster: int,
+        depth_ratio: float,
+    ) -> None:
+        metadata = {
+            "tribench_mesh_export": {
+                "method": "mesh-splatting",
+                "pipeline": "native_tsdf",
+                "version": 1,
+                "checkpoint": str(self._checkpoint_dir) if self._checkpoint_dir is not None else None,
+                "model_path": str(self._model_path) if self._model_path is not None else None,
+                "iteration": self._loaded_iteration,
+                "eval_split": bool(eval_split),
+                "render_scaling": int(render_scaling),
+                "voxel_size": float(voxel_size),
+                "sdf_trunc": float(sdf_trunc),
+                "depth_trunc": float(depth_trunc),
+                "num_cluster": int(num_cluster),
+                "depth_ratio": float(depth_ratio),
+            }
+        }
+        metadata_path = path.with_suffix(path.suffix + ".tribench.json")
+        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+    def _native_scene_args(
+        self,
+        *,
+        dataset_path: str,
+        image_dir: str,
+        resolution: int,
+        eval_split: bool,
+    ) -> SimpleNamespace:
+        cfg = self._read_native_cfg_args()
+        white_background = bool(getattr(cfg, "white_background", False))
+        data_device = str(getattr(cfg, "data_device", "cuda"))
+        sh_degree = int(getattr(cfg, "sh_degree", 3))
+        return SimpleNamespace(
+            sh_degree=sh_degree,
+            source_path=os.path.abspath(str(dataset_path)),
+            model_path=str(self._model_path),
+            images=str(image_dir),
+            resolution=int(resolution),
+            white_background=white_background,
+            data_device=data_device,
+            eval=bool(eval_split),
+        )
+
+    def _read_native_cfg_args(self) -> SimpleNamespace:
+        if self._model_path is None:
+            return SimpleNamespace()
+        cfg_args = self._model_path / "cfg_args"
+        if not cfg_args.exists():
+            return SimpleNamespace()
+        try:
+            namespace = {"Namespace": SimpleNamespace}
+            parsed = eval(cfg_args.read_text(encoding="utf-8"), namespace)
+            return parsed if isinstance(parsed, SimpleNamespace) else SimpleNamespace()
+        except Exception:
+            return SimpleNamespace()
 
     def to_primitive(self) -> Any:
         if self._model is None:

@@ -1,0 +1,15 @@
+# @format
+
+_base_:
+  - ../../base/tandt.yaml
+  - ../../base/mesh-splatting.yaml
+
+experiment:
+  name: mesh_splatting_train
+
+dataset:
+  scene: train
+  resolution: -1
+
+trainer:
+  max_points: 2500000
