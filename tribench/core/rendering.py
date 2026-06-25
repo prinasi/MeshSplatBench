@@ -60,6 +60,13 @@ def save_depth(path: str | Path, depth: torch.Tensor) -> Path:
     return save_image(path, depth)
 
 
+def load_image_tensor(path: str | Path, device: str | torch.device = "cpu") -> torch.Tensor:
+    """Load a PNG/JPG image into an ``[H, W, 3]`` float tensor in ``[0, 1]``."""
+    arr = np.asarray(Image.open(path).convert("RGB"), dtype=np.float32) / 255.0
+    return torch.from_numpy(arr).to(device)
+
+
+
 def load_adapter(method: str, checkpoint: str) -> RendererAdapter:
     """Construct and load a renderer adapter."""
     from tribench.core.builder import build_adapter
@@ -257,9 +264,82 @@ def render_dataset_split(
     return manifest
 
 
+def compute_metrics_from_render_dir(
+    render_output_dir: str | Path,
+    *,
+    device: str | torch.device = "cpu",
+) -> dict[str, Any] | None:
+    """Compute image metrics from already-saved renders + ground truth.
+
+    Reads the predicted images under ``<dir>/renders`` and the matching
+    ground-truth images under ``<dir>/gt`` (paired by filename), then computes
+    PSNR/SSIM/LPIPS without re-rendering. Inference timing is reused from the
+    existing ``manifest.json`` when present. Returns ``None`` when the renders
+    or paired ground truth are missing.
+    """
+    from tribench.core.metrics import compute_all_metrics
+
+    render_output_dir = Path(render_output_dir)
+    render_dir = render_output_dir / "renders"
+    gt_dir = render_output_dir / "gt"
+    if not render_dir.is_dir() or not gt_dir.is_dir():
+        return None
+
+    render_paths = sorted(render_dir.glob("*.png"))
+    if not render_paths:
+        return None
+
+    per_view: list[dict[str, float]] = []
+    frames: list[dict[str, Any]] = []
+    for render_path in render_paths:
+        gt_path = gt_dir / render_path.name
+        if not gt_path.is_file():
+            continue
+        pred = load_image_tensor(render_path, device=device)
+        target = load_image_tensor(gt_path, device=device)
+        view_metrics = compute_all_metrics(pred, target)
+        name = render_path.stem.split("_", 1)[-1]
+        per_view.append({"name": name, **view_metrics})
+        frames.append(
+            {
+                "name": name,
+                "render_path": str(render_path),
+                "gt_path": str(gt_path),
+                "metrics": view_metrics,
+            }
+        )
+
+    if not per_view:
+        return None
+
+    aggregate: dict[str, float] = {}
+    metric_keys = [k for k in per_view[0] if k != "name"]
+    for key in metric_keys:
+        vals = [float(row[key]) for row in per_view]
+        aggregate[f"{key}_mean"] = float(np.mean(vals))
+        aggregate[f"{key}_std"] = float(np.std(vals))
+
+    timing: dict[str, Any] = {}
+    manifest_path = render_output_dir / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            existing = json.loads(manifest_path.read_text())
+            timing = existing.get("timing", {}) or {}
+        except (OSError, json.JSONDecodeError):
+            timing = {}
+
+    return {
+        "num_frames": len(per_view),
+        "timing": timing,
+        "aggregate": aggregate,
+        "frames": frames,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Trajectory helpers (ported from triangle-splatting/utils/render_utils.py)
 # ---------------------------------------------------------------------------
+
 
 
 def _normalize(x: np.ndarray) -> np.ndarray:

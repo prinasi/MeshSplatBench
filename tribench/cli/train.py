@@ -172,12 +172,13 @@ def train(
                     "resolution": trainer_cfg.get("resolution", resolution),
                 },
                 dataset_root=str(dataset.expanduser()),
-                output_dir=output_dir,
+                output_dir=output_dir / "ckpt",
                 max_steps=max_steps,
                 quiet=quiet,
             ),
             output_dir,
         )
+
         if not quiet:
             typer.echo(
                 f"Training complete: {summary['total_steps']} steps "
@@ -361,14 +362,18 @@ def _run_triangle_splatting_native_config(
     """Run triangle-splatting with its native training loop."""
     from tribench.vendor.triangle_splatting.train import run_training
 
+    # Native loop writes point_cloud/iteration_N + cfg_args under model_path;
+    # nest it under ckpt/ so every method's checkpoints share one folder.
+    ckpt_dir = output_dir / "ckpt"
     start = time.time()
     argv = _triangle_splatting_native_argv(
         trainer_cfg=trainer_cfg,
         dataset_root=dataset_root,
-        output_dir=output_dir,
+        output_dir=ckpt_dir,
         max_steps=max_steps,
         quiet=quiet,
     )
+
     run_training(argv)
     total_time = time.time() - start
     return {
@@ -390,7 +395,10 @@ def _run_mesh_splatting_native_config(
     """Run MeshSplatting with its native training loop."""
     from tribench.vendor.mesh_splatting.train import run_training
 
-    latest = find_latest_point_cloud_checkpoint(output_dir)
+    # Native loop writes point_cloud/iteration_N + cfg_args under model_path;
+    # nest it under ckpt/ so every method's checkpoints share one folder.
+    ckpt_root = output_dir / "ckpt"
+    latest = find_latest_point_cloud_checkpoint(ckpt_root)
     start_step = 0
     if latest is not None:
         start_step, ckpt_dir = latest
@@ -412,11 +420,12 @@ def _run_mesh_splatting_native_config(
     argv = _mesh_splatting_native_argv(
         trainer_cfg=trainer_cfg,
         dataset_root=dataset_root,
-        output_dir=output_dir,
+        output_dir=ckpt_root,
         max_steps=max_steps,
         quiet=quiet,
         load_iteration=start_step if start_step > 0 else None,
     )
+
     run_training(argv)
     total_time = time.time() - start
     trained_steps = max(max_steps - start_step, 0)

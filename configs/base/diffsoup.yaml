@@ -12,4 +12,5 @@ trainer:
 
 adapter:
   type: diffsoup
-  checkpoint: outputs/{method}/{dataset}/{scene}/final_params.pt
+  checkpoint: outputs/{method}/{dataset}/{scene}/ckpt/final_params.pt
+

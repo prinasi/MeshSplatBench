@@ -57,16 +57,28 @@ def evaluate_images(
         help="Background colour for rendering: white or black.",
     ),
 ):
-    """Evaluate rendering quality on a dataset split."""
+    """Evaluate rendering quality on a dataset split.
+
+    Metrics are computed from the images already produced by ``render images``
+    (``<run_dir>/renders/<split>``) so no images are re-rendered or duplicated.
+    When those renders are missing, the split is rendered once into that same
+    folder as a fallback.
+    """
     from tribench.core.builder import build_adapter, build_dataset
     from tribench.core.config import save_config_snapshot
     from tribench.core.datasets import load_dataset
-    from tribench.core.rendering import load_adapter, render_dataset_split
+    from tribench.core.rendering import (
+        compute_metrics_from_render_dir,
+        load_adapter,
+        render_dataset_split,
+    )
     from tribench.core.runtime_stats import load_training_stats_for_checkpoint
 
     method_label = method
     checkpoint_label = checkpoint
     dataset_label = dataset
+    adapter = None
+    ds = None
     if config is not None:
         cfg = load_cli_config(config)
         assert cfg is not None
@@ -85,9 +97,6 @@ def evaluate_images(
             eval_every=eval_every if eval_every != 8 else None,
             stage="eval",
         )
-        adapter = build_adapter(adapter_cfg)
-        _apply_render_overrides(adapter, ste_threshold, sort_level, bg_color)
-        ds = build_dataset(dataset_cfg)
         split = str(dataset_cfg.get("split", split))
         method_label = adapter_cfg.get("type")
         checkpoint_label = adapter_cfg.get("checkpoint")
@@ -96,40 +105,52 @@ def evaluate_images(
         render_cfg = section(cfg, "render")
         if output == "metrics.json":
             output = metrics_file(cfg, default=output)
+        run_dir = (
+            render_cfg.get("output_dir")
+            or render_cfg.get("dir")
+            or output_dir(cfg)
+        )
         render_dir = str(
             eval_cfg.get("render_dir")
-            or render_cfg.get("output_dir")
-            or render_cfg.get("dir")
-            or output_dir(cfg, render_dir)
+            or (Path(run_dir) / "renders" / split if run_dir else Path(render_dir) / split)
         )
-        save_renders = bool(eval_cfg.get("save_renders", render_cfg.get("save_renders", save_renders)))
-        save_config_snapshot(cfg, Path(output).parent)
+        save_config_snapshot(cfg, output_dir(cfg) or Path(output).parent)
     else:
         if method is None or checkpoint is None or dataset is None:
             raise typer.BadParameter(
                 "Use --config, or provide --method, --checkpoint, and --dataset."
             )
-        adapter = load_adapter(method, checkpoint)
-        # Apply CLI overrides for rendering fidelity params
-        _apply_render_overrides(adapter, ste_threshold, sort_level, bg_color)
-        ds = load_dataset(
-            dataset,
-            dataset_type=dataset_type,
-            split=split,
-            eval_every=eval_every,
-            image_dir=image_dir,
-            resolution=resolution,
+        render_dir = str(Path(render_dir) / split)
+
+    # Prefer metrics computed from existing renders; only render when missing.
+    manifest = compute_metrics_from_render_dir(render_dir)
+    if manifest is None:
+        if config is not None:
+            adapter = build_adapter(adapter_cfg)
+            _apply_render_overrides(adapter, ste_threshold, sort_level, bg_color)
+            ds = build_dataset(dataset_cfg)
+        else:
+            adapter = load_adapter(method, checkpoint)
+            _apply_render_overrides(adapter, ste_threshold, sort_level, bg_color)
+            ds = load_dataset(
+                dataset,
+                dataset_type=dataset_type,
+                split=split,
+                eval_every=eval_every,
+                image_dir=image_dir,
+                resolution=resolution,
+            )
+        manifest = render_dataset_split(
+            adapter,
+            ds,
+            render_dir,
+            device=adapter.device,
+            save_gt=True,
+            save_aux=False,
+            metrics=True,
         )
-    manifest = render_dataset_split(
-        adapter,
-        ds,
-        render_dir,
-        device=adapter.device,
-        save_gt=save_renders,
-        save_aux=False,
-        metrics=True,
-    )
     inference = manifest.get("timing", {})
+
     training = load_training_stats_for_checkpoint(checkpoint_label, output)
     metrics = {
         "method": method_label,

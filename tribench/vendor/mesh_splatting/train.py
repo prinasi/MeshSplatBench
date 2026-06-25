@@ -81,9 +81,16 @@ def prepare_output_and_logger(args):
         cfg_log_f.write(str(Namespace(**vars(args))))
 
     if TENSORBOARD_FOUND:
-        return SummaryWriter(args.model_path)
+        # TriBench unifies tensorboard output under a sibling logs/ folder when
+        # the model path is the shared ckpt/ directory.
+        log_dir = args.model_path
+        if os.path.basename(os.path.normpath(args.model_path)) == "ckpt":
+            log_dir = os.path.join(os.path.dirname(os.path.normpath(args.model_path)), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        return SummaryWriter(log_dir)
     print("Tensorboard not available: not logging progress")
     return None
+
 
 
 def training_report(

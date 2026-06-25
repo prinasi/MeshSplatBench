@@ -13,7 +13,7 @@ d2ts:
   target_point_num: 1000000
 
 mesh:
-  output: outputs/{method}/{dataset}/{scene}/mesh_ply/{max_steps}_pcd.ply
+  output: outputs/{method}/{dataset}/{scene}/mesh/{max_steps}_pcd.ply
 
 output:
-  mesh_file: outputs/{method}/{dataset}/{scene}/mesh_ply/{max_steps}_pcd.ply
+  mesh_file: outputs/{method}/{dataset}/{scene}/mesh/{max_steps}_pcd.ply

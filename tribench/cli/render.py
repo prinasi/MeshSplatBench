@@ -52,6 +52,18 @@ def render():
     """Render images, videos, meshes, and online viewer previews."""
 
 
+def _split_render_dir(run_dir: str | None, fallback: str, split: str) -> str:
+    """Resolve the per-split render directory under ``<run_dir>/renders/<split>``."""
+    if run_dir:
+        return str(Path(run_dir) / "renders" / split)
+    base = Path(fallback)
+    # Keep a split subfolder so train/test renders never collide.
+    if base.name == split:
+        return str(base)
+    return str(base / split)
+
+
+
 @render_app.command("images")
 def render_images(
     method: Optional[str] = typer.Option(None, "--method", "-m", help="Method name"),
@@ -98,12 +110,14 @@ def render_images(
         )
         if "split" in render_cfg:
             dataset_cfg["split"] = render_cfg["split"]
+        resolved_split = str(dataset_cfg.get("split", split))
         adapter = build_adapter(adapter_cfg)
         ds = build_dataset(dataset_cfg)
-        output_dir = str(render_cfg.get("output_dir") or render_cfg.get("dir") or config_output_dir(cfg, output_dir))
+        run_dir = render_cfg.get("output_dir") or render_cfg.get("dir") or config_output_dir(cfg)
+        output_dir = _split_render_dir(run_dir, output_dir, resolved_split)
         save_gt = bool(render_cfg.get("save_gt", save_gt))
         save_aux = bool(render_cfg.get("save_aux", save_aux))
-        save_config_snapshot(cfg, output_dir)
+        save_config_snapshot(cfg, config_output_dir(cfg, output_dir))
     else:
         if method is None or checkpoint is None or dataset is None:
             raise typer.BadParameter(
@@ -111,8 +125,10 @@ def render_images(
             )
         adapter = _load(method, checkpoint)
         ds = _load_dataset(dataset, dataset_type, split, eval_every, image_dir, resolution)
+        output_dir = _split_render_dir(None, output_dir, split)
     manifest = render_dataset_split(adapter, ds, output_dir, device=adapter.device, save_gt=save_gt, save_aux=save_aux)
     typer.echo(f"Rendered {manifest['num_frames']} frames to {output_dir}")
+
 
 
 @render_app.command("split")

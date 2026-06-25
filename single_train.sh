@@ -306,11 +306,11 @@ training_complete_marker() {
     max_steps="$(config_value "${config_file}" "trainer.max_steps")"
     if [[ -n "${max_steps}" ]]; then
         for candidate in \
-            "${model_path}/point_cloud/iteration_${max_steps}" \
-            "${model_path}/point_cloud/${max_steps}.ply" \
+            "${model_path}/ckpt/point_cloud/iteration_${max_steps}" \
+            "${model_path}/ckpt/point_cloud/${max_steps}.ply" \
             "${model_path}/ckpt/${max_steps}.ckpt" \
-            "${model_path}/mesh_ply/${max_steps}_pcd.ply" \
-            "${model_path}/mesh_ply/${max_steps}_mesh.ply"
+            "${model_path}/mesh/${max_steps}_pcd.ply" \
+            "${model_path}/mesh/${max_steps}_mesh.ply"
         do
             if path_has_contents "${candidate}"; then
                 echo "${candidate}"
@@ -318,6 +318,7 @@ training_complete_marker() {
             fi
         done
     fi
+
 
     return 1
 }
@@ -335,18 +336,24 @@ render_output_dir() {
 
 rendering_complete_marker() {
     local config_file="$1" model_path="$2"
-    local out_dir
+    local out_dir split_dir
     out_dir="$(render_output_dir "${config_file}" "${model_path}")"
-    if path_has_contents "${out_dir}/manifest.json" && path_has_contents "${out_dir}/renders"; then
-        echo "${out_dir}/manifest.json"
-        return 0
-    fi
-    if path_has_contents "${out_dir}/renders"; then
-        echo "${out_dir}/renders"
-        return 0
-    fi
+    # Unified layout renders into <run_dir>/renders/<split>/{renders,gt}.
+    split_dir="$(first_config_value "${config_file}" "render.split" "render.images.split" || true)"
+    [[ -n "${split_dir}" ]] || split_dir="test"
+    for candidate in "${out_dir}/renders/${split_dir}" "${out_dir}"; do
+        if path_has_contents "${candidate}/manifest.json" && path_has_contents "${candidate}/renders"; then
+            echo "${candidate}/manifest.json"
+            return 0
+        fi
+        if path_has_contents "${candidate}/renders"; then
+            echo "${candidate}/renders"
+            return 0
+        fi
+    done
     return 1
 }
+
 
 metrics_output_file() {
     local config_file="$1" model_path="$2"

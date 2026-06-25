@@ -9,7 +9,8 @@ trainer:
 
 adapter:
   type: mesh-splatting
-  checkpoint: outputs/{method}/{dataset}/{scene}/point_cloud/iteration_{max_steps}
+  checkpoint: outputs/{method}/{dataset}/{scene}/ckpt/point_cloud/iteration_{max_steps}
+
   render_params:
     render_scaling: 4
 

@@ -89,8 +89,9 @@ def test_dtu_mesh_eval_can_infer_required_options_from_config():
 
     cfg = Config.fromfile(config)
 
-    assert _infer_pred_mesh(cfg) == "outputs/triangle-splatting/dtu/scan24/fuse_post.ply"
+    assert _infer_pred_mesh(cfg) == "outputs/triangle-splatting/dtu/scan24/mesh/fuse_post.ply"
     assert _infer_dtu_eval_target(cfg) == ("data/dtu", "scan24")
+
     assert cfg.adapter.render_params.bg_color == "white"
 
 
@@ -125,13 +126,14 @@ def test_2dts_config_resolves_native_training_paths():
     cfg = Config.fromfile("configs/2dts/dtu/scan24.yaml")
 
     assert cfg.trainer.type == "2dts"
-    assert cfg.adapter.checkpoint == "outputs/2dts/dtu/scan24"
+    assert cfg.adapter.checkpoint == "outputs/2dts/dtu/scan24/ckpt"
     assert cfg.dataset.root == "data/dtu/scan24"
     assert cfg.dataset.resolution == 1
     assert cfg.d2ts.native_config == "configs/2dts/native/dtu.yaml"
     assert cfg.d2ts.target_point_num == 1_000_000
     assert cfg.eval.mesh.geometry_mode == "pcd"
-    assert cfg.output.mesh_file == "outputs/2dts/dtu/scan24/mesh_ply/30000_pcd.ply"
+    assert cfg.output.mesh_file == "outputs/2dts/dtu/scan24/mesh/30000_pcd.ply"
+
 
 
 def test_2dts_render_params_follow_native_dataset_configs():

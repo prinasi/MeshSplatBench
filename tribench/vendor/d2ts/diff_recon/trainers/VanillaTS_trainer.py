@@ -231,7 +231,8 @@ class VanillaTSTrainer(BaseTrainer):
         self.logger.add_scalar("Training Time (min)", time_elapsed / 60, iteration)
 
         if self.config.trainer.save_train_img:
-            save_image_tensor(img, f"{self.output_dir}/train/{iteration:>05d}.png")
+            save_image_tensor(img, f"{self.output_dir}/logs/train/{iteration:>05d}.png")
+
 
     @torch.no_grad()
     def _histogram(self, iteration: int, render_pkg: dict):
@@ -271,8 +272,9 @@ class VanillaTSTrainer(BaseTrainer):
                     self.logger.add_image(f"GT {img_log_idx}", gt_image, 0)
 
             if save_img:
-                save_image_tensor(image, f"{self.output_dir}/eval/{i:>05d}.png")
-                save_image_tensor(gt_image, f"{self.output_dir}/eval_gt/{i:>05d}.png")
+                save_image_tensor(image, f"{self.output_dir}/logs/eval/{i:>05d}.png")
+                save_image_tensor(gt_image, f"{self.output_dir}/logs/eval_gt/{i:>05d}.png")
+
 
         if use_tensorboard:
             self._tb_gt_recorded = True
@@ -301,8 +303,9 @@ class VanillaTSTrainer(BaseTrainer):
             first_iter = config.start_checkpoint
         elif config.start_pointcloud:
             self.logger.info(f"Initializing Triangles from ply {config.start_pointcloud}.ply")
-            self.model.loadPLY(f"{self.output_dir}/point_cloud/{config.start_pointcloud}.ply")
+            self.model.loadPLY(f"{self.output_dir}/ckpt/point_cloud/{config.start_pointcloud}.ply")
             first_iter = config.start_pointcloud
+
         if self.model.initialized and config.start_opacity is not None:
             self.logger.info(f"Setting initial opacity to {config.start_opacity}")
             self.model.set_opacity(config.start_opacity)
@@ -365,13 +368,14 @@ class VanillaTSTrainer(BaseTrainer):
                 render_pkg["densification_img"] = None
             self.model.model_update(iteration, render_pkg)
             if "densification_img" in render_pkg and render_pkg["densification_img"] is not None:
-                save_image_tensor(render_pkg["densification_img"], f"{self.output_dir}/train/{iteration:>05d}_densification.png")
+                save_image_tensor(render_pkg["densification_img"], f"{self.output_dir}/logs/train/{iteration:>05d}_densification.png")
 
             if (config.save_iterations is not None and iteration in config.save_iterations) or (
                 config.save_interval_iter > 0 and iteration % config.save_interval_iter == 0
             ):
                 timer.log("point cloud saving")
-                self.model.savePLY(f"{self.output_dir}/point_cloud/{iteration}.ply")
+                # TriBench: nest all checkpoints under ckpt/.
+                self.model.savePLY(f"{self.output_dir}/ckpt/point_cloud/{iteration}.ply")
 
             if (config.checkpoint_iterations is not None and iteration in config.checkpoint_iterations) or (
                 config.ckpt_interval_iter > 0 and iteration % config.ckpt_interval_iter == 0
@@ -381,15 +385,18 @@ class VanillaTSTrainer(BaseTrainer):
 
             if config.save_mesh_iterations is not None and iteration in config.save_mesh_iterations:
                 timer.log("mesh saving")
-                self.model.saveGLB(f"{self.output_dir}/glb/{iteration}.glb")
-                self.model.saveGLB(f"{self.output_dir}/mesh_ply/{iteration}_mesh.ply")
+                # TriBench: glb checkpoint stays under ckpt/; exported mesh goes to mesh/.
+                self.model.saveGLB(f"{self.output_dir}/ckpt/glb/{iteration}.glb")
+                self.model.saveGLB(f"{self.output_dir}/mesh/{iteration}_mesh.ply")
 
             if config.save_pcd_iterations is not None and iteration in config.save_pcd_iterations:
                 timer.log("pcd saving")
                 n_sample = config.pcd_n_sample
                 rescale_ratio = config.pcd_rescale_ratio if config.pcd_rescale_ratio is not None else 1.0
                 grid_size = config.pcd_grid_size
-                self._save_pcd(f"{self.output_dir}/mesh_ply/{iteration}_pcd.ply", rescale_ratio, n_sample, grid_size)
+                # TriBench: exported point cloud used for DTU metrics goes to mesh/.
+                self._save_pcd(f"{self.output_dir}/mesh/{iteration}_pcd.ply", rescale_ratio, n_sample, grid_size)
+
 
             timer.stop()
             if config.log_interval_iter > 0 and iteration % config.log_interval_iter == 0:

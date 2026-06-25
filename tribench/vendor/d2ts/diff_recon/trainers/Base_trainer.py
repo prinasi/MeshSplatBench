@@ -29,7 +29,8 @@ class BaseTrainer(abc.ABC):
         if clean_output_dir and log_file:
             os.system(f"rm -rf {self.output_dir}")
 
-        self.logger = Logger(time_str, os.path.join(self.output_dir, "log") if log_file else None, stream=sys.stdout if log_file else None, use_tensorboard=use_tensorboard)
+        self.logger = Logger(time_str, os.path.join(self.output_dir, "logs") if log_file else None, stream=sys.stdout if log_file else None, use_tensorboard=use_tensorboard)
+
         self.logger.info(f"config args: {self.config}")
         if not log_file:
             self.logger.warning("Not creating log file because log_file is set to False")

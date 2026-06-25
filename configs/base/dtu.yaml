@@ -27,7 +27,7 @@ adapter:
     bg_color: white
 
 mesh:
-  output: outputs/{method}/{dataset}/{scene}/fuse_post.ply
+  output: outputs/{method}/{dataset}/{scene}/mesh/fuse_post.ply
   split: train
   voxel_size: 0.004
   sdf_trunc: 0.016
@@ -36,4 +36,5 @@ mesh:
   depth_ratio: 1.0
 
 output:
-  mesh_file: outputs/{method}/{dataset}/{scene}/fuse_post.ply
+  mesh_file: outputs/{method}/{dataset}/{scene}/mesh/fuse_post.ply
+

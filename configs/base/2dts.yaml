@@ -6,7 +6,7 @@ trainer:
 
 adapter:
   type: 2dts
-  checkpoint: outputs/{method}/{dataset}/{scene}
+  checkpoint: outputs/{method}/{dataset}/{scene}/ckpt
   render_params:
     gamma_rescale: true
     ste_threshold: null
