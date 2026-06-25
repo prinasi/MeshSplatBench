@@ -1,6 +1,6 @@
 # @format
 
-# Scene-specific triangle count caps from ../triangle-splatting/full_eval.py.
+# Scene-specific triangle count caps used by the triangle-splatting baseline.
 triangle_caps:
   bicycle: 6400000
   flowers: 5500000

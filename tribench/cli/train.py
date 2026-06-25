@@ -304,17 +304,19 @@ def _train_from_structured_config(
     if method_name == "diffsoup":
         from tribench.trainers.diffsoup_native import run_diffsoup_native_config
 
+        # Checkpoints are unified under ckpt/; train_stats.json stays at the run root.
         summary = run_with_training_stats(
             lambda: run_diffsoup_native_config(
                 trainer_cfg=trainer_cfg,
                 dataset_cfg=dataset_cfg,
                 dataset_root=str(dataset_root),
-                output_dir=run_output_dir,
+                output_dir=run_output_dir / "ckpt",
                 max_steps=max_steps,
                 quiet=quiet,
             ),
             run_output_dir,
         )
+
         if not quiet:
             typer.echo(f"Config snapshot saved to {run_output_dir / 'config.yaml'}")
         return summary

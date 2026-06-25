@@ -1,10 +1,5 @@
 cmake_minimum_required(VERSION 3.31)
 
-set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} /home/shengkaifeng.skf/cuda-11.8)
-set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} /home/shengkaifeng.skf/.conda/envs/skf/lib/python3.8/site-packages/torch)
-set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} /home/shengkaifeng.skf/.conda/envs/skf/lib/python3.8/site-packages/torch/include/torch/csrc/api)
-set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} /home/shengkaifeng.skf/.conda/envs/skf/lib)
-
 project(SimpleKNN LANGUAGES CUDA CXX)
 
 # set(CMAKE_CUDA_COMPILER nvcc)
@@ -43,7 +38,6 @@ else()
 	message(FATAL_ERROR "Torch not found. Install PyTorch.")
 endif()
 
-set(Python3_ROOT_DIR "/home/shengkaifeng.skf/.conda/envs/skf")
 find_package(Python3 COMPONENTS Development REQUIRED)
 if (Python3_FOUND)
     message(STATUS "Python3 found: ${Python3_VERSION}")

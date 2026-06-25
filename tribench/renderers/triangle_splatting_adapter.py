@@ -1,6 +1,6 @@
 """Adapter for Triangle Splatting.
 
-Connects to the triangle-splatting repository's native CUDA renderer
+Connects to the bundled triangle-splatting CUDA renderer
 (diff-triangle-rasterization) for benchmarking and evaluation.
 
 Requires:
@@ -28,10 +28,6 @@ from tribench.renderers.backends import get_backend
 from tribench.renderers.base import RendererAdapter, RenderOutput
 
 
-# Default path to the triangle-splatting repository
-_DEFAULT_REPO_ROOT = Path(__file__).resolve().parent.parent.parent / "triangle-splatting"
-
-
 @register("triangle-splatting")
 class TriangleSplattingAdapter(RendererAdapter):
     """Renderer adapter for Triangle Splatting.
@@ -46,18 +42,18 @@ class TriangleSplattingAdapter(RendererAdapter):
     Integration: Preserves native CUDA renderer (diff-triangle-rasterization).
     Exposes sigma, primitive visibility, max blending, and density statistics.
 
-    Repository: triangle-splatting/
+    Runtime: tribench.vendor.triangle_splatting
     """
 
     def __init__(self, repo_root: str | Path | None = None):
         """Initialize the adapter.
 
         Args:
-            repo_root: Path to the triangle-splatting repository root.
-                       Defaults to ../triangle-splatting relative to this file.
+            repo_root: Optional compatibility override for status reporting.
+                       Runtime imports use the bundled TriBench package.
         """
         self._backend = get_backend("triangle-splatting")
-        self.repo_root = self._backend.repo_root(repo_root or _DEFAULT_REPO_ROOT)
+        self.repo_root = self._backend.repo_root(repo_root)
         self._initialized = False
         self._model = None
         self._cameras: list | None = None

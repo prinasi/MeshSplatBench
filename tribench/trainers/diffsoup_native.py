@@ -1,8 +1,8 @@
 """Native DiffSoup training integration for TriBench.
 
-The implementation deliberately delegates the optimisation loop to the
-upstream DiffSoup example scripts so training remains byte-for-byte aligned
-with the reference logic wherever possible.
+The implementation delegates the optimisation loop to DiffSoup example
+scripts vendored inside TriBench, so training does not require a separate
+DiffSoup checkout.
 """
 
 from __future__ import annotations
@@ -22,7 +22,8 @@ from tribench.trainers.hooks import TrainingMethod
 from tribench.trainers.registry import register_training_method
 
 
-DEFAULT_DIFFSOUP_ROOT = Path("~/Workspace/diffsoup").expanduser()
+DEFAULT_DIFFSOUP_ROOT = Path(__file__).resolve().parents[1] / "vendor" / "diffsoup"
+DEFAULT_DIFFSOUP_EXAMPLES_DIR = DEFAULT_DIFFSOUP_ROOT / "examples"
 
 
 def run_diffsoup_native_config(
@@ -56,17 +57,7 @@ def run_diffsoup_native_config(
                 "final_losses": {},
             }
 
-    repo_root = Path(
-        trainer_cfg.get("repo_root")
-        or os.environ.get("DIFFSOUP_ROOT")
-        or DEFAULT_DIFFSOUP_ROOT
-    ).expanduser()
-    examples_dir = repo_root / "examples"
-    if not examples_dir.is_dir():
-        raise FileNotFoundError(
-            f"DiffSoup examples directory not found: {examples_dir}. "
-            "Set trainer.repo_root or DIFFSOUP_ROOT to the reference repository."
-        )
+    examples_dir = _resolve_examples_dir(trainer_cfg)
 
     dataset_kind = _resolve_dataset_kind(trainer_cfg, dataset_cfg, dataset_root)
     start = time.time()
@@ -188,6 +179,23 @@ def _run_synthetic_script(
     with _reference_import_context(examples_dir):
         with _temporary_argv(argv):
             module.main()
+
+
+def _resolve_examples_dir(trainer_cfg: dict[str, Any]) -> Path:
+    examples_dir = trainer_cfg.get("examples_dir")
+    if examples_dir is not None:
+        resolved = Path(examples_dir).expanduser()
+    elif trainer_cfg.get("repo_root") is not None:
+        resolved = Path(trainer_cfg["repo_root"]).expanduser() / "examples"
+    else:
+        resolved = DEFAULT_DIFFSOUP_EXAMPLES_DIR
+
+    if not resolved.is_dir():
+        raise FileNotFoundError(
+            f"Vendored DiffSoup examples directory not found: {resolved}. "
+            "Reinstall TriBench or pass trainer.examples_dir for an explicit override."
+        )
+    return resolved
 
 
 def _load_reference_script(examples_dir: Path, script_name: str) -> ModuleType:

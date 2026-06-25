@@ -1,11 +1,5 @@
 cmake_minimum_required(VERSION 3.31)
 
-set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} /home/shengkaifeng.skf/cuda-12.4)
-set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} /home/shengkaifeng.skf/.conda/envs/python3.12/lib/python3.12/site-packages/torch)
-set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} /home/shengkaifeng.skf/.conda/envs/python3.12/lib/python3.12/site-packages/torch/include/torch/csrc/api)
-set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} /home/shengkaifeng.skf/.conda/envs/python3.12/lib)
-set(Python3_ROOT_DIR /home/shengkaifeng.skf/.conda/envs/python3.12)
-
 project(DiffRast LANGUAGES CUDA CXX)
 
 # set(CMAKE_CUDA_COMPILER nvcc)
