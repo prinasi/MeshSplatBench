@@ -109,6 +109,7 @@ def main(
     flip_z: bool = True,
     dataset_type: str = "auto",
     out_dir: Optional[str] = None,
+    white_background: Optional[bool] = None,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     scene_name = os.path.basename(os.path.normpath(scene_root))
@@ -124,7 +125,7 @@ def main(
         )
     if dataset_type not in {"colmap", "dtu"}:
         raise ValueError("dataset_type must be one of: auto, colmap, dtu")
-    use_white_background = dataset_type == "dtu"
+    use_white_background = dataset_type == "dtu" if white_background is None else bool(white_background)
 
     # ── Load data ────────────────────────────────────────────────────
 
@@ -566,6 +567,8 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_type", choices=["auto", "colmap", "dtu"], default="auto")
     parser.add_argument("--out_dir", type=str, default=None,
                         help="Output directory (default: ./results/01_mip360/<scene>)")
+    parser.add_argument("--white_background", action="store_true", default=None,
+                        help="Composite unrasterized pixels over white; defaults to true for DTU only.")
     args = parser.parse_args()
 
     main(
@@ -577,4 +580,5 @@ if __name__ == "__main__":
         flip_z=args.flip_z,
         dataset_type=args.dataset_type,
         out_dir=args.out_dir,
+        white_background=args.white_background,
     )

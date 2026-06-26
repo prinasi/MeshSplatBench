@@ -9,7 +9,8 @@ experiment:
 
 dataset:
   scene: bonsai
-  resolution: 2
+  image_dir: images_2
+  resolution: 1
 
 d2ts:
   native_config: configs/2dts/native/mipnerf360.yaml

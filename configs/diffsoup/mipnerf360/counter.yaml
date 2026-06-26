@@ -9,9 +9,9 @@ experiment:
 
 dataset:
   scene: counter
-  image_dir: images_4
+  image_dir: images_2
   resolution: 1
 
 trainer:
   dataset_type: colmap
-  downscale: 4
+  downscale: 2

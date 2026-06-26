@@ -54,6 +54,9 @@ def run_d2ts_native_config(
     if resolution is not None:
         native.dataset.train_target_res = int(resolution)
         native.dataset.test_target_res = int(resolution)
+    image_dir = dataset_cfg.get("image_dir")
+    if image_dir is not None:
+        native.dataset.image_dir = str(image_dir)
 
     native.trainer.output_dir = str(output_dir.parent)
     native.trainer.iterations = int(max_steps)

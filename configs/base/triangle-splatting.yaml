@@ -5,10 +5,11 @@ _base_: triangle-splatting-caps.yaml
 trainer:
   type: triangle-splatting
   max_steps: 30000
-  white_background: false
+  white_background: true
   densify_until_iter: 25000
 
 adapter:
   type: triangle-splatting
   checkpoint: outputs/{method}/{dataset}/{scene}/ckpt/point_cloud/iteration_{max_steps}
-
+  render_params:
+    bg_color: white

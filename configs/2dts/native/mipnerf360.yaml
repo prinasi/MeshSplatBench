@@ -123,7 +123,7 @@ trainer:
     checkpoint_iterations: [*TOTAL_ITER]
     save_mesh_iterations: []
 
-    train_background: "random" # "white" | "black" | "random"
+    train_background: "white" # "white" | "black" | "random"
     eval_background: "white" # "white" | "black" | "random"
     train_alpha_mask: False
     eval_alpha_mask: False

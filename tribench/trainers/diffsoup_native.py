@@ -127,6 +127,7 @@ def _run_mip360_script(
             flip_z=bool(trainer_cfg.get("flip_z", True)),
             dataset_type=dataset_kind,
             out_dir=str(output_dir),
+            white_background=bool(trainer_cfg.get("white_background", True)),
         )
 
 

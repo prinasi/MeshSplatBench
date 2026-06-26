@@ -10,7 +10,7 @@ experiment:
 dataset:
   scene: bonsai
   image_dir: images_2
-  resolution: -1
+  resolution: 1
 
 trainer:
   indoor: true

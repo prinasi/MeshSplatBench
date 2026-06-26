@@ -9,7 +9,8 @@ experiment:
 
 dataset:
   scene: treehill
-  resolution: 4
+  image_dir: images_4
+  resolution: 1
 
 trainer:
   outdoor: true
