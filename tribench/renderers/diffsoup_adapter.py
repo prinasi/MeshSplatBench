@@ -338,7 +338,7 @@ class DiffSoupAdapter(RendererAdapter):
     def _build_mvp(self, cameras: CameraBatch, *, device: torch.device) -> torch.Tensor:
         ckpt = self._checkpoint or {}
         viewmats = cameras.viewmats.to(device=device, dtype=torch.float32)
-        Ks = cameras.Ks.to(device=device, dtype=torch.float32)
+        Ks = self._camera_intrinsics(cameras, device=device)
         if Ks.shape[0] == 1 and viewmats.shape[0] > 1:
             Ks = Ks.expand(viewmats.shape[0], -1, -1)
 
@@ -370,6 +370,30 @@ class DiffSoupAdapter(RendererAdapter):
             zf[2, 2] = -1.0
             viewmats = zf.unsqueeze(0) @ viewmats
         return projections @ viewmats
+
+    def _camera_intrinsics(
+        self,
+        cameras: CameraBatch,
+        *,
+        device: torch.device,
+    ) -> torch.Tensor:
+        ckpt = self._checkpoint or {}
+        dataset_type = str(ckpt.get("dataset_type", "")).lower()
+        ckpt_K = ckpt.get("K")
+        if dataset_type == "dtu" and isinstance(ckpt_K, torch.Tensor):
+            K = ckpt_K.to(device=device, dtype=torch.float32)
+            if K.dim() == 2:
+                K = K.unsqueeze(0)
+            native_h = int(ckpt.get("H", cameras.height))
+            native_w = int(ckpt.get("W", cameras.width))
+            if native_w > 0 and native_h > 0:
+                scale_x = float(cameras.width) / float(native_w)
+                scale_y = float(cameras.height) / float(native_h)
+                K = K.clone()
+                K[:, 0, :] *= scale_x
+                K[:, 1, :] *= scale_y
+            return K
+        return cameras.Ks.to(device=device, dtype=torch.float32)
 
     def _near_plane(self, cameras: CameraBatch) -> float:
         ckpt = self._checkpoint or {}

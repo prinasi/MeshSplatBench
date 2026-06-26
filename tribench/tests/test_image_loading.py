@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 from PIL import Image
 from types import SimpleNamespace
 
 from tribench.core.datasets import (
+    DTUDataset,
     _load_image,
 )
 from tribench.trainers.triangle_splatting_method import _pil_rgb_uint8
@@ -41,6 +43,36 @@ def test_load_image_composites_rgba_when_background_is_given(tmp_path):
     loaded = _load_image(path, bg_color=(1.0, 1.0, 1.0))
 
     assert torch.allclose(loaded[0, 0], torch.ones(3), atol=1 / 255)
+
+
+def test_dtu_dataset_composites_mask_to_white(tmp_path):
+    root = tmp_path / "scan24"
+    (root / "images").mkdir(parents=True)
+    (root / "mask").mkdir()
+
+    image = Image.new("RGB", (4, 4), (255, 0, 0))
+    image.save(root / "images" / "0000.png")
+
+    mask = Image.new("L", (4, 4), 0)
+    mask.putdata([255, 255, 0, 0] * 4)
+    mask.save(root / "mask" / "000.png")
+
+    K = np.array([[2.0, 0.0, 2.0], [0.0, 2.0, 2.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+    extrinsic = np.array(
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 2.0]],
+        dtype=np.float32,
+    )
+    world_mat = np.eye(4, dtype=np.float32)
+    world_mat[:3, :4] = K @ extrinsic
+    np.savez(root / "cameras.npz", world_mat_0=world_mat, scale_mat_0=np.eye(4, dtype=np.float32))
+
+    dataset = DTUDataset(root, split="all", resolution=2)
+    sample = dataset.sample(0)
+
+    assert sample.image.shape == (2, 2, 3)
+    assert torch.allclose(sample.image[:, 0], torch.tensor([1.0, 0.0, 0.0]).expand(2, 3), atol=1 / 255)
+    assert torch.allclose(sample.image[:, 1], torch.ones(2, 3), atol=1 / 255)
+    assert sample.mask is not None
 
 
 def test_uint8_rgb_helper_extracts_rgb_without_compositing_alpha():

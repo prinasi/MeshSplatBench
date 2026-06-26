@@ -241,6 +241,36 @@ class TestDiffSoupAdapter:
 
         assert torch.allclose(actual[0], expected)
 
+    def test_build_mvp_uses_dtu_checkpoint_intrinsics(self, dummy_camera_batch):
+        adapter = DiffSoupAdapter()
+        ckpt_K = torch.eye(3)
+        ckpt_K[0, 0] = 700.0
+        ckpt_K[1, 1] = 710.0
+        ckpt_K[0, 2] = 300.0
+        ckpt_K[1, 2] = 200.0
+        adapter._checkpoint = {
+            "dataset_type": "dtu",
+            "flip_z": True,
+            "K": ckpt_K,
+            "H": dummy_camera_batch.height,
+            "W": dummy_camera_batch.width,
+        }
+        dummy_camera_batch.metadata = {"split": "test"}
+
+        actual = adapter._build_mvp(dummy_camera_batch, device=torch.device("cpu"))
+        projection = adapter._opengl_projection_from_K(
+            ckpt_K,
+            dummy_camera_batch.height,
+            dummy_camera_batch.width,
+            0.5,
+            dummy_camera_batch.far,
+        )
+        zf = torch.eye(4)
+        zf[2, 2] = -1.0
+        expected = projection @ zf @ dummy_camera_batch.viewmats[0]
+
+        assert torch.allclose(actual[0], expected)
+
 
 class TestTriangleSplattingAdapter:
     """Tests for the TriangleSplattingAdapter (real implementation)."""

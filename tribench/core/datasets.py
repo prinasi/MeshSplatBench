@@ -81,15 +81,23 @@ def _pil_rgb_array(
     return np.asarray(rgb)
 
 
-def _load_image(path: Path | None, size: tuple[int, int] | None = None, bg_color: tuple[float, ...] | None = None) -> torch.Tensor | None:
+def _load_image(
+    path: Path | None,
+    size: tuple[int, int] | None = None,
+    bg_color: tuple[float, ...] | None = None,
+    *,
+    resample: int | None = None,
+) -> torch.Tensor | None:
     if path is None or not path.exists():
         return None
+    if resample is None:
+        resample = Image.BILINEAR
     with Image.open(path) as image:
         bands = image.getbands()
         has_alpha = len(bands) >= 4 and bands[3] == "A"
         if has_alpha and bg_color is not None:
             if size is not None and image.size != size:
-                image = image.resize(size, Image.BILINEAR)
+                image = image.resize(size, resample)
             arr = np.array(image, dtype=np.float32) / 255.0
             rgb = arr[..., :3]
             alpha = arr[..., 3:4]
@@ -97,9 +105,34 @@ def _load_image(path: Path | None, size: tuple[int, int] | None = None, bg_color
             rgb = rgb * alpha + bg * (1.0 - alpha)
             return torch.from_numpy(rgb).contiguous()
 
-        arr = _pil_rgb_array(image, size)
+        arr = _pil_rgb_array(image, size, resample=resample)
     arr = arr.astype(np.float32) / 255.0
     return torch.from_numpy(arr[..., :3]).contiguous()
+
+
+def _resolve_dtu_mask_path(mask_dir: Path, image_path: Path) -> Path | None:
+    image_base = image_path.name
+    candidates = [mask_dir / image_base]
+    stem = image_path.stem
+    candidates.extend(sorted(mask_dir.glob(f"{stem}.*")))
+    if stem.isdigit():
+        candidates.extend(sorted(mask_dir.glob(f"{int(stem):03d}.*")))
+
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def _load_mask(path: Path | None, size: tuple[int, int] | None = None) -> torch.Tensor | None:
+    if path is None or not path.exists():
+        return None
+    with Image.open(path) as image:
+        mask = image.convert("L")
+        if size is not None and mask.size != size:
+            mask = mask.resize(size, Image.NEAREST)
+        arr = np.asarray(mask, dtype=np.float32) / 255.0
+    return torch.from_numpy(arr[..., None].clip(0.0, 1.0)).contiguous()
 
 
 def _camera_batch_from_w2c(
@@ -414,10 +447,16 @@ class DTUDataset(DatasetBase):
         if not image_paths:
             image_paths = sorted((self.dataset_path / "image").glob("*.png"))
         selected = _split_indices(len(image_paths), self.split, self.eval_every)
+        mask_dir = self.dataset_path / "mask"
         samples: list[DatasetSample] = []
         for out_idx, image_idx in enumerate(selected):
             image_path = image_paths[image_idx]
-            gt = _load_image(image_path, bg_color=(1.0, 1.0, 1.0))
+            mask_path = _resolve_dtu_mask_path(mask_dir, image_path)
+            gt = _load_image(
+                image_path,
+                bg_color=None if mask_path is not None else (1.0, 1.0, 1.0),
+                resample=Image.BICUBIC,
+            )
             if gt is None:
                 continue
             image_height, image_width = gt.shape[:2]
@@ -427,8 +466,17 @@ class DTUDataset(DatasetBase):
                 self.resolution,
                 self.resolution_rounding,
             )
+            mask = _load_mask(mask_path)
             if (image_width, image_height) != (width, height):
-                gt = _load_image(image_path, size=(width, height), bg_color=(1.0, 1.0, 1.0))
+                gt = _load_image(
+                    image_path,
+                    size=(width, height),
+                    bg_color=None if mask_path is not None else (1.0, 1.0, 1.0),
+                    resample=Image.BICUBIC,
+                )
+                mask = _load_mask(mask_path, size=(width, height))
+            if mask is not None:
+                gt = gt * mask + (1.0 - mask)
             world_mat = data[f"world_mat_{image_idx}"].astype(np.float32)
             scale_key = f"scale_mat_{image_idx}"
             scale_mat = (
@@ -466,7 +514,7 @@ class DTUDataset(DatasetBase):
                     image=gt,
                     name=image_path.stem,
                     image_path=image_path,
-                    mask=None,
+                    mask=mask,
                     metadata=metadata,
                 )
             )

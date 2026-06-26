@@ -21,7 +21,9 @@ LOG_ROOT=""
 LOG_DIR=""
 METHOD=""
 
-if [[ -n "${PYTHON:-}" ]]; then
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+    PYTHON_BIN="${PYTHON_BIN}"
+elif [[ -n "${PYTHON:-}" ]]; then
     PYTHON_BIN="${PYTHON}"
 elif command -v python >/dev/null 2>&1; then
     PYTHON_BIN="python"
@@ -35,16 +37,19 @@ FORMAT_METRICS="${FORMAT_METRICS:-tools/format_metrics.py}"
 
 SKIP_TRAINING=0
 SKIP_RENDERING=0
-SKIP_METRICS=0
+SKIP_NVS_METRICS=0
+SKIP_CD_METRICS=0
 SKIP_VIDEO=0
 REQUESTED_TRAINING=0
 REQUESTED_RENDERING=0
-REQUESTED_METRICS=0
+REQUESTED_NVS_METRICS=0
+REQUESTED_CD_METRICS=0
 REQUESTED_VIDEO=0
 HAS_STAGE_REQUEST=0
 EXPLICIT_SKIP_TRAINING=0
 EXPLICIT_SKIP_RENDERING=0
-EXPLICIT_SKIP_METRICS=0
+EXPLICIT_SKIP_NVS_METRICS=0
+EXPLICIT_SKIP_CD_METRICS=0
 EXPLICIT_SKIP_VIDEO=0
 FORCE_RETRAIN=0
 FORCE_RERUN_EXISTING=0
@@ -93,11 +98,15 @@ Options:
   --method NAME            Method for legacy form
   --training               Run training only
   --rendering              Run configured image rendering only
-  --metrics                Run metrics only
+  --metrics                Run NVS image metrics and DTU CD metrics only
+  --nvs_metrics            Run NVS image metrics only (PSNR/SSIM/LPIPS)
+  --cd_metrics             Run DTU Chamfer Distance metrics only
   --video                  Run video export only
   --skip_training          Skip training
   --skip_rendering         Skip configured image rendering
-  --skip_metrics           Skip image metrics
+  --skip_metrics           Skip all metrics
+  --skip_nvs_metrics       Skip NVS image metrics
+  --skip_cd_metrics        Skip DTU Chamfer Distance metrics
   --skip_video             Skip video export
   --retrain                Delete existing scene output and train again
   --force_retrain          Alias for --retrain
@@ -110,8 +119,8 @@ image dirs, resolutions, max steps, eval stride, output paths, and video
 settings should be set in the YAML config files. When training is selected,
 scenes with existing training outputs are skipped by default; pass --retrain
 to remove the old scene output directory before training again. Rendering,
-metrics, video, and DTU mesh metrics are also skipped when their outputs
-already exist; pass --rerun_existing to rebuild those outputs.
+NVS metrics, video, and DTU mesh metrics are also skipped when their
+outputs already exist; pass --rerun_existing to rebuild those outputs.
 EOF
 }
 
@@ -172,7 +181,7 @@ dataset_label() {
 resolve_python_bin() {
     if [[ "${PYTHON_BIN}" == */* ]]; then
         [[ ! -x "${PYTHON_BIN}" ]] && { echo "Python not executable: ${PYTHON_BIN}" >&2; exit 1; }
-        return
+        return 0
     fi
     local resolved
     resolved="$(command -v "${PYTHON_BIN}" || true)"
@@ -794,11 +803,15 @@ while [[ $# -gt 0 ]]; do
         --method)            require_value "$@"; METHOD="$2"; shift 2 ;;
         --training)          REQUESTED_TRAINING=1; HAS_STAGE_REQUEST=1; shift ;;
         --rendering|--render) REQUESTED_RENDERING=1; HAS_STAGE_REQUEST=1; shift ;;
-        --metrics|--eval)    REQUESTED_METRICS=1; HAS_STAGE_REQUEST=1; shift ;;
+        --metrics|--eval)    REQUESTED_NVS_METRICS=1; REQUESTED_CD_METRICS=1; HAS_STAGE_REQUEST=1; shift ;;
+        --nvs_metrics|--nvs-metrics|--image_metrics|--image-metrics) REQUESTED_NVS_METRICS=1; HAS_STAGE_REQUEST=1; shift ;;
+        --cd_metrics|--cd-metrics|--chamfer|--mesh_metrics|--mesh-metrics) REQUESTED_CD_METRICS=1; HAS_STAGE_REQUEST=1; shift ;;
         --video)             REQUESTED_VIDEO=1; HAS_STAGE_REQUEST=1; shift ;;
         --skip_training|--skip-training) EXPLICIT_SKIP_TRAINING=1; shift ;;
         --skip_rendering|--skip-rendering) EXPLICIT_SKIP_RENDERING=1; shift ;;
-        --skip_metrics|--skip-metrics) EXPLICIT_SKIP_METRICS=1; shift ;;
+        --skip_metrics|--skip-metrics) EXPLICIT_SKIP_NVS_METRICS=1; EXPLICIT_SKIP_CD_METRICS=1; shift ;;
+        --skip_nvs_metrics|--skip-nvs-metrics|--skip_image_metrics|--skip-image-metrics) EXPLICIT_SKIP_NVS_METRICS=1; shift ;;
+        --skip_cd_metrics|--skip-cd-metrics|--skip_chamfer|--skip-chamfer|--skip_mesh_metrics|--skip-mesh-metrics) EXPLICIT_SKIP_CD_METRICS=1; shift ;;
         --skip_video|--skip-video) EXPLICIT_SKIP_VIDEO=1; shift ;;
         --retrain|--force_retrain|--force-retrain) FORCE_RETRAIN=1; shift ;;
         --rerun_existing|--rerun-existing|--force_existing|--force-existing) FORCE_RERUN_EXISTING=1; shift ;;
@@ -839,19 +852,22 @@ METHOD_ID="$(canonical_method "${METHOD}")"
 if [[ "${HAS_STAGE_REQUEST}" -eq 1 ]]; then
     SKIP_TRAINING=1
     SKIP_RENDERING=1
-    SKIP_METRICS=1
+    SKIP_NVS_METRICS=1
+    SKIP_CD_METRICS=1
     SKIP_VIDEO=1
     [[ "${REQUESTED_TRAINING}" -eq 1 ]] && SKIP_TRAINING=0
     [[ "${REQUESTED_RENDERING}" -eq 1 ]] && SKIP_RENDERING=0
-    [[ "${REQUESTED_METRICS}" -eq 1 ]] && SKIP_METRICS=0
+    [[ "${REQUESTED_NVS_METRICS}" -eq 1 ]] && SKIP_NVS_METRICS=0
+    [[ "${REQUESTED_CD_METRICS}" -eq 1 ]] && SKIP_CD_METRICS=0
     [[ "${REQUESTED_VIDEO}" -eq 1 ]] && SKIP_VIDEO=0
 fi
 [[ "${EXPLICIT_SKIP_TRAINING}" -eq 1 ]] && SKIP_TRAINING=1
 [[ "${EXPLICIT_SKIP_RENDERING}" -eq 1 ]] && SKIP_RENDERING=1
-[[ "${EXPLICIT_SKIP_METRICS}" -eq 1 ]] && SKIP_METRICS=1
+[[ "${EXPLICIT_SKIP_NVS_METRICS}" -eq 1 ]] && SKIP_NVS_METRICS=1
+[[ "${EXPLICIT_SKIP_CD_METRICS}" -eq 1 ]] && SKIP_CD_METRICS=1
 [[ "${EXPLICIT_SKIP_VIDEO}" -eq 1 ]] && SKIP_VIDEO=1
 
-if [[ "${SKIP_TRAINING}" -eq 1 && "${SKIP_RENDERING}" -eq 1 && "${SKIP_METRICS}" -eq 1 && "${SKIP_VIDEO}" -eq 1 ]]; then
+if [[ "${SKIP_TRAINING}" -eq 1 && "${SKIP_RENDERING}" -eq 1 && "${SKIP_NVS_METRICS}" -eq 1 && "${SKIP_CD_METRICS}" -eq 1 && "${SKIP_VIDEO}" -eq 1 ]]; then
     echo "No stage selected." >&2
     exit 1
 fi
@@ -906,13 +922,13 @@ for TARGET in "${EXPANDED_TARGETS[@]}"; do
 
     METRICS_ALREADY_DONE=0
     METRICS_MARKER=""
-    if [[ "${SKIP_METRICS}" -eq 0 && "${FORCE_RERUN_EXISTING}" -eq 0 ]] && METRICS_MARKER="$(metrics_complete_marker "${CONFIG_FILE}" "${MODEL_PATH}")"; then
+    if [[ "${SKIP_NVS_METRICS}" -eq 0 && "${FORCE_RERUN_EXISTING}" -eq 0 ]] && METRICS_MARKER="$(metrics_complete_marker "${CONFIG_FILE}" "${MODEL_PATH}")"; then
         METRICS_ALREADY_DONE=1
     fi
 
     MESH_METRICS_ALREADY_DONE=0
     MESH_METRICS_MARKER=""
-    if [[ "${SKIP_METRICS}" -eq 0 && "$(normalize_dataset "${DATASET}")" == "dtu" && "${FORCE_RERUN_EXISTING}" -eq 0 ]] && MESH_METRICS_MARKER="$(mesh_metrics_complete_marker "${CONFIG_FILE}" "${MODEL_PATH}")"; then
+    if [[ "${SKIP_CD_METRICS}" -eq 0 && "$(normalize_dataset "${DATASET}")" == "dtu" && "${FORCE_RERUN_EXISTING}" -eq 0 ]] && MESH_METRICS_MARKER="$(mesh_metrics_complete_marker "${CONFIG_FILE}" "${MODEL_PATH}")"; then
         MESH_METRICS_ALREADY_DONE=1
     fi
 
@@ -965,21 +981,22 @@ for TARGET in "${EXPANDED_TARGETS[@]}"; do
         fi
     fi
 
-    if [[ "${SKIP_METRICS}" -eq 0 ]]; then
+    if [[ "${SKIP_NVS_METRICS}" -eq 0 ]]; then
         if [[ "${METRICS_ALREADY_DONE}" -eq 1 ]]; then
             read_metrics_from_json "${METRICS_MARKER}"
             echo "[${DATASET}/${SCENE}] Metrics skipped; existing output detected at ${METRICS_MARKER}. Use --rerun_existing to rebuild."
         else
             run_metrics "${DATASET}" "${SCENE}" "${CONFIG_FILE}" "${MODEL_PATH}"
         fi
-        if [[ "$(normalize_dataset "${DATASET}")" == "dtu" ]]; then
-            if [[ "${MESH_METRICS_ALREADY_DONE}" -eq 1 ]]; then
-                read_chamfer_from_json "${MESH_METRICS_MARKER}"
-                echo "${LAST_CHAMFER}" > "${LOG_DIR}/${PREFIX}_chamfer.txt"
-                echo "[${DATASET}/${SCENE}] DTU mesh metrics skipped; existing output detected at ${MESH_METRICS_MARKER}. Use --rerun_existing to rebuild."
-            else
-                run_dtu_chamfer "${DATASET}" "${SCENE}" "${CONFIG_FILE}" "${MODEL_PATH}"
-            fi
+    fi
+
+    if [[ "${SKIP_CD_METRICS}" -eq 0 && "$(normalize_dataset "${DATASET}")" == "dtu" ]]; then
+        if [[ "${MESH_METRICS_ALREADY_DONE}" -eq 1 ]]; then
+            read_chamfer_from_json "${MESH_METRICS_MARKER}"
+            echo "${LAST_CHAMFER}" > "${LOG_DIR}/${PREFIX}_chamfer.txt"
+            echo "[${DATASET}/${SCENE}] DTU mesh metrics skipped; existing output detected at ${MESH_METRICS_MARKER}. Use --rerun_existing to rebuild."
+        else
+            run_dtu_chamfer "${DATASET}" "${SCENE}" "${CONFIG_FILE}" "${MODEL_PATH}"
         fi
     fi
 
