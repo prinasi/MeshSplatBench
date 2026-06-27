@@ -117,6 +117,7 @@ def _run_mip360_script(
         default=2 if dataset_kind == "dtu" else 4,
         allowed={0, 1, 2, 4, 8},
     )
+    white_background = trainer_cfg.get("white_background")
     with _reference_import_context(examples_dir):
         module.main(
             scene_root=str(Path(dataset_root).expanduser()),
@@ -127,7 +128,7 @@ def _run_mip360_script(
             flip_z=bool(trainer_cfg.get("flip_z", True)),
             dataset_type=dataset_kind,
             out_dir=str(output_dir),
-            white_background=bool(trainer_cfg.get("white_background", True)),
+            white_background=None if white_background is None else bool(white_background),
         )
 
 

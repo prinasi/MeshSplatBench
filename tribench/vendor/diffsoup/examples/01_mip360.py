@@ -232,12 +232,7 @@ def main(
                 color = _composite_white_background(color, rast_out)
             pred_init.append(color.squeeze(0))
         pred_init = torch.stack(pred_init, dim=0)
-    # for j in range(pred_init.shape[0]):
-    #     iio.imwrite(
-    #         os.path.join(out_dir, f"initial_pred_{j}.png"),
-    #         (pred_init[j].clamp(0, 1).cpu().numpy() * 255).astype(np.uint8),
-    #     )
-    # print(f"[save] initial renders → {out_dir}/initial_pred_*.png")
+    # Diagnostic renders are intentionally not written during TriBench runs.
 
     # ── Optimisers ───────────────────────────────────────────────────
 
@@ -421,38 +416,11 @@ def main(
 
     # ── Final renders ────────────────────────────────────────────────
 
-    # with torch.no_grad():
-    #     for j in range(eval_MVP.shape[0]):
-    #         V_clip = project_vertices(V_single, eval_MVP[j : j + 1])
-    #         rast_out = ds.rasterize_multires_triangle_alpha(
-    #             (H, W), V_clip, F,
-    #             level=Rmax,
-    #             alpha_src=ds.accumulate_to_level(Rmin, Rmax, alpha_src).sigmoid(),
-    #             stochastic=False,
-    #         )
-    #         feat = ds.multires_triangle_color(
-    #             rast_out, level=Rmax,
-    #             feat=ds.accumulate_to_level(Rmin, Rmax, feat_src).sigmoid(),
-    #         ).view(-1, H, W, feat_dim)
-    #         feat = torch.cat([feat, ds.encode_view_dir_sh2(rast_out, eval_MVP_inv[j : j + 1])], dim=-1)
-    #         color = color_mlp.forward(feat, mask=rast_out[..., -1] > 0).view(1, H, W, 3)
-    #         if use_white_background:
-    #             color = _composite_white_background(color, rast_out)
-    #         iio.imwrite(
-    #             os.path.join(out_dir, f"final_pred_{j}.png"),
-    #             (color.squeeze(0).clamp(0, 1).cpu().numpy() * 255).astype(np.uint8),
-    #         )
-    # print(f"[save] final renders → {out_dir}/final_pred_*.png")
+    # Final diagnostic renders are skipped; the checkpoint is the canonical output.
 
     # ── Loss curve ───────────────────────────────────────────────────
 
-    # plt.figure()
-    # plt.plot(np.arange(1, len(losses) + 1), losses)
-    # plt.xlabel("step"); plt.ylabel("loss"); plt.title("Training Loss")
-    # plt.grid(True, alpha=0.2)
-    # loss_png = os.path.join(out_dir, "loss_curve.png")
-    # plt.savefig(loss_png, bbox_inches="tight"); plt.close()
-    # print(f"[save] loss curve → {loss_png}")
+    # Loss curves are not written to keep run directories compact.
 
     # ── Checkpoint ───────────────────────────────────────────────────
 
@@ -527,18 +495,6 @@ def main(
             pred_nchw = pred_lin.permute(2, 0, 1).unsqueeze(0)
             gt_nchw = gt_lin.permute(2, 0, 1).unsqueeze(0)
             ssims.append(float(ssim(gt_nchw, pred_nchw, data_range=1.0).item()))
-
-            # PNG dumps are only visual diagnostics; TriBench consumes the
-            # checkpoint, metrics, and timing stats instead.
-            # stem = os.path.splitext(os.path.basename(fr["img_path"]))[0]
-            # iio.imwrite(
-            #     os.path.join(out_dir_test, f"{i:04d}_{stem}_pred.png"),
-            #     (pred_lin.cpu().numpy() * 255).astype(np.uint8),
-            # )
-            # iio.imwrite(
-            #     os.path.join(out_dir_test, f"{i:04d}_{stem}_gt.png"),
-            #     (gt_lin.cpu().numpy() * 255).astype(np.uint8),
-            # )
 
     print(f"[save] test metrics → {out_dir_test}/metrics.txt")
 

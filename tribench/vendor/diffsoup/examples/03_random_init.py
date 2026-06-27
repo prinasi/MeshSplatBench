@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import imageio.v2 as iio
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from PIL import Image
@@ -484,15 +484,7 @@ def main():
         f"pytorch_reserved_mib={reserved_peak_mib:.1f}"
     )
 
-    # ── Loss curve ───────────────────────────────────────────────────
-
-    plt.figure()
-    plt.plot(np.arange(1, len(losses) + 1), losses)
-    plt.xlabel("step"); plt.ylabel("loss"); plt.title("Training Loss")
-    plt.grid(True, alpha=0.2)
-    loss_png = os.path.join(out_dir, "loss_curve.png")
-    plt.savefig(loss_png, bbox_inches="tight"); plt.close()
-    print(f"[save] loss curve → {loss_png}")
+    # Loss curves are not written to keep run directories compact.
 
     # ── Checkpoint ───────────────────────────────────────────────────
 
@@ -562,16 +554,7 @@ def main():
             ssim_val = sk_ssim(gt_rgb_np, color_np, data_range=1.0, channel_axis=2)
             ssim_list.append(ssim_val)
 
-            iio.imsave(
-                os.path.join(out_dir, f"render_{i:04d}.png"),
-                (color_np * 255).clip(0, 255).astype(np.uint8),
-            )
-            iio.imsave(
-                os.path.join(out_dir, f"gt_{i:04d}.png"),
-                (gt_rgb_np * 255).clip(0, 255).astype(np.uint8),
-            )
-
-    print(f"[save] test renders → {out_dir}/")
+    print(f"[save] test metrics → {out_dir}/metrics.txt")
 
     if psnr_list:
         avg_psnr = float(np.mean(psnr_list))

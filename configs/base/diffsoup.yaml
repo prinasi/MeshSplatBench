@@ -8,11 +8,8 @@ trainer:
   n_points: 15000
   downscale: 4
   flip_z: true
-  white_background: true
   skip_completed: true
 
 adapter:
   type: diffsoup
   checkpoint: outputs/{method}/{dataset}/{scene}/ckpt/final_params.pt
-  render_params:
-    bg_color: white

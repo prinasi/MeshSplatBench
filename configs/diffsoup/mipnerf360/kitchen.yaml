@@ -9,9 +9,10 @@ experiment:
 
 dataset:
   scene: kitchen
-  image_dir: images_2
+  image_dir: images_4
   resolution: 1
 
 trainer:
   dataset_type: colmap
-  downscale: 2
+  batch_size: 4
+  downscale: 4
