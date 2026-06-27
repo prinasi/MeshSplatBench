@@ -3,7 +3,7 @@
 trainer:
   type: mesh-splatting
   max_steps: 30000
-  white_background: true
+  white_background: false
   densify_until_iter: 10000
   run_restricted_delaunay: -1
 
@@ -12,7 +12,7 @@ adapter:
   checkpoint: outputs/{method}/{dataset}/{scene}/ckpt/point_cloud/iteration_{max_steps}
 
   render_params:
-    bg_color: white
+    bg_color: black
     render_scaling: 4
 
 mesh:
