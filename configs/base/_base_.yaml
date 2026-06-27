@@ -22,6 +22,7 @@ render:
     output_dir: outputs/{method}/{dataset}/{scene}/video
     frames: 1200
     fps: 30
+    write_frames: false
     zoom: 1.0
     z_variation: 0.0
     z_phase: 0.0
@@ -62,4 +63,3 @@ output:
   mesh_file: outputs/{method}/{dataset}/{scene}/mesh/mesh.ply
   stats_file: outputs/{method}/{dataset}/{scene}/stats.json
   report_file: outputs/{method}/{dataset}/{scene}/report.md
-

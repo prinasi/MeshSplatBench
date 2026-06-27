@@ -135,6 +135,12 @@ def test_2dts_config_resolves_native_training_paths():
     assert cfg.output.mesh_file == "outputs/2dts/dtu/scan24/mesh/30000_pcd.ply"
 
 
+def test_2dts_disables_native_training_eval_by_default():
+    cfg = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")
+
+    assert cfg.d2ts.native_overrides.trainer.eval_interval_iter == 0
+
+
 
 def test_2dts_render_params_follow_native_dataset_configs():
     bicycle = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")

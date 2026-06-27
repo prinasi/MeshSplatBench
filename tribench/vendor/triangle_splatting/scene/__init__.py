@@ -49,7 +49,9 @@ class Scene:
         self.train_cameras = {}
         self.test_cameras = {}
 
-        if os.path.exists(os.path.join(args.source_path, "sparse")):
+        if os.path.exists(os.path.join(args.source_path, "cameras.npz")):
+            scene_info = sceneLoadTypeCallbacks["DTU"](args.source_path, args.images, args.eval)
+        elif os.path.exists(os.path.join(args.source_path, "sparse")):
             scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
@@ -61,7 +63,7 @@ class Scene:
         else:
             raise FileNotFoundError(
                 f"Could not recognize scene type at {args.source_path}. "
-                "Expected COLMAP sparse/ or transforms_train.json."
+                "Expected DTU cameras.npz, COLMAP sparse/, or transforms_train.json."
             )
 
         if not self.loaded_iter:

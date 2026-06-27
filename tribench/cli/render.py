@@ -213,6 +213,11 @@ def render_video_cmd(
     eval_every: int = typer.Option(8, "--eval-every"),
     frames: int = typer.Option(240, "--frames"),
     fps: int = typer.Option(30, "--fps"),
+    write_frames: bool = typer.Option(
+        False,
+        "--write-frames/--no-write-frames",
+        help="Also save every rendered video frame as a PNG sequence.",
+    ),
     zoom: float = typer.Option(1.0, "--zoom"),
     z_variation: float = typer.Option(0.0, "--z-variation"),
     z_phase: float = typer.Option(0.0, "--z-phase", help="Phase offset for vertical oscillation [0, 1]"),
@@ -245,6 +250,7 @@ def render_video_cmd(
             dataset_cfg["split"] = video_cfg["split"]
         frames = int(video_cfg.get("frames", frames))
         fps = int(video_cfg.get("fps", fps))
+        write_frames = bool(video_cfg.get("write_frames", write_frames))
         zoom = float(video_cfg.get("zoom", zoom))
         z_variation = float(video_cfg.get("z_variation", z_variation))
         z_phase = float(video_cfg.get("z_phase", z_phase))
@@ -271,7 +277,13 @@ def render_video_cmd(
         z_variation=z_variation,
         z_phase=z_phase,
     )
-    video_path = render_video(adapter, cameras, output_dir, fps=fps)
+    video_path = render_video(
+        adapter,
+        cameras,
+        output_dir,
+        fps=fps,
+        write_frames=write_frames,
+    )
     typer.echo(f"Video saved to {video_path}")
 
 

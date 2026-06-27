@@ -12,6 +12,7 @@ from tribench.core.metrics import compute_psnr
 from tribench.core.cameras import CameraBatch
 from tribench.core.datasets import DatasetBase, DatasetSample
 from tribench.core.rendering import (
+    compute_metrics_from_render_dir,
     _metric_rgb_for_sample,
     generate_ellipse_cameras,
     render_dataset_split,
@@ -38,6 +39,36 @@ class TestPSNR:
         assert isinstance(psnr, float)
         assert psnr > 0
         assert psnr < 100  # PSNR should be finite for random images
+
+
+class TestRenderMetricCache:
+    def test_checkpoint_mismatch_invalidates_saved_renders(self, tmp_path):
+        render_root = tmp_path / "renders_test"
+        (render_root / "renders").mkdir(parents=True)
+        (render_root / "gt").mkdir()
+        Image.new("RGB", (4, 4), (0, 0, 0)).save(
+            render_root / "renders" / "00000.png"
+        )
+        Image.new("RGB", (4, 4), (0, 0, 0)).save(render_root / "gt" / "00000.png")
+        (render_root / "manifest.json").write_text(
+            """
+            {
+              "renderer": {
+                "method": "triangle-splatting",
+                "checkpoint": "/tmp/old/point_cloud_state_dict.pt"
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        manifest = compute_metrics_from_render_dir(
+            render_root,
+            expected_method="triangle-splatting",
+            expected_checkpoint=tmp_path / "new" / "iteration_30000",
+        )
+
+        assert manifest is None
 
     def test_batch_input(self):
         torch.manual_seed(42)

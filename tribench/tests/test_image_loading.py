@@ -13,7 +13,28 @@ from tribench.core.datasets import (
 )
 from tribench.trainers.triangle_splatting_method import _pil_rgb_uint8
 from tribench.vendor.training_images import is_dtu_scene, load_rgba_for_training
+from tribench.vendor.triangle_splatting.scene.dataset_readers import readDTUSceneInfo
 from tribench.vendor.triangle_splatting.utils.general_utils import PILtoTorch
+
+
+def _write_basic_ply(path):
+    path.write_text(
+        "ply\n"
+        "format ascii 1.0\n"
+        "element vertex 1\n"
+        "property float x\n"
+        "property float y\n"
+        "property float z\n"
+        "property float nx\n"
+        "property float ny\n"
+        "property float nz\n"
+        "property uchar red\n"
+        "property uchar green\n"
+        "property uchar blue\n"
+        "end_header\n"
+        "0 0 0 0 0 1 128 128 128\n",
+        encoding="utf-8",
+    )
 
 
 def test_load_image_ignores_rgba_alpha_when_resizing(tmp_path):
@@ -57,14 +78,21 @@ def test_dtu_dataset_composites_mask_to_white(tmp_path):
     mask.putdata([255, 255, 0, 0] * 4)
     mask.save(root / "mask" / "000.png")
 
-    K = np.array([[2.0, 0.0, 2.0], [0.0, 2.0, 2.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+    K = np.array(
+        [[2.0, 0.0, 2.0], [0.0, 2.0, 2.0], [0.0, 0.0, 1.0]],
+        dtype=np.float32,
+    )
     extrinsic = np.array(
         [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 2.0]],
         dtype=np.float32,
     )
     world_mat = np.eye(4, dtype=np.float32)
     world_mat[:3, :4] = K @ extrinsic
-    np.savez(root / "cameras.npz", world_mat_0=world_mat, scale_mat_0=np.eye(4, dtype=np.float32))
+    np.savez(
+        root / "cameras.npz",
+        world_mat_0=world_mat,
+        scale_mat_0=np.eye(4, dtype=np.float32),
+    )
 
     dataset = DTUDataset(root, split="all", resolution=2)
     sample = dataset.sample(0)
@@ -73,6 +101,50 @@ def test_dtu_dataset_composites_mask_to_white(tmp_path):
     assert torch.allclose(sample.image[:, 0], torch.tensor([1.0, 0.0, 0.0]).expand(2, 3), atol=1 / 255)
     assert torch.allclose(sample.image[:, 1], torch.ones(2, 3), atol=1 / 255)
     assert sample.mask is not None
+
+
+def test_native_dtu_reader_matches_eval_camera_and_mask(tmp_path):
+    root = tmp_path / "scan24"
+    (root / "images").mkdir(parents=True)
+    (root / "mask").mkdir()
+    _write_basic_ply(root / "points3d_dtu.ply")
+
+    image = Image.new("RGB", (4, 4), (255, 0, 0))
+    image.save(root / "images" / "0000.png")
+
+    mask = Image.new("L", (4, 4), 0)
+    mask.putdata([255, 255, 0, 0] * 4)
+    mask.save(root / "mask" / "000.png")
+
+    K = np.array([[2.0, 0.0, 2.0], [0.0, 2.0, 2.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+    extrinsic = np.array(
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 2.0]],
+        dtype=np.float32,
+    )
+    world_mat = np.eye(4, dtype=np.float32)
+    world_mat[:3, :4] = K @ extrinsic
+    np.savez(
+        root / "cameras.npz",
+        world_mat_0=world_mat,
+        scale_mat_0=np.eye(4, dtype=np.float32),
+    )
+
+    eval_sample = DTUDataset(root, split="all", resolution=1).sample(0)
+    scene_info = readDTUSceneInfo(str(root), "images", eval=False)
+    native_cam = scene_info.train_cameras[0]
+
+    native_w2c = np.eye(4, dtype=np.float32)
+    native_w2c[:3, :3] = native_cam.R.T
+    native_w2c[:3, 3] = native_cam.T
+
+    assert np.allclose(
+        eval_sample.camera.viewmats[0].numpy(),
+        native_w2c,
+        atol=1e-5,
+    )
+    assert native_cam.image.mode == "RGBA"
+    assert native_cam.image.getchannel("A").getpixel((2, 0)) == 0
+    assert torch.allclose(eval_sample.image[0, 2], torch.ones(3), atol=1 / 255)
 
 
 def test_uint8_rgb_helper_extracts_rgb_without_compositing_alpha():

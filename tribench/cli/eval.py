@@ -123,7 +123,11 @@ def evaluate_images(
         render_dir = str(Path(render_dir) / split)
 
     # Prefer metrics computed from existing renders; only render when missing.
-    manifest = compute_metrics_from_render_dir(render_dir)
+    manifest = compute_metrics_from_render_dir(
+        render_dir,
+        expected_method=str(method_label) if method_label is not None else None,
+        expected_checkpoint=checkpoint_label,
+    )
     if manifest is None:
         if config is not None:
             adapter = build_adapter(adapter_cfg)

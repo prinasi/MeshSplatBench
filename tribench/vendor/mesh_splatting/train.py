@@ -262,7 +262,11 @@ def training(
     triangles.size_probs_zero_image_space = opt.size_probs_zero_image_space
 
     need_delaunay = False
-    run_restricted_delaunay = opt.densify_until_iter + 1000
+    run_restricted_delaunay = (
+        opt.run_restricted_delaunay
+        if opt.run_restricted_delaunay >= 0
+        else opt.densify_until_iter + 1000
+    )
     depth_l1_weight = get_expon_lr_func(
         opt.depth_lambda_init,
         opt.depth_lambda_final,
@@ -274,7 +278,9 @@ def training(
         last_iteration = iteration
         if need_delaunay:
             with torch.no_grad():
+                torch.cuda.empty_cache()
                 triangles.run_restricted_delaunay()
+                torch.cuda.empty_cache()
             need_delaunay = False
 
         if iteration == start_upsampling:

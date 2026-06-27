@@ -843,6 +843,7 @@ class TriangleModel:
         print("Running restricted delaunay... for ", self.vertices.shape[0], " vertices.")
 
         self._triangle_indices = self._triangle_indices.detach().cpu().numpy()
+        torch.cuda.empty_cache()
 
         faces_ = rdel.run(
             self.vertices.detach().cpu().numpy(),
@@ -851,6 +852,7 @@ class TriangleModel:
             orient=False    # try to consistently orient face normals if True
         )
 
+        torch.cuda.empty_cache()
         self._triangle_indices = torch.as_tensor(np.asarray(faces_, dtype=np.int64), device='cuda').contiguous()
         self._triangle_indices = self._triangle_indices.to(torch.int32)
 

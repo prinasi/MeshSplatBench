@@ -57,7 +57,11 @@ class _MeshSplattingScene:
         self.test_cameras: dict[float, list[Any]] = {}
 
         source_path = Path(args.source_path)
-        if (source_path / "sparse").exists():
+        if (source_path / "cameras.npz").exists():
+            scene_info = sceneLoadTypeCallbacks["DTU"](
+                args.source_path, args.images, args.eval
+            )
+        elif (source_path / "sparse").exists():
             scene_info = sceneLoadTypeCallbacks["Colmap"](
                 args.source_path, args.images, args.eval
             )
@@ -264,7 +268,7 @@ class MeshSplattingTrainingMethod(TrainingMethod):
             images=self.images_dir,
             resolution=self.resolution,
             white_background=self.white_background,
-            data_device="cuda",
+            data_device=str(self.extra_args.get("data_device", "cuda")),
             eval=self.eval_split,
         )
         (self.output_dir / "cfg_args").write_text(

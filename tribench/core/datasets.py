@@ -13,6 +13,7 @@ import torch
 from PIL import Image
 
 from tribench.core.cameras import CameraBatch
+from tribench.vendor.dtu_utils import decompose_dtu_projection
 
 
 @dataclass
@@ -477,23 +478,17 @@ class DTUDataset(DatasetBase):
                 mask = _load_mask(mask_path, size=(width, height))
             if mask is not None:
                 gt = gt * mask + (1.0 - mask)
-            world_mat = data[f"world_mat_{image_idx}"].astype(np.float32)
-            scale_key = f"scale_mat_{image_idx}"
-            scale_mat = (
-                data[scale_key].astype(np.float32)
-                if scale_key in data.files
-                else np.eye(4, dtype=np.float32)
+            K, native_R, native_T, _, _ = decompose_dtu_projection(
+                data,
+                image_idx,
+                width=width,
+                height=height,
+                original_width=image_width,
+                original_height=image_height,
             )
-            P = (world_mat @ scale_mat)[:3, :4]
-            K, R, t, *_ = cv2.decomposeProjectionMatrix(P)
-            K = K / K[2, 2]
-            K[:2, :] *= np.array(
-                [[width / image_width], [height / image_height]], dtype=np.float32
-            )
-            c2w = np.eye(4, dtype=np.float32)
-            c2w[:3, :3] = R.T
-            c2w[:3, 3] = (t[:3] / t[3])[:, 0]
-            w2c = np.linalg.inv(c2w)
+            w2c = np.eye(4, dtype=np.float32)
+            w2c[:3, :3] = native_R.T
+            w2c[:3, 3] = native_T
             metadata = {
                 "image_name": image_path.name,
                 "index": image_idx,
@@ -503,7 +498,7 @@ class DTUDataset(DatasetBase):
             }
             camera = _camera_batch_from_w2c(
                 w2c,
-                K[:3, :3],
+                K,
                 width,
                 height,
                 metadata=metadata,

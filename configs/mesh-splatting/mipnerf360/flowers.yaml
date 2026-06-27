@@ -11,3 +11,6 @@ dataset:
   scene: flowers
   image_dir: images_4
   resolution: 1
+
+trainer:
+  data_device: cpu

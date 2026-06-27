@@ -133,6 +133,15 @@ def _cuda_sync_if_available() -> None:
         torch.cuda.synchronize()
 
 
+def _renderer_metadata(adapter: RendererAdapter) -> dict[str, Any]:
+    return {
+        "method": getattr(adapter, "name", adapter.__class__.__name__),
+        "checkpoint": getattr(adapter, "_checkpoint_path", None),
+        "checkpoint_dir": str(getattr(adapter, "_checkpoint_dir", "") or "") or None,
+        "model_path": str(getattr(adapter, "_model_path", "") or "") or None,
+    }
+
+
 def render_dataset_split(
     adapter: RendererAdapter,
     dataset: DatasetBase,
@@ -239,6 +248,7 @@ def render_dataset_split(
         "wall_fps": num_frames / wall_time_s if wall_time_s > 0 else 0.0,
     }
     manifest = {
+        "renderer": _renderer_metadata(adapter),
         "num_frames": num_frames,
         "timing": timing,
         "aggregate": aggregate,
@@ -268,6 +278,8 @@ def compute_metrics_from_render_dir(
     render_output_dir: str | Path,
     *,
     device: str | torch.device = "cpu",
+    expected_method: str | None = None,
+    expected_checkpoint: str | Path | None = None,
 ) -> dict[str, Any] | None:
     """Compute image metrics from already-saved renders + ground truth.
 
@@ -283,6 +295,20 @@ def compute_metrics_from_render_dir(
     render_dir = render_output_dir / "renders"
     gt_dir = render_output_dir / "gt"
     if not render_dir.is_dir() or not gt_dir.is_dir():
+        return None
+
+    manifest_path = render_output_dir / "manifest.json"
+    existing_manifest: dict[str, Any] | None = None
+    if manifest_path.is_file():
+        try:
+            existing_manifest = json.loads(manifest_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            existing_manifest = None
+    if not _render_manifest_matches(
+        existing_manifest,
+        expected_method=expected_method,
+        expected_checkpoint=expected_checkpoint,
+    ):
         return None
 
     render_paths = sorted(render_dir.glob("*.png"))
@@ -320,13 +346,8 @@ def compute_metrics_from_render_dir(
         aggregate[f"{key}_std"] = float(np.std(vals))
 
     timing: dict[str, Any] = {}
-    manifest_path = render_output_dir / "manifest.json"
-    if manifest_path.is_file():
-        try:
-            existing = json.loads(manifest_path.read_text())
-            timing = existing.get("timing", {}) or {}
-        except (OSError, json.JSONDecodeError):
-            timing = {}
+    if existing_manifest is not None:
+        timing = existing_manifest.get("timing", {}) or {}
 
     return {
         "num_frames": len(per_view),
@@ -334,6 +355,68 @@ def compute_metrics_from_render_dir(
         "aggregate": aggregate,
         "frames": frames,
     }
+
+
+def _render_manifest_matches(
+    manifest: dict[str, Any] | None,
+    *,
+    expected_method: str | None,
+    expected_checkpoint: str | Path | None,
+) -> bool:
+    if expected_method is None and expected_checkpoint is None:
+        return True
+    if manifest is None:
+        return False
+    renderer = manifest.get("renderer")
+    if not isinstance(renderer, dict):
+        return False
+
+    if expected_method is not None:
+        recorded_method = renderer.get("method")
+        if str(recorded_method).replace("_", "-") != str(expected_method).replace(
+            "_", "-"
+        ):
+            return False
+
+    if expected_checkpoint is not None:
+        expected = _checkpoint_candidates(expected_checkpoint)
+        recorded: set[Path] = set()
+        for key in ("checkpoint", "checkpoint_dir", "model_path"):
+            value = renderer.get(key)
+            if value:
+                recorded.update(_checkpoint_candidates(value))
+        if expected and recorded and not _paths_overlap_or_nested(expected, recorded):
+            return False
+        if expected and not recorded:
+            return False
+    return True
+
+
+def _checkpoint_candidates(path: str | Path) -> set[Path]:
+    raw = Path(path).expanduser()
+    candidates = {raw}
+    candidates.add(raw / "point_cloud_state_dict.pt")
+    if raw.name == "point_cloud_state_dict.pt":
+        candidates.add(raw.parent)
+    return {candidate.resolve(strict=False) for candidate in candidates}
+
+
+def _paths_overlap_or_nested(expected: set[Path], recorded: set[Path]) -> bool:
+    if not expected.isdisjoint(recorded):
+        return True
+    for expected_path in expected:
+        for recorded_path in recorded:
+            try:
+                recorded_path.relative_to(expected_path)
+                return True
+            except ValueError:
+                pass
+            try:
+                expected_path.relative_to(recorded_path)
+                return True
+            except ValueError:
+                pass
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -551,26 +634,50 @@ def render_video(
     device: str | torch.device = "cuda",
     write_frames: bool = True,
 ) -> Path:
-    """Render a camera path to an mp4 video."""
+    """Render a camera path to an mp4 video.
+
+    Frames are streamed directly into the video encoder when imageio's writer
+    API is available, avoiding the old render-all-frames-then-encode path.
+    """
     try:
-        import imageio.v3 as iio
-    except ImportError as exc:
-        raise ImportError("render_video requires imageio. Install imageio[ffmpeg].") from exc
+        import imageio.v2 as iio
+
+        writer_factory = iio.get_writer
+        imwrite = None
+    except ImportError:
+        try:
+            import imageio.v3 as iio_v3
+        except ImportError as exc:
+            raise ImportError("render_video requires imageio. Install imageio[ffmpeg].") from exc
+        writer_factory = None
+        imwrite = iio_v3.imwrite
 
     output_dir = Path(output_dir)
     frame_dir = output_dir / "frames"
-    frame_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    frames = []
-    for idx, camera in enumerate(cameras):
-        output = adapter.render(camera.to(device), mode="eval")
-        metadata = camera.metadata or {}
-        arr = tensor_to_uint8(_composite_output_rgb(output, metadata.get("eval_background_color")))
-        frames.append(arr)
-        if write_frames:
-            Image.fromarray(arr).save(frame_dir / f"{idx:05d}.png")
+    if write_frames:
+        frame_dir.mkdir(parents=True, exist_ok=True)
 
     video_path = output_dir / "render_traj.mp4"
-    iio.imwrite(video_path, np.asarray(frames), fps=fps)
+    writer = writer_factory(video_path, fps=fps) if writer_factory is not None else None
+    frames = [] if writer is None else None
+    try:
+        for idx, camera in enumerate(cameras):
+            with torch.no_grad():
+                output = adapter.render(camera.to(device), mode="eval")
+            metadata = camera.metadata or {}
+            arr = tensor_to_uint8(
+                _composite_output_rgb(output, metadata.get("eval_background_color"))
+            )
+            if writer is not None:
+                writer.append_data(arr)
+            else:
+                frames.append(arr)
+            if write_frames:
+                Image.fromarray(arr).save(frame_dir / f"{idx:05d}.png")
+    finally:
+        if writer is not None:
+            writer.close()
+    if imwrite is not None:
+        imwrite(video_path, np.asarray(frames), fps=fps)
     return video_path

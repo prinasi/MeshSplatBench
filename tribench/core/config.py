@@ -222,6 +222,11 @@ def _force_dtu_white_background(config: dict[str, Any]) -> dict[str, Any]:
     trainer_cfg = dict(config.get("trainer", {}) or {})
     trainer_cfg["white_background"] = True
     config["trainer"] = trainer_cfg
+    adapter_cfg = dict(config.get("adapter", {}) or {})
+    render_params = dict(adapter_cfg.get("render_params", {}) or {})
+    render_params["bg_color"] = "white"
+    adapter_cfg["render_params"] = render_params
+    config["adapter"] = adapter_cfg
     return config
 
 

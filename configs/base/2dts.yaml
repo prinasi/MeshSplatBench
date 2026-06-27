@@ -26,3 +26,8 @@ output:
 d2ts:
   clean_output_dir: false
   use_tensorboard: true
+  native_overrides:
+    trainer:
+      # TriBench computes final NVS metrics after rendering; native full-res LPIPS eval
+      # can OOM on large MipNeRF360 scenes during training.
+      eval_interval_iter: 0

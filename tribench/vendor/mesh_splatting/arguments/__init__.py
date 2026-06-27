@@ -85,6 +85,7 @@ class OptimizationParams(ParamGroup):
         self.densification_interval = 500
         self.densify_from_iter = 500
         self.densify_until_iter = 10_000
+        self.run_restricted_delaunay = -1
         self.random_background = False
         self.feature_lr = 0.0016
         self.max_points = 4_000_000

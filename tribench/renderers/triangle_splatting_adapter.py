@@ -289,6 +289,7 @@ class TriangleSplattingAdapter(RendererAdapter):
         )
         from tribench.vendor.triangle_splatting.scene.dataset_readers import (
             readColmapCameras,
+            readDTUSceneInfo,
             readNerfSyntheticInfo,
         )
         from tribench.vendor.triangle_splatting.utils.camera_utils import (
@@ -299,7 +300,28 @@ class TriangleSplattingAdapter(RendererAdapter):
         if not sparse_dir.exists():
             sparse_dir = dataset_path / "sparse"
 
-        if sparse_dir.exists():
+        if (dataset_path / "cameras.npz").exists():
+            scene_info = readDTUSceneInfo(
+                str(dataset_path),
+                image_dir,
+                split != "all",
+                llffhold=eval_every,
+            )
+            if split == "test":
+                cam_infos = scene_info.test_cameras
+            elif split == "train":
+                cam_infos = scene_info.train_cameras
+            else:
+                cam_infos = scene_info.train_cameras + scene_info.test_cameras
+
+            model_args = SimpleNamespace(
+                data_device="cuda",
+                resolution=resolution,
+                source_path=str(dataset_path),
+            )
+            self._cameras = cameraList_from_camInfos(cam_infos, 1.0, model_args)
+
+        elif sparse_dir.exists():
             # COLMAP format
             try:
                 cameras_extrinsic = read_extrinsics_binary(
@@ -354,7 +376,7 @@ class TriangleSplattingAdapter(RendererAdapter):
         else:
             raise FileNotFoundError(
                 f"Cannot detect scene type at {dataset_path}. "
-                f"Expected sparse/ (COLMAP) or transforms_test.json (Blender)."
+                f"Expected cameras.npz (DTU), sparse/ (COLMAP), or transforms_test.json (Blender)."
             )
 
         print(f"[TriBench] Loaded {len(self._cameras)} cameras for split '{split}'")

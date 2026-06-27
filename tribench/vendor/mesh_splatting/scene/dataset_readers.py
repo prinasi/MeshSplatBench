@@ -39,6 +39,13 @@ import cv2
 import torchvision.transforms.functional as TF
 from torchvision.transforms import InterpolationMode
 import re
+from tribench.vendor.dtu_utils import (
+    decompose_dtu_projection,
+    dtu_image_paths,
+    dtu_point_cloud,
+    load_dtu_pil_image,
+    split_dtu_indices,
+)
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -359,7 +366,66 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
                            ply_path=ply_path)
     return scene_info
 
+def readDTUSceneInfo(path, images, eval, llffhold=8):
+    camera_file = os.path.join(path, "cameras.npz")
+    if not os.path.isfile(camera_file):
+        raise FileNotFoundError(f"DTU cameras.npz not found: {camera_file}")
+
+    camera_data = np.load(camera_file)
+    reading_dir = "images" if images is None else images
+    image_paths = dtu_image_paths(path, reading_dir)
+    train_indices, test_indices = split_dtu_indices(len(image_paths), eval, llffhold)
+
+    def make_camera_info(image_idx):
+        image_path = image_paths[image_idx]
+        image = load_dtu_pil_image(path, image_path)
+        width, height = image.size
+        _, R, T, FovX, FovY = decompose_dtu_projection(
+            camera_data,
+            image_idx,
+            width=width,
+            height=height,
+        )
+        image_name = image_path.stem
+        return CameraInfo(
+            uid=image_idx,
+            R=R,
+            T=T,
+            FovY=FovY,
+            FovX=FovX,
+            image=image,
+            image_path=str(image_path),
+            image_name=image_name,
+            width=width,
+            height=height,
+            normal_map=None,
+            depth_params=None,
+            depth_path="",
+        )
+
+    train_cam_infos = [make_camera_info(idx) for idx in train_indices]
+    test_cam_infos = [make_camera_info(idx) for idx in test_indices]
+    norm_cameras = train_cam_infos if train_cam_infos else test_cam_infos
+    nerf_normalization = getNerfppNorm(norm_cameras)
+
+    pcd, ply_path = dtu_point_cloud(
+        path,
+        fetch_ply=fetchPly,
+        store_ply=storePly,
+        read_points3d_binary=read_points3D_binary,
+        read_points3d_text=read_points3D_text,
+        point_cloud_cls=BasicPointCloud,
+    )
+
+    scene_info = SceneInfo(point_cloud=pcd,
+                           train_cameras=train_cam_infos,
+                           test_cameras=test_cam_infos,
+                           nerf_normalization=nerf_normalization,
+                           ply_path=ply_path)
+    return scene_info
+
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
-    "Blender" : readNerfSyntheticInfo
+    "Blender" : readNerfSyntheticInfo,
+    "DTU": readDTUSceneInfo,
 }
