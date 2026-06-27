@@ -15,7 +15,7 @@ def run_d2ts_native_config(
     dataset_root: str,
     output_dir: Path,
     max_steps: int,
-    quiet: bool = False,
+    quiet: bool = True,
 ) -> dict[str, Any]:
     """Run the bundled 2DTS VanillaTS trainer from a TriBench config."""
     from tribench.vendor.d2ts.diff_recon import VanillaTSTrainer

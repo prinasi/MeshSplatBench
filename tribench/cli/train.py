@@ -324,17 +324,25 @@ def _train_from_structured_config(
     if method_name == "2dts":
         from tribench.trainers.d2ts_native import run_d2ts_native_config
 
+        # 2dts defaults to quiet (verbose=False) unless explicitly enabled via
+        # d2ts.verbose in config or --quiet/--verbose on the CLI.
+        d2ts_cfg = Config(cfg.get("d2ts", {})).to_dict()
+        d2ts_verbose = bool(d2ts_cfg.get("verbose", False))
+        # CLI --quiet overrides verbose config; if user didn't pass --quiet
+        # and verbose is set in config, keep verbose output.
+        d2ts_quiet = quiet if quiet else not d2ts_verbose
+
         summary = run_with_training_stats(
             lambda: run_d2ts_native_config(
                 cfg=cfg,
                 dataset_root=str(dataset_root),
                 output_dir=run_output_dir,
                 max_steps=max_steps,
-                quiet=quiet,
+                quiet=d2ts_quiet,
             ),
             run_output_dir,
         )
-        if not quiet:
+        if not d2ts_quiet:
             typer.echo(f"Config snapshot saved to {run_output_dir / 'config.yaml'}")
         return summary
 

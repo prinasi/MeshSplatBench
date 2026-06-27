@@ -9,8 +9,8 @@ experiment:
 
 dataset:
   scene: stump
-  image_dir: images_4
-  resolution: 1
+  image_dir: images
+  resolution: 4
 
 d2ts:
   native_config: configs/2dts/native/mipnerf360.yaml

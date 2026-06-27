@@ -26,6 +26,10 @@ output:
 d2ts:
   clean_output_dir: false
   use_tensorboard: true
+  # Set verbose: true to enable full 2dts training output (console logs,
+  # TensorBoard, training/eval image saves).  Defaults to false so that
+  # only the final checkpoint is kept during benchmark runs.
+  verbose: false
   native_overrides:
     trainer:
       # TriBench computes final NVS metrics after rendering; native full-res LPIPS eval

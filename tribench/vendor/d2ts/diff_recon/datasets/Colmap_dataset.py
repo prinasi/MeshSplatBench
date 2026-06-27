@@ -206,7 +206,7 @@ class ColmapDatasetFactory(BaseDatasetFactory):
         images_txt_path = "sparse/0/images.txt"
         cameras_bin_path = "sparse/0/cameras.bin"
         cameras_txt_path = "sparse/0/cameras.txt"
-        images_folder = "images"
+        images_folder = getattr(self._config, "image_dir", None) or "images"
 
         if fs.hasFile(images_bin_path):
             images_path = fs.getFilePath(images_bin_path)
