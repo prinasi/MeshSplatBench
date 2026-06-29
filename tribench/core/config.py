@@ -233,7 +233,19 @@ def _apply_dtu_defaults(config: dict[str, Any]) -> dict[str, Any]:
     if isinstance(trainer_cfg, Mapping):
         trainer = dict(trainer_cfg)
         trainer.setdefault("foreground_training", mode == "foreground")
+        if mode == "foreground":
+            trainer["white_background"] = True
+        else:
+            trainer.setdefault("white_background", False)
         config["trainer"] = trainer
+
+    adapter_cfg = config.get("adapter", {})
+    if isinstance(adapter_cfg, Mapping):
+        adapter = dict(adapter_cfg)
+        render_params = dict(adapter.get("render_params", {}) or {})
+        render_params["bg_color"] = "white" if mode == "foreground" else "black"
+        adapter["render_params"] = render_params
+        config["adapter"] = adapter
     return config
 
 

@@ -77,6 +77,11 @@ def test_dtu_config_templates_include_eval_mode(tmp_path: Path):
         "  root: data/dtu\n"
         "trainer:\n"
         "  type: triangle-splatting\n"
+        "  white_background: false\n"
+        "adapter:\n"
+        "  type: triangle-splatting\n"
+        "  render_params:\n"
+        "    bg_color: black\n"
         "output:\n"
         "  dir: outputs/{method}/{dataset}/{scene}\n"
         "  metrics_file: outputs/{method}/{dataset}/{scene}/metrics.json\n"
@@ -94,6 +99,8 @@ def test_dtu_config_templates_include_eval_mode(tmp_path: Path):
     assert cfg["dataset"]["dtu_eval_mode"] == "foreground"
     assert cfg["dataset"]["root"] == "data/dtu/scan24"
     assert cfg["trainer"]["foreground_training"] is True
+    assert cfg["trainer"]["white_background"] is True
+    assert cfg["adapter"]["render_params"]["bg_color"] == "white"
     assert cfg["output"]["dir"] == "outputs/triangle-splatting/dtu-fg/scan24"
     assert cfg["output"]["metrics_file"] == "outputs/triangle-splatting/dtu-fg/scan24/metrics.json"
 
@@ -108,6 +115,10 @@ def test_dtu_config_templates_default_to_full(tmp_path: Path):
         "  scene: scan24\n"
         "trainer:\n"
         "  type: triangle-splatting\n"
+        "adapter:\n"
+        "  type: triangle-splatting\n"
+        "  render_params:\n"
+        "    bg_color: white\n"
         "output:\n"
         "  dir: outputs/{method}/{dataset}/{scene}\n"
     )
@@ -116,6 +127,8 @@ def test_dtu_config_templates_default_to_full(tmp_path: Path):
 
     assert cfg["dataset"]["dtu_eval_mode"] == "full"
     assert cfg["trainer"]["foreground_training"] is False
+    assert cfg["trainer"]["white_background"] is False
+    assert cfg["adapter"]["render_params"]["bg_color"] == "black"
     assert cfg["output"]["dir"] == "outputs/triangle-splatting/dtu-full/scan24"
 
 

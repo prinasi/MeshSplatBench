@@ -9,8 +9,8 @@ dataset:
   image_dir: images
   resolution: 2
   eval_every: 8
-  # "foreground" also enables trainer.foreground_training by default.
-  dtu_eval_mode: full # "full" (Mode A) or "foreground" (Mode B)
+  # "foreground" also enables foreground training and white render background by default.
+  dtu_eval_mode: foreground # "full" (Mode A) or "foreground" (Mode B)
 
 trainer:
   white_background: false
@@ -26,6 +26,7 @@ trainer:
 
 adapter:
   render_params:
+    # Overridden to white automatically when dataset.dtu_eval_mode is foreground.
     bg_color: black
 
 mesh:
