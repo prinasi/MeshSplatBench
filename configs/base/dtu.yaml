@@ -9,9 +9,10 @@ dataset:
   image_dir: images
   resolution: 2
   eval_every: 8
+  dtu_eval_mode: full # "full" (Mode A) or "foreground" (Mode B)
 
 trainer:
-  white_background: true
+  white_background: false
   depth_ratio: 1.0
   lambda_normals: 0.0028
   lambda_dist: 0.014
@@ -24,7 +25,7 @@ trainer:
 
 adapter:
   render_params:
-    bg_color: white
+    bg_color: black
 
 mesh:
   output: outputs/{method}/{dataset}/{scene}/mesh/fuse_post.ply
@@ -37,4 +38,3 @@ mesh:
 
 output:
   mesh_file: outputs/{method}/{dataset}/{scene}/mesh/fuse_post.ply
-

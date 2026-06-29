@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -191,8 +192,9 @@ class DiffSoupAdapter(RendererAdapter):
         mvp_inv = torch.inverse(mvp).contiguous()
         background_color = self._background_color(device)
         use_background = bool(torch.any(background_color != 0))
-        stochastic = mode != "eval"
-        grad_ctx = torch.no_grad() if mode == "eval" else torch.enable_grad()
+        return_aux = mode.endswith("_aux")
+        stochastic = mode not in {"eval", "eval_aux"}
+        grad_ctx = torch.no_grad() if mode in {"eval", "eval_aux"} else torch.enable_grad()
 
         with grad_ctx:
             clip_vertices = self._project_vertices(self._vertices, mvp)
@@ -224,17 +226,21 @@ class DiffSoupAdapter(RendererAdapter):
                     + background_color.view(1, 1, 1, 3) * (1.0 - mask)
                 )
 
-        alpha = visible.to(color.dtype)
-        depth = torch.where(visible, raster[..., 2], torch.zeros_like(raster[..., 2]))
+        alpha = visible.to(color.dtype) if (return_aux or use_background) else None
+        depth = (
+            torch.where(visible, raster[..., 2], torch.zeros_like(raster[..., 2]))
+            if return_aux
+            else None
+        )
 
         if color.shape[0] == 1:
             rgb_out = color[0].contiguous()
-            alpha_out = alpha[0].contiguous()
-            depth_out = depth[0].contiguous()
+            alpha_out = alpha[0].contiguous() if alpha is not None else None
+            depth_out = depth[0].contiguous() if depth is not None else None
         else:
             rgb_out = color.contiguous()
-            alpha_out = alpha.contiguous()
-            depth_out = depth.contiguous()
+            alpha_out = alpha.contiguous() if alpha is not None else None
+            depth_out = depth.contiguous() if depth is not None else None
 
         return RenderOutput(
             rgb=rgb_out,
@@ -247,6 +253,141 @@ class DiffSoupAdapter(RendererAdapter):
                 "stochastic": stochastic,
             },
         )
+
+    def benchmark_cameras(
+        self,
+        cameras: list[CameraBatch],
+        *,
+        warmup: int = 10,
+        trials: int = 5,
+    ) -> dict[str, Any]:
+        """Benchmark DiffSoup's native RGB inference path.
+
+        This mirrors DiffSoup's upstream ``examples/05_benchmark_fps.py``:
+        camera MVP matrices and their inverses are precomputed before timing,
+        then CUDA events measure only projection, rasterization, feature lookup,
+        view encoding, ColorMLP, and background composition.
+        """
+        if self._checkpoint is None:
+            raise RuntimeError("No model loaded. Call load_checkpoint() first.")
+        if not cameras:
+            return {
+                "benchmark_kind": "diffsoup_native_pytorch_model",
+                "num_frames": 0,
+                "fps": 0.0,
+                "gpu_fps": 0.0,
+                "timing_method": "cuda_events_precomputed_mvp",
+            }
+        if warmup < 0 or trials <= 0:
+            raise ValueError("warmup must be non-negative and trials must be positive.")
+
+        self._ensure_runtime()
+        assert self._ds is not None
+        assert self._runtime_device is not None
+        assert self._vertices is not None
+        assert self._faces is not None
+        assert self._features is not None
+        assert self._alpha is not None
+        assert self._color_mlp is not None
+        assert self._level is not None
+        assert self._feature_dim is not None
+
+        device = self._runtime_device
+        height = int(cameras[0].height)
+        width = int(cameras[0].width)
+        mvps = torch.cat(
+            [
+                self._build_mvp(camera.to(device), device=device).contiguous()
+                for camera in cameras
+            ],
+            dim=0,
+        ).contiguous()
+        mvps_inv = torch.inverse(mvps).contiguous()
+        background_color = self._background_color(device)
+        use_background = bool(torch.any(background_color != 0))
+        view_count = int(mvps.shape[0])
+
+        def render_index(index: int) -> torch.Tensor:
+            mvp = mvps[index:index + 1]
+            mvp_inv = mvps_inv[index:index + 1]
+            clip_vertices = self._project_vertices(self._vertices, mvp)
+            raster = self._ds.rasterize_multires_triangle_alpha(
+                (height, width),
+                clip_vertices,
+                self._faces,
+                level=self._level,
+                alpha_src=self._alpha,
+                stochastic=False,
+            )
+            features = self._ds.multires_triangle_color(
+                raster,
+                level=self._level,
+                feat=self._features,
+            ).view(-1, height, width, self._feature_dim)
+            features = torch.cat(
+                [features, self._ds.encode_view_dir_sh2(raster, mvp_inv)],
+                dim=-1,
+            )
+            visible = raster[..., -1] > 0
+            color = self._color_mlp(features, mask=visible).view(
+                -1, height, width, 3,
+            )
+            if use_background:
+                mask = visible.unsqueeze(-1).to(color.dtype)
+                color = (
+                    mask * color
+                    + background_color.view(1, 1, 1, 3) * (1.0 - mask)
+                )
+            return color
+
+        gpu_trial_ms: list[float] = []
+        wall_trial_ms: list[float] = []
+        with torch.inference_mode():
+            for index in range(warmup):
+                render_index(index % view_count)
+            torch.cuda.synchronize(device)
+
+            for _ in range(trials):
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+                torch.cuda.synchronize(device)
+                wall_start = time.perf_counter()
+                start_event.record()
+                for view_index in range(view_count):
+                    render_index(view_index)
+                end_event.record()
+                end_event.synchronize()
+                wall_end = time.perf_counter()
+                gpu_trial_ms.append(float(start_event.elapsed_time(end_event)))
+                wall_trial_ms.append((wall_end - wall_start) * 1000.0)
+
+        total_frames = view_count * trials
+        gpu_mean_ms = sum(gpu_trial_ms) / total_frames
+        wall_mean_ms = sum(wall_trial_ms) / total_frames
+        gpu_fps = 1000.0 / gpu_mean_ms if gpu_mean_ms > 0 else float("inf")
+        wall_fps = 1000.0 / wall_mean_ms if wall_mean_ms > 0 else float("inf")
+        return {
+            "benchmark_kind": "diffsoup_native_pytorch_model",
+            "timing_scope": (
+                "projection+rasterization+feature_lookup+"
+                "view_encoding+mlp+background"
+            ),
+            "num_frames": view_count,
+            "views": view_count,
+            "resolution": f"{width}x{height}",
+            "warmup_frames": warmup,
+            "trials": trials,
+            "total_timed_frames": total_frames,
+            "gpu_time_s": gpu_mean_ms * view_count / 1000.0,
+            "gpu_mean_frame_time_ms": gpu_mean_ms,
+            "gpu_fps": gpu_fps,
+            "time_s": wall_mean_ms * view_count / 1000.0,
+            "mean_frame_time_ms": wall_mean_ms,
+            "fps": wall_fps,
+            "timing_method": "cuda_events_precomputed_mvp",
+            "trial_gpu_ms": gpu_trial_ms,
+            "trial_wall_ms": wall_trial_ms,
+        }
 
     def to_primitive(self) -> Any:
         if self._checkpoint is None:
@@ -330,8 +471,11 @@ class DiffSoupAdapter(RendererAdapter):
             color = self._background_color_override
         else:
             ckpt = self._checkpoint or {}
-            dataset_type = str(ckpt.get("dataset_type", "")).lower()
-            white_background = dataset_type == "dtu" or "flip_z" not in ckpt
+            if "white_background" in ckpt:
+                white_background = bool(ckpt["white_background"])
+            else:
+                dataset_type = str(ckpt.get("dataset_type", "")).lower()
+                white_background = dataset_type == "dtu" or "flip_z" not in ckpt
             color = [1.0, 1.0, 1.0] if white_background else [0.0, 0.0, 0.0]
         return torch.tensor(color, dtype=torch.float32, device=device)
 

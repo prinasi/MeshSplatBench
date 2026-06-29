@@ -57,6 +57,9 @@ def run_d2ts_native_config(
     image_dir = dataset_cfg.get("image_dir")
     if image_dir is not None:
         native.dataset.image_dir = str(image_dir)
+    dtu_eval_mode = str(dataset_cfg.get("dtu_eval_mode", "full")).lower()
+    native.dataset.dtu_eval_mode = dtu_eval_mode
+    native.dataset.dtu_use_alpha = dtu_eval_mode == "foreground"
 
     native.trainer.output_dir = str(output_dir.parent)
     native.trainer.iterations = int(max_steps)
@@ -75,6 +78,11 @@ def run_d2ts_native_config(
         native.trainer.use_tensorboard = False
         native.trainer.save_train_img = False
         native.trainer.save_eval_img = False
+
+    trainer_cfg = tri_cfg.get("trainer", {}) or {}
+    if bool(trainer_cfg.get("foreground_training", False)):
+        native.trainer.train_alpha_mask = True
+        native.trainer.eval_alpha_mask = True
 
     target_point_num = d2ts_cfg.get("target_point_num")
     if target_point_num is not None:

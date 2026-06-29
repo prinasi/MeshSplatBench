@@ -142,9 +142,10 @@ def finalize_config(config: Mapping[str, Any]) -> dict[str, Any]:
     - Dataset roots split into ``dataset.root`` plus ``dataset.scene``.
     """
     resolved = _apply_scene_triangle_caps(_to_plain_dict(config))
+    resolved = _apply_dtu_defaults(resolved)
     resolved = _format_config_templates(resolved)
     resolved = _resolve_dataset_scene(resolved)
-    return _force_dtu_white_background(resolved)
+    return resolved
 
 
 def resolve_dataset_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -211,7 +212,7 @@ def _apply_scene_triangle_caps(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
-def _force_dtu_white_background(config: dict[str, Any]) -> dict[str, Any]:
+def _apply_dtu_defaults(config: dict[str, Any]) -> dict[str, Any]:
     dataset_cfg = config.get("dataset", {})
     if not isinstance(dataset_cfg, Mapping):
         return config
@@ -219,14 +220,9 @@ def _force_dtu_white_background(config: dict[str, Any]) -> dict[str, Any]:
     dataset_name = str(dataset_cfg.get("name", "")).lower()
     if dataset_type != "dtu" and dataset_name != "dtu":
         return config
-    trainer_cfg = dict(config.get("trainer", {}) or {})
-    trainer_cfg["white_background"] = True
-    config["trainer"] = trainer_cfg
-    adapter_cfg = dict(config.get("adapter", {}) or {})
-    render_params = dict(adapter_cfg.get("render_params", {}) or {})
-    render_params["bg_color"] = "white"
-    adapter_cfg["render_params"] = render_params
-    config["adapter"] = adapter_cfg
+    dataset = dict(dataset_cfg)
+    dataset.setdefault("dtu_eval_mode", "full")
+    config["dataset"] = dataset
     return config
 
 
@@ -246,17 +242,31 @@ def _format_context(config: Mapping[str, Any]) -> dict[str, Any]:
     dataset_name = dataset_cfg.get("name") or dataset_cfg.get("dataset")
     if dataset_name is None and root:
         dataset_name = Path(str(root).replace("{scene}", "")).name
+    dataset_template_name = _dataset_template_name(dataset_cfg, dataset_name)
     method = adapter_cfg.get("type") or adapter_cfg.get("name") or trainer_cfg.get("type") or trainer_cfg.get("name")
     max_steps = trainer_cfg.get("max_steps", "")
 
     return {
         "scene": str(scene) if scene is not None else "",
-        "dataset": str(dataset_name) if dataset_name is not None else "",
+        "dataset": str(dataset_template_name) if dataset_template_name is not None else "",
         "dataset_name": str(dataset_name) if dataset_name is not None else "",
+        "dtu_eval_mode": str(dataset_cfg.get("dtu_eval_mode", "")),
         "method": str(method) if method is not None else "",
         "method_name": str(method) if method is not None else "",
         "max_steps": str(max_steps) if max_steps is not None else "",
     }
+
+
+def _dataset_template_name(dataset_cfg: Mapping[str, Any], dataset_name: Any) -> Any:
+    dataset_type = str(dataset_cfg.get("type", "")).lower()
+    name_text = str(dataset_name).lower() if dataset_name is not None else ""
+    if dataset_type != "dtu" and name_text != "dtu":
+        return dataset_name
+
+    mode = str(dataset_cfg.get("dtu_eval_mode", "full")).lower()
+    if mode in {"foreground", "fg"}:
+        return "dtu-fg"
+    return "dtu-full"
 
 
 def _format_value(value: Any, context: Mapping[str, str]) -> Any:

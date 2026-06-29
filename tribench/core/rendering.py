@@ -133,6 +133,10 @@ def _cuda_sync_if_available() -> None:
         torch.cuda.synchronize()
 
 
+def _uses_cuda(device: str | torch.device) -> bool:
+    return torch.device(device).type == "cuda" and torch.cuda.is_available()
+
+
 def _renderer_metadata(adapter: RendererAdapter) -> dict[str, Any]:
     return {
         "method": getattr(adapter, "name", adapter.__class__.__name__),
@@ -140,6 +144,18 @@ def _renderer_metadata(adapter: RendererAdapter) -> dict[str, Any]:
         "checkpoint_dir": str(getattr(adapter, "_checkpoint_dir", "") or "") or None,
         "model_path": str(getattr(adapter, "_model_path", "") or "") or None,
     }
+
+
+def _sample_metrics_mode(sample: DatasetSample) -> str:
+    metadata = sample.metadata or getattr(sample.camera, "metadata", None) or {}
+    mode = str(metadata.get("dtu_eval_mode", "full"))
+    return "foreground" if mode == "foreground" else "full"
+
+
+def _dataset_metrics_mode(dataset: DatasetBase) -> str:
+    if len(dataset) == 0:
+        return "full"
+    return _sample_metrics_mode(dataset.sample(0))
 
 
 def render_dataset_split(
@@ -160,6 +176,7 @@ def render_dataset_split(
     gt_dir = output_dir / "gt"
     depth_dir = output_dir / "depth"
     alpha_dir = output_dir / "alpha"
+    mask_dir = output_dir / "mask"
 
     warmup_time_s = 0.0
     warmup_frames = 0
@@ -176,18 +193,35 @@ def render_dataset_split(
 
     records: list[RenderRecord] = []
     per_view: list[dict[str, float]] = []
+    metrics_mode = _dataset_metrics_mode(dataset)
     inference_time_s = 0.0
+    gpu_inference_time_s = 0.0
     frame_times_s: list[float] = []
+    gpu_frame_times_s: list[float] = []
+    use_cuda_events = _uses_cuda(device)
     wall_start = time.perf_counter()
     for idx in range(len(dataset)):
         sample = dataset.sample(idx)
         camera = sample.camera.to(device)
-        _cuda_sync_if_available()
-        render_start = time.perf_counter()
+        start_event = end_event = None
+        if use_cuda_events:
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+
+        render_wall_start = time.perf_counter()
+        render_mode = "eval_aux" if save_aux else "eval"
         with torch.no_grad():
-            output = adapter.render(camera, mode="eval")
-        _cuda_sync_if_available()
-        frame_time_s = time.perf_counter() - render_start
+            if start_event is not None:
+                start_event.record()
+            output = adapter.render(camera, mode=render_mode)
+            if end_event is not None:
+                end_event.record()
+        if end_event is not None:
+            end_event.synchronize()
+            gpu_frame_time_s = start_event.elapsed_time(end_event) / 1000.0
+            gpu_inference_time_s += gpu_frame_time_s
+            gpu_frame_times_s.append(gpu_frame_time_s)
+        frame_time_s = time.perf_counter() - render_wall_start
         inference_time_s += frame_time_s
         frame_times_s.append(frame_time_s)
 
@@ -198,6 +232,9 @@ def render_dataset_split(
         gt_path = None
         if save_gt and sample.image is not None:
             gt_path = save_image(gt_dir / f"{stem}.png", sample.image)
+
+        if metrics_mode == "foreground" and sample.mask is not None:
+            save_image(mask_dir / f"{stem}.png", sample.mask.expand_as(sample.image))
 
         depth_path = None
         if save_aux and output.depth is not None:
@@ -242,6 +279,17 @@ def render_dataset_split(
         "fps": num_frames / inference_time_s if inference_time_s > 0 else 0.0,
         "mean_frame_time_ms": (inference_time_s / num_frames * 1000.0) if num_frames > 0 else 0.0,
         "median_frame_time_ms": float(np.median(frame_times_s) * 1000.0) if frame_times_s else 0.0,
+        "gpu_time_s": gpu_inference_time_s if gpu_frame_times_s else None,
+        "gpu_fps": num_frames / gpu_inference_time_s if gpu_inference_time_s > 0 else None,
+        "gpu_mean_frame_time_ms": (
+            gpu_inference_time_s / num_frames * 1000.0
+            if gpu_frame_times_s and num_frames > 0
+            else None
+        ),
+        "gpu_median_frame_time_ms": (
+            float(np.median(gpu_frame_times_s) * 1000.0) if gpu_frame_times_s else None
+        ),
+        "timing_method": "cuda_events+render_wall" if gpu_frame_times_s else "render_wall",
         "warmup_frames": warmup_frames,
         "warmup_time_s": warmup_time_s,
         "wall_time_s": wall_time_s,
@@ -250,6 +298,7 @@ def render_dataset_split(
     manifest = {
         "renderer": _renderer_metadata(adapter),
         "num_frames": num_frames,
+        "metrics_mode": metrics_mode,
         "timing": timing,
         "aggregate": aggregate,
         "frames": [
@@ -280,14 +329,16 @@ def compute_metrics_from_render_dir(
     device: str | torch.device = "cpu",
     expected_method: str | None = None,
     expected_checkpoint: str | Path | None = None,
+    expected_metrics_mode: str | None = None,
 ) -> dict[str, Any] | None:
     """Compute image metrics from already-saved renders + ground truth.
 
     Reads the predicted images under ``<dir>/renders`` and the matching
     ground-truth images under ``<dir>/gt`` (paired by filename), then computes
-    PSNR/SSIM/LPIPS without re-rendering. Inference timing is reused from the
-    existing ``manifest.json`` when present. Returns ``None`` when the renders
-    or paired ground truth are missing.
+    PSNR/SSIM/LPIPS without re-rendering. DTU full/foreground semantics are
+    represented by the saved render/GT images and the manifest mode. Inference
+    timing is reused from the existing ``manifest.json`` when present.
+    Returns ``None`` when the renders or paired ground truth are missing.
     """
     from tribench.core.metrics import compute_all_metrics
 
@@ -308,6 +359,7 @@ def compute_metrics_from_render_dir(
         existing_manifest,
         expected_method=expected_method,
         expected_checkpoint=expected_checkpoint,
+        expected_metrics_mode=expected_metrics_mode,
     ):
         return None
 
@@ -351,6 +403,7 @@ def compute_metrics_from_render_dir(
 
     return {
         "num_frames": len(per_view),
+        "metrics_mode": expected_metrics_mode or "full",
         "timing": timing,
         "aggregate": aggregate,
         "frames": frames,
@@ -362,10 +415,13 @@ def _render_manifest_matches(
     *,
     expected_method: str | None,
     expected_checkpoint: str | Path | None,
+    expected_metrics_mode: str | None = None,
 ) -> bool:
-    if expected_method is None and expected_checkpoint is None:
+    if expected_method is None and expected_checkpoint is None and expected_metrics_mode is None:
         return True
     if manifest is None:
+        return False
+    if expected_metrics_mode is not None and manifest.get("metrics_mode") != expected_metrics_mode:
         return False
     renderer = manifest.get("renderer")
     if not isinstance(renderer, dict):

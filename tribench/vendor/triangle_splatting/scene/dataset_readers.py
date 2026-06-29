@@ -52,6 +52,7 @@ class CameraInfo(NamedTuple):
     image_name: str
     width: int
     height: int
+    mask: np.array = None
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -272,6 +273,36 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
                            ply_path=ply_path)
     return scene_info
 
+def _load_dtu_mask_array(path, image_path, width, height):
+    """Load a DTU foreground mask as a numpy array [H, W, 1] in [0, 1]."""
+    mask_dir = os.path.join(path, "mask")
+    if not os.path.isdir(mask_dir):
+        return None
+    from pathlib import Path as _Path
+    img_p = _Path(image_path)
+    candidates = [
+        os.path.join(mask_dir, img_p.name),
+    ]
+    stem = img_p.stem
+    import glob
+    candidates.extend(sorted(glob.glob(os.path.join(mask_dir, f"{stem}.*"))))
+    if stem.isdigit():
+        candidates.extend(sorted(glob.glob(os.path.join(mask_dir, f"{int(stem):03d}.*"))))
+    mask_path = None
+    for c in candidates:
+        if os.path.isfile(c):
+            mask_path = c
+            break
+    if mask_path is None:
+        return None
+    from PIL import Image as _Image
+    mask = _Image.open(mask_path).convert("L")
+    if mask.size != (width, height):
+        mask = mask.resize((width, height), _Image.NEAREST)
+    arr = np.asarray(mask, dtype=np.float32) / 255.0
+    return arr[..., np.newaxis]
+
+
 def readDTUSceneInfo(path, images, eval, llffhold=8):
     camera_file = os.path.join(path, "cameras.npz")
     if not os.path.isfile(camera_file):
@@ -293,6 +324,7 @@ def readDTUSceneInfo(path, images, eval, llffhold=8):
             height=height,
         )
         image_name = image_path.stem
+        mask_array = _load_dtu_mask_array(path, image_path, width, height)
         return CameraInfo(
             uid=image_idx,
             R=R,
@@ -304,6 +336,7 @@ def readDTUSceneInfo(path, images, eval, llffhold=8):
             image_name=image_name,
             width=width,
             height=height,
+            mask=mask_array,
         )
 
     train_cam_infos = [make_camera_info(idx) for idx in train_indices]

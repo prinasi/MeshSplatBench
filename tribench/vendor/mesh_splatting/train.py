@@ -321,6 +321,10 @@ def training(
         image = render_pkg["render"]
 
         gt_image = viewpoint_cam.original_image.cuda()
+        if opt.foreground_training and viewpoint_cam.gt_alpha_mask is not None:
+            fg_mask = viewpoint_cam.gt_alpha_mask.cuda()
+            image = image * fg_mask
+            gt_image = gt_image * fg_mask
         if getattr(viewpoint_cam, "normal_map", None) is not None:
             gt_normal = viewpoint_cam.normal_map.cuda()
             seg_hr = gt_normal.unsqueeze(0)

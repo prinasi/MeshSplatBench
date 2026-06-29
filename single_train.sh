@@ -108,9 +108,9 @@ Options:
   --skip_nvs_metrics       Skip NVS image metrics
   --skip_cd_metrics        Skip DTU Chamfer Distance metrics
   --skip_video             Skip video export
-  --retrain                Delete existing scene output and train again
+  --retrain                Delete existing scene output and train again; also selects training when combined with stage flags
   --force_retrain          Alias for --retrain
-  --rerun_existing         Rerun render/metrics/video/mesh even if outputs exist
+  --rerun_existing         Rerun render/metrics/video/mesh even if outputs exist; does not retrain checkpoints
   --python PATH            Python executable
   -h, --help               Show this help
 
@@ -520,7 +520,7 @@ try:
     agg = d.get("aggregate", {})
     inference = d.get("inference", {}) or {}
     training = d.get("training", {}) or {}
-    fps = d.get("inference_fps", inference.get("fps"))
+    fps = inference.get("gpu_fps", d.get("inference_fps", inference.get("fps")))
     train_mem = d.get("training_peak_gpu_memory_mib", training.get("peak_gpu_memory_mib"))
     train_time = d.get("training_time_s", training.get("total_time_s"))
     print(
@@ -573,6 +573,49 @@ except Exception:
     print("N/A")
 PY
 )
+}
+
+warn_diffsoup_metric_mismatch() {
+    local config_file="$1" model_path="$2"
+    [[ "${METHOD_ID}" == "diffsoup" ]] || return 0
+
+    local metrics_file native_metrics
+    metrics_file="$(metrics_output_file "${config_file}" "${model_path}")"
+    native_metrics="${model_path}/ckpt/test_views/metrics.txt"
+    [[ -f "${metrics_file}" && -f "${native_metrics}" ]] || return 0
+
+    "${PYTHON_BIN}" - "${metrics_file}" "${native_metrics}" "${DATASET}" "${SCENE}" <<'PY'
+import json
+import re
+import sys
+
+metrics_file, native_file, dataset, scene = sys.argv[1:5]
+try:
+    with open(metrics_file) as f:
+        current = json.load(f).get("aggregate", {}).get("psnr_mean")
+    values = []
+    with open(native_file) as f:
+        for line in f:
+            if not line[:4].isdigit():
+                continue
+            match = re.search(r"PSNR=([0-9.]+)", line)
+            if match:
+                values.append(float(match.group(1)))
+    if current is None or not values:
+        raise ValueError
+    native = sum(values) / len(values)
+except Exception:
+    raise SystemExit(0)
+
+delta = float(current) - native
+if abs(delta) >= 0.3:
+    print(
+        f"[{dataset}/{scene}] WARNING: DiffSoup current metrics PSNR={float(current):.4f} "
+        f"differs from native post-train PSNR={native:.4f} by {delta:+.4f} dB. "
+        "The checkpoint/metrics pair is likely stale or was rerun without retraining; "
+        "use --training --nvs_metrics --retrain to rebuild it."
+    )
+PY
 }
 
 read_metric_cache() {
@@ -867,6 +910,10 @@ fi
 [[ "${EXPLICIT_SKIP_CD_METRICS}" -eq 1 ]] && SKIP_CD_METRICS=1
 [[ "${EXPLICIT_SKIP_VIDEO}" -eq 1 ]] && SKIP_VIDEO=1
 
+if [[ "${FORCE_RETRAIN}" -eq 1 && "${SKIP_TRAINING}" -eq 1 && "${EXPLICIT_SKIP_TRAINING}" -eq 0 ]]; then
+    SKIP_TRAINING=0
+fi
+
 if [[ "${SKIP_TRAINING}" -eq 1 && "${SKIP_RENDERING}" -eq 1 && "${SKIP_NVS_METRICS}" -eq 1 && "${SKIP_CD_METRICS}" -eq 1 && "${SKIP_VIDEO}" -eq 1 ]]; then
     echo "No stage selected." >&2
     exit 1
@@ -950,12 +997,17 @@ for TARGET in "${EXPANDED_TARGETS[@]}"; do
         echo "[${DATASET}/${SCENE}] training=skipped existing output (${TRAINING_MARKER})"
     elif [[ "${SKIP_TRAINING}" -eq 0 && "${FORCE_RETRAIN}" -eq 1 ]]; then
         echo "[${DATASET}/${SCENE}] training=retrain enabled"
+    elif [[ "${SKIP_TRAINING}" -eq 1 ]]; then
+        echo "[${DATASET}/${SCENE}] training=not requested"
     fi
     [[ "${RENDERING_ALREADY_DONE}" -eq 1 ]] && echo "[${DATASET}/${SCENE}] rendering=skipped existing output (${RENDERING_MARKER})"
     [[ "${METRICS_ALREADY_DONE}" -eq 1 ]] && echo "[${DATASET}/${SCENE}] metrics=skipped existing output (${METRICS_MARKER})"
     [[ "${MESH_METRICS_ALREADY_DONE}" -eq 1 ]] && echo "[${DATASET}/${SCENE}] mesh_metrics=skipped existing output (${MESH_METRICS_MARKER})"
     [[ "${VIDEO_ALREADY_DONE}" -eq 1 ]] && echo "[${DATASET}/${SCENE}] video=skipped existing output (${VIDEO_MARKER})"
     [[ "${FORCE_RERUN_EXISTING}" -eq 1 ]] && echo "[${DATASET}/${SCENE}] rerun_existing=enabled"
+    if [[ "${FORCE_RERUN_EXISTING}" -eq 1 && "${SKIP_TRAINING}" -eq 1 ]]; then
+        echo "[${DATASET}/${SCENE}] note: --rerun_existing does not retrain checkpoints; add --training --retrain to rebuild."
+    fi
     echo "--------------------------------------------------------------------------------"
 
     LAST_TRAIN_MEMORY="N/A"
@@ -1011,6 +1063,7 @@ for TARGET in "${EXPANDED_TARGETS[@]}"; do
     fi
 
     read_metrics_from_json "$(metrics_output_file "${CONFIG_FILE}" "${MODEL_PATH}")"
+    warn_diffsoup_metric_mismatch "${CONFIG_FILE}" "${MODEL_PATH}"
     echo "[${DATASET}/${SCENE}] Summary: PSNR=${LAST_PSNR} SSIM=${LAST_SSIM} LPIPS=${LAST_LPIPS} FPS=${LAST_RENDER_FPS} Mem=${LAST_TRAIN_MEMORY}MiB Time=${LAST_TRAIN_TIME}s Chamfer=${LAST_CHAMFER} Video=${LAST_VIDEO}"
     SUMMARY_ROWS+=("${DATASET}/${SCENE}|${LAST_PSNR}|${LAST_SSIM}|${LAST_LPIPS}|${LAST_RENDER_FPS}|${LAST_TRAIN_MEMORY}|${LAST_TRAIN_TIME}|${LAST_CHAMFER}|${LAST_VIDEO}")
     SUMMARY_CONFIGS+=("${CONFIG_FILE}")

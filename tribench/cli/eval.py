@@ -98,6 +98,8 @@ def evaluate_images(
             stage="eval",
         )
         split = str(dataset_cfg.get("split", split))
+        dataset_kind = str(dataset_cfg.get("type", dataset_cfg.get("dataset_type", ""))).lower()
+        metrics_mode = str(dataset_cfg.get("dtu_eval_mode", "full")) if dataset_kind == "dtu" else None
         method_label = adapter_cfg.get("type")
         checkpoint_label = adapter_cfg.get("checkpoint")
         dataset_label = dataset_cfg.get("root", dataset_cfg.get("dataset_path"))
@@ -116,6 +118,8 @@ def evaluate_images(
         )
         save_config_snapshot(cfg, output_dir(cfg) or Path(output).parent)
     else:
+        is_dtu_path = dataset is not None and (Path(dataset).expanduser() / "cameras.npz").is_file()
+        metrics_mode = "full" if dataset_type == "dtu" or is_dtu_path else None
         if method is None or checkpoint is None or dataset is None:
             raise typer.BadParameter(
                 "Use --config, or provide --method, --checkpoint, and --dataset."
@@ -127,6 +131,7 @@ def evaluate_images(
         render_dir,
         expected_method=str(method_label) if method_label is not None else None,
         expected_checkpoint=checkpoint_label,
+        expected_metrics_mode=metrics_mode,
     )
     if manifest is None:
         if config is not None:
@@ -154,6 +159,25 @@ def evaluate_images(
             metrics=True,
         )
     inference = manifest.get("timing", {})
+    benchmark_inference = _benchmark_diffsoup_inference(
+        method_label,
+        adapter,
+        ds,
+        adapter_cfg if config is not None else None,
+        dataset_cfg if config is not None else None,
+        method=method,
+        checkpoint=checkpoint,
+        dataset=dataset,
+        dataset_type=dataset_type,
+        image_dir=image_dir,
+        resolution=resolution,
+        eval_every=eval_every,
+        bg_color=bg_color,
+    )
+    render_inference = inference
+    if benchmark_inference is not None:
+        inference = benchmark_inference
+    inference_fps = inference.get("gpu_fps") or inference.get("fps")
 
     training = load_training_stats_for_checkpoint(checkpoint_label, output)
     metrics = {
@@ -163,8 +187,9 @@ def evaluate_images(
         "split": split,
         "num_views": manifest["num_frames"],
         "inference": inference,
-        "inference_fps": inference.get("fps"),
-        "inference_time_s": inference.get("time_s"),
+        "inference_fps": inference_fps,
+        "inference_time_s": inference.get("gpu_time_s") or inference.get("time_s"),
+        "render_inference": render_inference if benchmark_inference is not None else None,
         "training": training,
         "training_time_s": training.get("total_time_s") if training else None,
         "training_peak_gpu_memory_mib": training.get("peak_gpu_memory_mib") if training else None,
@@ -178,6 +203,108 @@ def evaluate_images(
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     Path(output).write_text(json.dumps(metrics, indent=2))
     typer.echo(f"Metrics saved to {output}")
+
+
+def _benchmark_diffsoup_inference(
+    method_label,
+    adapter,
+    dataset_obj,
+    adapter_cfg: Mapping | None,
+    dataset_cfg: Mapping | None,
+    *,
+    method: str | None,
+    checkpoint: str | None,
+    dataset: str | None,
+    dataset_type: str,
+    image_dir: str,
+    resolution: int,
+    eval_every: int,
+    bg_color: str | None,
+) -> dict | None:
+    method_name = str(method_label or method or "").replace("_", "-").lower()
+    if method_name != "diffsoup":
+        return None
+
+    from tribench.core.builder import build_adapter, build_dataset
+    from tribench.core.datasets import load_dataset
+
+    benchmark_adapter = adapter
+    if benchmark_adapter is None:
+        if adapter_cfg is not None:
+            benchmark_adapter = build_adapter(adapter_cfg)
+        elif method is not None and checkpoint is not None:
+            benchmark_adapter = build_adapter({"type": method, "checkpoint": checkpoint})
+        else:
+            return None
+        _apply_render_overrides(benchmark_adapter, None, None, bg_color)
+
+    if not hasattr(benchmark_adapter, "benchmark_cameras"):
+        return None
+
+    benchmark_cameras = None
+    benchmark_split = "all"
+    if dataset_cfg is not None:
+        dtype = str(dataset_cfg.get("type", dataset_cfg.get("dataset_type", "auto"))).lower()
+        if dtype in {"auto", "colmap", "mipnerf360", "mip360", "tanks", "tanksandtemples", "tankstemple"}:
+            benchmark_cameras = []
+            for split_name in ("train", "test"):
+                split_cfg = dict(dataset_cfg)
+                split_cfg["split"] = split_name
+                split_dataset = build_dataset(split_cfg)
+                benchmark_cameras.extend(
+                    split_dataset.sample(i).camera for i in range(len(split_dataset))
+                )
+            benchmark_split = "train test"
+        else:
+            benchmark_cfg = dict(dataset_cfg)
+            benchmark_cfg["split"] = "all"
+            benchmark_dataset = build_dataset(benchmark_cfg)
+            benchmark_cameras = [
+                benchmark_dataset.sample(i).camera
+                for i in range(len(benchmark_dataset))
+            ]
+    elif dataset is not None:
+        dtype = str(dataset_type).lower()
+        if dtype in {"auto", "colmap", "mipnerf360", "mip360", "tanks", "tanksandtemples", "tankstemple"}:
+            benchmark_cameras = []
+            for split_name in ("train", "test"):
+                split_dataset = load_dataset(
+                    dataset,
+                    dataset_type=dataset_type,
+                    split=split_name,
+                    eval_every=eval_every,
+                    image_dir=image_dir,
+                    resolution=resolution,
+                )
+                benchmark_cameras.extend(
+                    split_dataset.sample(i).camera for i in range(len(split_dataset))
+                )
+            benchmark_split = "train test"
+        else:
+            benchmark_dataset = load_dataset(
+                dataset,
+                dataset_type=dataset_type,
+                split="all",
+                eval_every=eval_every,
+                image_dir=image_dir,
+                resolution=resolution,
+            )
+            benchmark_cameras = [
+                benchmark_dataset.sample(i).camera
+                for i in range(len(benchmark_dataset))
+            ]
+    elif dataset_obj is not None:
+        benchmark_cameras = [
+            dataset_obj.sample(i).camera
+            for i in range(len(dataset_obj))
+        ]
+        benchmark_split = str(getattr(dataset_obj, "split", "dataset"))
+    else:
+        return None
+
+    benchmark = benchmark_adapter.benchmark_cameras(benchmark_cameras, warmup=10, trials=5)
+    benchmark["benchmark_split"] = benchmark_split
+    return benchmark
 
 
 @eval_app.command("mesh")
@@ -207,8 +334,11 @@ def evaluate_mesh(
 
     cfg = None
     scene_root = None
+    dtu_eval_mode = None
     if config is not None:
         cfg = load_cli_config(config)
+        dataset_cfg_for_mode = section(cfg, "dataset")
+        dtu_eval_mode = dataset_cfg_for_mode.get("dtu_eval_mode")
         legacy_cfg = merge_dicts(section(cfg, "dtu_mesh"), merged_section(cfg, "eval", nested="dtu_mesh"))
         metric_mesh_cfg = merge_dicts(section(cfg, "mesh_eval"), merged_section(cfg, "eval", nested="mesh"))
         eval_cfg = merge_dicts(legacy_cfg, metric_mesh_cfg)
@@ -260,6 +390,8 @@ def evaluate_mesh(
         cull_masks=cull_masks,
         geometry_mode=geometry_mode,
     )
+    if dtu_eval_mode is not None:
+        metrics["dtu_eval_mode"] = str(dtu_eval_mode)
     write_mesh_metrics(metrics, output)
     typer.echo(json.dumps(metrics, indent=2))
 

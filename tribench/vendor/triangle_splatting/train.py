@@ -272,6 +272,10 @@ def training(
         triangles.importance_score[mask] = importance_score[mask]
 
         gt_image = viewpoint_cam.original_image.cuda()
+        if opt.foreground_training and viewpoint_cam.gt_alpha_mask is not None:
+            fg_mask = viewpoint_cam.gt_alpha_mask.cuda()
+            image = image * fg_mask
+            gt_image = gt_image * fg_mask
         pixel_loss = loss_fn(image, gt_image)
         loss_image = (1.0 - opt.lambda_dssim) * pixel_loss + opt.lambda_dssim * (
             1.0 - ssim(image, gt_image)

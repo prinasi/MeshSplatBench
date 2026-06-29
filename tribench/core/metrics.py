@@ -94,11 +94,11 @@ def compute_all_metrics(
     target: torch.Tensor,
 ) -> dict[str, float]:
     """Compute PSNR, SSIM, and LPIPS at once.
-    
+
     Args:
         pred: Predicted image, shape [H, W, 3] or [B, H, W, 3], values in [0, 1].
         target: Target image, same shape as pred, values in [0, 1].
-        
+
     Returns:
         Dictionary with keys 'psnr', 'ssim', 'lpips'.
     """
@@ -106,6 +106,135 @@ def compute_all_metrics(
         "psnr": compute_psnr(pred, target),
         "ssim": compute_ssim(pred, target),
         "lpips": compute_lpips(pred, target),
+    }
+
+
+def compute_masked_psnr(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+) -> float:
+    """Compute PSNR only over foreground pixels (where mask > 0.5).
+
+    Args:
+        pred: Predicted image, shape [H, W, 3], values in [0, 1].
+        target: Target image, same shape as pred, values in [0, 1].
+        mask: Binary mask, shape [H, W, 1] or [H, W], values in [0, 1].
+
+    Returns:
+        PSNR value in dB computed over foreground pixels only.
+    """
+    if mask.dim() == 3 and mask.shape[-1] == 1:
+        mask = mask.squeeze(-1)
+    fg = mask > 0.5
+    pred_fg = pred[fg]
+    target_fg = target[fg]
+    if pred_fg.numel() == 0:
+        return float("inf")
+    mse = F.mse_loss(pred_fg, target_fg, reduction="mean")
+    if mse < 1e-10:
+        return float("inf")
+    return 10.0 * torch.log10(1.0 / mse).item()
+
+
+def compute_masked_ssim(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+    data_range: float = 1.0,
+) -> float:
+    """Compute SSIM on mask-multiplied images.
+
+    Both pred and target are multiplied by the mask (zeroing background)
+    before SSIM computation.
+
+    Args:
+        pred: Predicted image, shape [H, W, 3], values in [0, 1].
+        target: Target image, same shape as pred, values in [0, 1].
+        mask: Mask, shape [H, W, 1] or [H, W], values in [0, 1].
+        data_range: Value range of the input images.
+
+    Returns:
+        SSIM value.
+    """
+    from pytorch_msssim import ssim
+
+    if mask.dim() == 2:
+        mask = mask.unsqueeze(-1)
+    pred_masked = (pred * mask).unsqueeze(0)
+    target_masked = (target * mask).unsqueeze(0)
+    pred_chw = pred_masked.permute(0, 3, 1, 2).contiguous()
+    target_chw = target_masked.permute(0, 3, 1, 2).contiguous()
+    return ssim(pred_chw, target_chw, data_range=data_range, size_average=True).item()
+
+
+def compute_masked_lpips(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+    net: str = "vgg",
+) -> float:
+    """Compute LPIPS on mask-multiplied images.
+
+    Both pred and target are multiplied by the mask before LPIPS computation.
+
+    Args:
+        pred: Predicted image, shape [H, W, 3], values in [0, 1].
+        target: Target image, same shape as pred, values in [0, 1].
+        mask: Mask, shape [H, W, 1] or [H, W], values in [0, 1].
+        net: Backbone network.
+
+    Returns:
+        LPIPS value (lower is better).
+    """
+    import lpips as lpips_lib
+
+    if mask.dim() == 2:
+        mask = mask.unsqueeze(-1)
+    pred_masked = (pred * mask).unsqueeze(0)
+    target_masked = (target * mask).unsqueeze(0)
+    pred_chw = pred_masked.permute(0, 3, 1, 2).contiguous() * 2.0 - 1.0
+    target_chw = target_masked.permute(0, 3, 1, 2).contiguous() * 2.0 - 1.0
+    loss_fn = lpips_lib.LPIPS(net=net, verbose=False).to(pred.device)
+    with torch.no_grad():
+        result = loss_fn(pred_chw, target_chw).mean().item()
+    return result
+
+
+def compute_all_metrics_with_mask(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor | None = None,
+) -> dict[str, float]:
+    """Compute full-image metrics and optionally foreground-masked metrics.
+
+    Args:
+        pred: Predicted image, shape [H, W, 3], values in [0, 1].
+        target: Target image, same shape as pred, values in [0, 1].
+        mask: Optional foreground mask, shape [H, W, 1] or [H, W].
+
+    Returns:
+        Dictionary with keys 'psnr', 'ssim', 'lpips' (full image).
+        When mask is provided, also includes 'psnr_fg', 'ssim_fg', 'lpips_fg'.
+    """
+    result = compute_all_metrics(pred, target)
+    if mask is not None:
+        result["psnr_fg"] = compute_masked_psnr(pred, target, mask)
+        result["ssim_fg"] = compute_masked_ssim(pred, target, mask)
+        result["lpips_fg"] = compute_masked_lpips(pred, target, mask)
+    return result
+
+
+def compute_foreground_metrics(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+) -> dict[str, float]:
+    """Compute foreground metrics as the primary PSNR/SSIM/LPIPS values."""
+    return {
+        "psnr": compute_masked_psnr(pred, target, mask),
+        "ssim": compute_masked_ssim(pred, target, mask),
+        "lpips": compute_masked_lpips(pred, target, mask),
     }
 
 

@@ -136,6 +136,20 @@ def _load_mask(path: Path | None, size: tuple[int, int] | None = None) -> torch.
     return torch.from_numpy(arr[..., None].clip(0.0, 1.0)).contiguous()
 
 
+def _load_alpha_mask(path: Path | None, size: tuple[int, int] | None = None) -> torch.Tensor | None:
+    if path is None or not path.exists():
+        return None
+    with Image.open(path) as image:
+        bands = image.getbands()
+        if len(bands) < 4 or bands[3] != "A":
+            return None
+        alpha = image.getchannel("A")
+        if size is not None and alpha.size != size:
+            alpha = alpha.resize(size, Image.NEAREST)
+        arr = np.asarray(alpha, dtype=np.float32) / 255.0
+    return torch.from_numpy(arr[..., None].clip(0.0, 1.0)).contiguous()
+
+
 def _camera_batch_from_w2c(
     w2c: np.ndarray,
     K: np.ndarray,
@@ -427,11 +441,17 @@ class DTUDataset(DatasetBase):
         eval_every: int = 8,
         resolution: int = 1,
         resolution_rounding: str = "round",
+        dtu_eval_mode: str = "full",
     ):
         super().__init__(dataset_path, split)
         self.eval_every = eval_every
         self.resolution = resolution
         self.resolution_rounding = resolution_rounding
+        dtu_eval_mode = str(dtu_eval_mode).lower()
+        if dtu_eval_mode not in ("full", "foreground"):
+            raise ValueError(f"dtu_eval_mode must be 'full' or 'foreground', got {dtu_eval_mode!r}")
+        self.dtu_eval_mode = dtu_eval_mode
+        self.use_alpha = dtu_eval_mode == "foreground"
         self._samples = self._load_samples()
 
     def _load_samples(self) -> list[DatasetSample]:
@@ -450,12 +470,14 @@ class DTUDataset(DatasetBase):
         selected = _split_indices(len(image_paths), self.split, self.eval_every)
         mask_dir = self.dataset_path / "mask"
         samples: list[DatasetSample] = []
+        fg_bg_color = (1.0, 1.0, 1.0)
+        bg_color = fg_bg_color if self.use_alpha else None
         for out_idx, image_idx in enumerate(selected):
             image_path = image_paths[image_idx]
             mask_path = _resolve_dtu_mask_path(mask_dir, image_path)
             gt = _load_image(
                 image_path,
-                bg_color=None if mask_path is not None else (1.0, 1.0, 1.0),
+                bg_color=bg_color,
                 resample=Image.BICUBIC,
             )
             if gt is None:
@@ -467,17 +489,20 @@ class DTUDataset(DatasetBase):
                 self.resolution,
                 self.resolution_rounding,
             )
-            mask = _load_mask(mask_path)
             if (image_width, image_height) != (width, height):
                 gt = _load_image(
                     image_path,
                     size=(width, height),
-                    bg_color=None if mask_path is not None else (1.0, 1.0, 1.0),
+                    bg_color=bg_color,
                     resample=Image.BICUBIC,
                 )
-                mask = _load_mask(mask_path, size=(width, height))
-            if mask is not None:
-                gt = gt * mask + (1.0 - mask)
+            mask = None
+            if self.use_alpha:
+                mask = _load_alpha_mask(image_path, size=(width, height))
+                if mask is None:
+                    mask = _load_mask(mask_path, size=(width, height))
+                    if mask is not None:
+                        gt = gt * mask + (1.0 - mask)
             K, native_R, native_T, _, _ = decompose_dtu_projection(
                 data,
                 image_idx,
@@ -494,8 +519,11 @@ class DTUDataset(DatasetBase):
                 "index": image_idx,
                 "split_index": out_idx,
                 "split": self.split,
-                "eval_background_color": (1.0, 1.0, 1.0),
+                "dtu_eval_mode": self.dtu_eval_mode,
+                "dtu_use_alpha": self.use_alpha,
             }
+            if self.use_alpha:
+                metadata["eval_background_color"] = fg_bg_color
             camera = _camera_batch_from_w2c(
                 w2c,
                 K,
@@ -544,6 +572,7 @@ def load_dataset(
     image_dir: str = "images",
     resolution: int = 1,
     resolution_rounding: str = "round",
+    dtu_eval_mode: str = "full",
 ) -> DatasetBase:
     dtype = infer_dataset_type(dataset_path, dataset_type)
     if dtype in {"colmap", "mipnerf360", "tanks", "tanksandtemples", "tankstemple"}:
@@ -569,6 +598,7 @@ def load_dataset(
             eval_every=eval_every,
             resolution=resolution,
             resolution_rounding=resolution_rounding,
+            dtu_eval_mode=dtu_eval_mode,
         )
     raise KeyError(f"Unknown dataset type '{dtype}'")
 

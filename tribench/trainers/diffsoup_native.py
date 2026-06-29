@@ -118,6 +118,10 @@ def _run_mip360_script(
         allowed={0, 1, 2, 4, 8},
     )
     white_background = trainer_cfg.get("white_background")
+    if white_background is None and dataset_kind == "dtu":
+        white_background = False
+    dtu_eval_mode = str(dataset_cfg.get("dtu_eval_mode", trainer_cfg.get("dtu_eval_mode", "full"))).lower()
+    foreground_training = bool(trainer_cfg.get("foreground_training", False))
     with _reference_import_context(examples_dir):
         module.main(
             scene_root=str(Path(dataset_root).expanduser()),
@@ -129,6 +133,8 @@ def _run_mip360_script(
             dataset_type=dataset_kind,
             out_dir=str(output_dir),
             white_background=None if white_background is None else bool(white_background),
+            foreground_training=foreground_training,
+            dtu_eval_mode=dtu_eval_mode,
         )
 
 

@@ -46,6 +46,7 @@ class ColmapDataset(Dataset):
         znear: float = 1.0,
         prefetch: bool = False,
         neighbor_cams_args: Namespace = None,
+        use_alpha: bool = True,
     ):
         super().__init__()
         self.file_handler = file_handler
@@ -53,6 +54,7 @@ class ColmapDataset(Dataset):
         self.target_res = target_res
         self.znear = znear
         self.background = background
+        self.use_alpha = use_alpha
 
         if prefetch:
             self._prefetched_imgs = [self._get_image(cam_info.image_path) for cam_info in self.cam_infos]
@@ -87,6 +89,34 @@ class ColmapDataset(Dataset):
             raise ValueError("dataset background must be either 'white', 'black', 'random' or None")
         return bg_color
 
+    def _load_external_mask(self, cam_info: CameraInfo, height: int, width: int):
+        """Load a foreground mask from the mask/ directory if available."""
+        if not hasattr(self, "_mask_dir"):
+            base_dir = os.path.dirname(os.path.dirname(cam_info.image_path))
+            self._mask_dir = os.path.join(base_dir, "mask")
+            if not os.path.isdir(self._mask_dir):
+                self._mask_dir = None
+        if self._mask_dir is None:
+            return None
+        img_name = os.path.basename(cam_info.image_path)
+        stem = os.path.splitext(img_name)[0]
+        import glob
+        candidates = [os.path.join(self._mask_dir, img_name)]
+        candidates.extend(sorted(glob.glob(os.path.join(self._mask_dir, f"{stem}.*"))))
+        if stem.isdigit():
+            candidates.extend(sorted(glob.glob(os.path.join(self._mask_dir, f"{int(stem):03d}.*"))))
+        mask_path = None
+        for c in candidates:
+            if os.path.isfile(c):
+                mask_path = c
+                break
+        if mask_path is None:
+            return None
+        mask = Image.open(mask_path).convert("L")
+        if mask.size != (width, height):
+            mask = mask.resize((width, height), Image.NEAREST)
+        return np.asarray(mask, dtype=np.float32) / 255.0
+
     def _get_image(self, image_path: str) -> np.ndarray:
         """
         Load, resize and normalize the image
@@ -106,8 +136,21 @@ class ColmapDataset(Dataset):
 
         image = Image.open(self.file_handler.getFilePath(image_path))
         img_size = solve_target_res(self.target_res, image.width, image.height)
-        image = image.resize(img_size, Image.Resampling.BILINEAR)
-        image_array = np.array(image, dtype=np.float32).transpose(2, 0, 1) / 255.0
+        bands = image.getbands()
+        if not self.use_alpha and len(bands) >= 3:
+            channels = image.split()[:3]
+            if image.size != img_size:
+                channels = tuple(channel.resize(img_size, Image.Resampling.BILINEAR) for channel in channels)
+            image_array = np.stack(
+                [np.asarray(channel, dtype=np.float32) for channel in channels],
+                axis=0,
+            ) / 255.0
+        else:
+            image = image.resize(img_size, Image.Resampling.BILINEAR)
+            image_array = np.array(image, dtype=np.float32)
+            if image_array.ndim == 2:
+                image_array = np.repeat(image_array[..., None], 3, axis=-1)
+            image_array = image_array.transpose(2, 0, 1) / 255.0
         image.close()
         return image_array
 
@@ -122,13 +165,16 @@ class ColmapDataset(Dataset):
             gt_image_array = self._get_image(cam_info.image_path)
         bg_color = self._get_bg_color()
 
-        if gt_image_array is not None and gt_image_array.shape[0] == 4:
+        if self.use_alpha and gt_image_array is not None and gt_image_array.shape[0] == 4:
             gt_alpha_mask = gt_image_array[3]
             gt_image_array = gt_image_array[:3]
             if bg_color is not None:
                 gt_image_array = gt_image_array * gt_alpha_mask + bg_color.reshape(3, 1, 1) * (1 - gt_alpha_mask)
         else:
             gt_alpha_mask = None
+
+        if self.use_alpha and gt_alpha_mask is None and gt_image_array is not None:
+            gt_alpha_mask = self._load_external_mask(cam_info, gt_image_array.shape[1], gt_image_array.shape[2])
 
         camera = Camera(
             R=cam_info.R,
@@ -166,6 +212,10 @@ class ColmapDatasetFactory(BaseDatasetFactory):
         test_background = config.test_background if config.test_background is not None else background
         prefetch = config.prefetch if config.prefetch is not None else False
         neighbor_cams_args = config.neighbor_cams_args if config.neighbor_cams_args is not None else None
+        use_alpha = getattr(config, "dtu_use_alpha", None)
+        if use_alpha is None:
+            dtu_eval_mode = str(getattr(config, "dtu_eval_mode", "foreground")).lower()
+            use_alpha = dtu_eval_mode == "foreground"
 
         self._file_handler = self._get_file_handler()
 
@@ -183,8 +233,25 @@ class ColmapDatasetFactory(BaseDatasetFactory):
 
         if neighbor_cams_args is not None:
             self._logger.info("Loading neighbor cameras")
-        self._train_dataset = ColmapDataset(self._file_handler, train_cam_infos, train_target_res, background, self.znear, prefetch, neighbor_cams_args)
-        self._test_dataset = ColmapDataset(self._file_handler, test_cam_infos, test_target_res, test_background, self.znear, prefetch)
+        self._train_dataset = ColmapDataset(
+            self._file_handler,
+            train_cam_infos,
+            train_target_res,
+            background,
+            self.znear,
+            prefetch,
+            neighbor_cams_args,
+            use_alpha=bool(use_alpha),
+        )
+        self._test_dataset = ColmapDataset(
+            self._file_handler,
+            test_cam_infos,
+            test_target_res,
+            test_background,
+            self.znear,
+            prefetch,
+            use_alpha=bool(use_alpha),
+        )
 
         if len(self._train_dataset) > 0:
             train_cam = self._train_dataset[0]

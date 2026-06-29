@@ -1,0 +1,11 @@
+# @format
+# Mode B: foreground DTU protocol.
+# DTU images are alpha-composited over white and foreground masks supervise loss.
+
+_base_: dtu.yaml
+
+dataset:
+  dtu_eval_mode: foreground
+
+trainer:
+  foreground_training: true

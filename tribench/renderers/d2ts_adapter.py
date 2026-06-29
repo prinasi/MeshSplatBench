@@ -357,6 +357,7 @@ class D2TSAdapter(RendererAdapter):
                 "contrib_sum": rendering.get("contrib_sum"),
                 "contrib_max": rendering.get("contrib_max"),
                 "n_contribs": rendering.get("n_contribs"),
+                "background_color": bg_color.detach().cpu().tolist(),
             },
         )
 

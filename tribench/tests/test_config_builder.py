@@ -67,6 +67,56 @@ def test_load_config_resolves_scene_and_templates(tmp_path: Path):
     assert cfg["output"]["dir"] == "outputs/triangle-splatting/mipnerf360/bicycle"
 
 
+def test_dtu_config_templates_include_eval_mode(tmp_path: Path):
+    base = tmp_path / "base.yaml"
+    child = tmp_path / "child.yaml"
+    base.write_text(
+        "dataset:\n"
+        "  name: dtu\n"
+        "  type: dtu\n"
+        "  root: data/dtu\n"
+        "trainer:\n"
+        "  type: triangle-splatting\n"
+        "output:\n"
+        "  dir: outputs/{method}/{dataset}/{scene}\n"
+        "  metrics_file: outputs/{method}/{dataset}/{scene}/metrics.json\n"
+    )
+    child.write_text(
+        "_base_: base.yaml\n"
+        "dataset:\n"
+        "  scene: scan24\n"
+        "  dtu_eval_mode: foreground\n"
+    )
+
+    cfg = load_config(child)
+
+    assert cfg["dataset"]["name"] == "dtu"
+    assert cfg["dataset"]["dtu_eval_mode"] == "foreground"
+    assert cfg["dataset"]["root"] == "data/dtu/scan24"
+    assert cfg["output"]["dir"] == "outputs/triangle-splatting/dtu-fg/scan24"
+    assert cfg["output"]["metrics_file"] == "outputs/triangle-splatting/dtu-fg/scan24/metrics.json"
+
+
+def test_dtu_config_templates_default_to_full(tmp_path: Path):
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "dataset:\n"
+        "  name: dtu\n"
+        "  type: dtu\n"
+        "  root: data/dtu\n"
+        "  scene: scan24\n"
+        "trainer:\n"
+        "  type: triangle-splatting\n"
+        "output:\n"
+        "  dir: outputs/{method}/{dataset}/{scene}\n"
+    )
+
+    cfg = load_config(config)
+
+    assert cfg["dataset"]["dtu_eval_mode"] == "full"
+    assert cfg["output"]["dir"] == "outputs/triangle-splatting/dtu-full/scan24"
+
+
 def test_resolve_dataset_config_does_not_duplicate_scene():
     cfg = resolve_dataset_config({"root": "data/mipnerf360/bicycle", "scene": "bicycle"})
 

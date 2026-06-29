@@ -66,7 +66,41 @@ def test_load_image_composites_rgba_when_background_is_given(tmp_path):
     assert torch.allclose(loaded[0, 0], torch.ones(3), atol=1 / 255)
 
 
-def test_dtu_dataset_composites_mask_to_white(tmp_path):
+def test_dtu_dataset_full_mode_ignores_alpha_and_external_mask(tmp_path):
+    root = tmp_path / "scan24"
+    (root / "images").mkdir(parents=True)
+    (root / "mask").mkdir()
+
+    image = Image.new("RGBA", (2, 1))
+    image.putdata([(20, 40, 80, 0), (10, 30, 50, 255)])
+    image.save(root / "images" / "0000.png")
+
+    external_mask = Image.new("L", (2, 1), 0)
+    external_mask.save(root / "mask" / "000.png")
+
+    K = np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 0.5], [0.0, 0.0, 1.0]], dtype=np.float32)
+    extrinsic = np.array(
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 2.0]],
+        dtype=np.float32,
+    )
+    world_mat = np.eye(4, dtype=np.float32)
+    world_mat[:3, :4] = K @ extrinsic
+    np.savez(
+        root / "cameras.npz",
+        world_mat_0=world_mat,
+        scale_mat_0=np.eye(4, dtype=np.float32),
+    )
+
+    sample = DTUDataset(root, split="all", resolution=1, dtu_eval_mode="full").sample(0)
+
+    assert torch.allclose(sample.image[0, 0], torch.tensor([20, 40, 80]) / 255.0, atol=1 / 255)
+    assert torch.allclose(sample.image[0, 1], torch.tensor([10, 30, 50]) / 255.0, atol=1 / 255)
+    assert sample.mask is None
+    assert sample.metadata["dtu_eval_mode"] == "full"
+    assert "eval_background_color" not in sample.metadata
+
+
+def test_dtu_dataset_foreground_composites_mask_to_white(tmp_path):
     root = tmp_path / "scan24"
     (root / "images").mkdir(parents=True)
     (root / "mask").mkdir()
@@ -94,13 +128,47 @@ def test_dtu_dataset_composites_mask_to_white(tmp_path):
         scale_mat_0=np.eye(4, dtype=np.float32),
     )
 
-    dataset = DTUDataset(root, split="all", resolution=2)
+    dataset = DTUDataset(root, split="all", resolution=2, dtu_eval_mode="foreground")
     sample = dataset.sample(0)
 
     assert sample.image.shape == (2, 2, 3)
     assert torch.allclose(sample.image[:, 0], torch.tensor([1.0, 0.0, 0.0]).expand(2, 3), atol=1 / 255)
     assert torch.allclose(sample.image[:, 1], torch.ones(2, 3), atol=1 / 255)
     assert sample.mask is not None
+
+
+def test_dtu_dataset_prefers_rgba_alpha_without_double_compositing(tmp_path):
+    root = tmp_path / "scan24"
+    (root / "images").mkdir(parents=True)
+    (root / "mask").mkdir()
+
+    image = Image.new("RGBA", (2, 1))
+    image.putdata([(255, 0, 0, 128), (0, 255, 0, 255)])
+    image.save(root / "images" / "0000.png")
+
+    external_mask = Image.new("L", (2, 1), 0)
+    external_mask.save(root / "mask" / "000.png")
+
+    K = np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 0.5], [0.0, 0.0, 1.0]], dtype=np.float32)
+    extrinsic = np.array(
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 2.0]],
+        dtype=np.float32,
+    )
+    world_mat = np.eye(4, dtype=np.float32)
+    world_mat[:3, :4] = K @ extrinsic
+    np.savez(
+        root / "cameras.npz",
+        world_mat_0=world_mat,
+        scale_mat_0=np.eye(4, dtype=np.float32),
+    )
+
+    sample = DTUDataset(root, split="all", resolution=1, dtu_eval_mode="foreground").sample(0)
+
+    expected_edge = torch.tensor([1.0, 127 / 255.0, 127 / 255.0])
+    assert torch.allclose(sample.image[0, 0], expected_edge, atol=1 / 255)
+    assert torch.allclose(sample.image[0, 1], torch.tensor([0.0, 1.0, 0.0]), atol=1 / 255)
+    assert sample.mask is not None
+    assert torch.allclose(sample.mask[0, :, 0], torch.tensor([128 / 255.0, 1.0]), atol=1 / 255)
 
 
 def test_native_dtu_reader_matches_eval_camera_and_mask(tmp_path):
@@ -129,7 +197,7 @@ def test_native_dtu_reader_matches_eval_camera_and_mask(tmp_path):
         scale_mat_0=np.eye(4, dtype=np.float32),
     )
 
-    eval_sample = DTUDataset(root, split="all", resolution=1).sample(0)
+    eval_sample = DTUDataset(root, split="all", resolution=1, dtu_eval_mode="foreground").sample(0)
     scene_info = readDTUSceneInfo(str(root), "images", eval=False)
     native_cam = scene_info.train_cameras[0]
 

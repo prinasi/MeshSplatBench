@@ -52,6 +52,7 @@ class ModelParams(ParamGroup):
         self._images = "images"
         self._resolution = -1
         self._white_background = False
+        self.dtu_eval_mode = "full"
         self.data_device = "cuda"
         self.eval = False
         super().__init__(parser, "Loading Parameters", sentinel)
@@ -83,6 +84,7 @@ class OptimizationParams(ParamGroup):
         self.densify_from_iter = 500
         self.densify_until_iter = 25_000
         self.random_background = False
+        self.foreground_training = False
         self.mask_threshold = 0.01
         self.lr_mask = 0.01
         self.nb_points = 3

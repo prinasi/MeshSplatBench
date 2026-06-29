@@ -239,7 +239,11 @@ def read_row(target: MetricsTarget) -> MetricsRow:
         row.psnr = _number(aggregate.get("psnr_mean"))
         row.ssim = _number(aggregate.get("ssim_mean"))
         row.lpips = _number(aggregate.get("lpips_mean"))
-        row.fps = _number(data.get("inference_fps")) or _number(inference.get("fps"))
+        row.fps = (
+            _number(inference.get("gpu_fps"))
+            or _number(data.get("inference_fps"))
+            or _number(inference.get("fps"))
+        )
         row.training_memory_mib = _number(data.get("training_peak_gpu_memory_mib")) or _number(
             training.get("peak_gpu_memory_mib")
         )

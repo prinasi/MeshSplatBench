@@ -549,6 +549,7 @@ def load_dtu_scene(
     downscale: int = 2,
     device: Optional[torch.device] = None,
     white_background: bool = True,
+    use_alpha: bool = True,
 ) -> Dict:
     """Load a DTU scan in the common ``images/``, ``mask/``, ``cameras.npz`` format.
 
@@ -600,29 +601,36 @@ def load_dtu_scene(
 
         Tcw = np.linalg.inv(c2w).astype(np.float32)
 
-        image = torch.from_numpy(iio.imread(image_paths[idx]).astype(np.float32) / 255.0)
+        image_np = iio.imread(image_paths[idx]).astype(np.float32) / 255.0
+        image = torch.from_numpy(image_np)
         if image.ndim == 2:
             image = image[..., None].expand(-1, -1, 3)
+        alpha_mask: Optional[torch.Tensor] = None
+        if use_alpha and image.ndim == 3 and image.shape[-1] >= 4:
+            alpha_mask = image[..., 3:4].clamp(0, 1)
         image = image[..., :3]
 
-        image_base = os.path.basename(image_paths[idx])
-        mask_path = os.path.join(mask_dir, image_base)
-        if not os.path.isfile(mask_path):
-            mask_matches = sorted(glob.glob(os.path.join(mask_dir, os.path.splitext(image_base)[0] + ".*")))
-            mask_path = mask_matches[0] if mask_matches else mask_path
-        if not os.path.isfile(mask_path):
-            stem = os.path.splitext(image_base)[0]
-            if stem.isdigit():
-                mask_matches = sorted(glob.glob(os.path.join(mask_dir, f"{int(stem):03d}.*")))
-                mask_path = mask_matches[0] if mask_matches else mask_path
         mask: Optional[torch.Tensor] = None
-        if os.path.isfile(mask_path):
-            mask_np = iio.imread(mask_path).astype(np.float32) / 255.0
-            if mask_np.ndim == 3:
-                mask_np = mask_np[..., :1]
-            else:
-                mask_np = mask_np[..., None]
-            mask = torch.from_numpy(mask_np).clamp(0, 1)
+        if use_alpha:
+            mask = alpha_mask
+            if mask is None:
+                image_base = os.path.basename(image_paths[idx])
+                mask_path = os.path.join(mask_dir, image_base)
+                if not os.path.isfile(mask_path):
+                    mask_matches = sorted(glob.glob(os.path.join(mask_dir, os.path.splitext(image_base)[0] + ".*")))
+                    mask_path = mask_matches[0] if mask_matches else mask_path
+                if not os.path.isfile(mask_path):
+                    stem = os.path.splitext(image_base)[0]
+                    if stem.isdigit():
+                        mask_matches = sorted(glob.glob(os.path.join(mask_dir, f"{int(stem):03d}.*")))
+                        mask_path = mask_matches[0] if mask_matches else mask_path
+                if os.path.isfile(mask_path):
+                    mask_np = iio.imread(mask_path).astype(np.float32) / 255.0
+                    if mask_np.ndim == 3:
+                        mask_np = mask_np[..., :1]
+                    else:
+                        mask_np = mask_np[..., None]
+                    mask = torch.from_numpy(mask_np).clamp(0, 1)
 
         if resize_to is not None:
             image = TF.resize(
@@ -638,8 +646,11 @@ def load_dtu_scene(
                     interpolation=TF.InterpolationMode.NEAREST,
                 ).permute(1, 2, 0)
 
-        if mask is not None and white_background:
-            image = image * mask + (1.0 - mask)
+        if mask is not None:
+            if white_background:
+                image = image * mask + (1.0 - mask)
+            else:
+                image = image * mask
 
         item = {
             "c2w": torch.from_numpy(c2w).float(),
@@ -647,8 +658,12 @@ def load_dtu_scene(
             "image": image.clamp(0, 1),
             "img_path": image_paths[idx],
         }
+        if mask is not None:
+            item["mask"] = mask.clamp(0, 1)
         if device is not None:
-            for k in ("c2w", "Tcw", "image"):
+            for k in ("c2w", "Tcw", "image", "mask"):
+                if k not in item:
+                    continue
                 if torch.is_tensor(item[k]):
                     item[k] = item[k].to(device)
         frames.append(item)

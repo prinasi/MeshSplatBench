@@ -95,6 +95,36 @@ def _colmap_point_init(
     return xyz_np, total_points, spacing
 
 
+def _load_dtu_masks(scene_root, frames, H, W, downscale, device):
+    """Load DTU foreground masks for training frames."""
+    import glob
+    from PIL import Image as _PILImage
+    mask_dir = os.path.join(scene_root, "mask")
+    if not os.path.isdir(mask_dir):
+        return None
+    masks = []
+    for fr in frames:
+        img_name = os.path.basename(fr.get("img_path", fr.get("image_path", "")))
+        stem = os.path.splitext(img_name)[0]
+        candidates = [os.path.join(mask_dir, img_name)]
+        candidates.extend(sorted(glob.glob(os.path.join(mask_dir, f"{stem}.*"))))
+        if stem.isdigit():
+            candidates.extend(sorted(glob.glob(os.path.join(mask_dir, f"{int(stem):03d}.*"))))
+        mask_path = None
+        for c in candidates:
+            if os.path.isfile(c):
+                mask_path = c
+                break
+        if mask_path is None:
+            return None
+        mask = _PILImage.open(mask_path).convert("L")
+        if mask.size != (W, H):
+            mask = mask.resize((W, H), _PILImage.NEAREST)
+        arr = np.asarray(mask, dtype=np.float32) / 255.0
+        masks.append(torch.from_numpy(arr).to(device))
+    return torch.stack(masks, dim=0).unsqueeze(-1)
+
+
 def _composite_white_background(color: torch.Tensor, rast_out: torch.Tensor) -> torch.Tensor:
     mask = (rast_out.detach()[..., -1:] > 0).to(color.dtype)
     return mask * color + (1.0 - mask)
@@ -110,6 +140,8 @@ def main(
     dataset_type: str = "auto",
     out_dir: Optional[str] = None,
     white_background: Optional[bool] = None,
+    foreground_training: bool = False,
+    dtu_eval_mode: str = "full",
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     scene_name = os.path.basename(os.path.normpath(scene_root))
@@ -126,12 +158,15 @@ def main(
     if dataset_type not in {"colmap", "dtu"}:
         raise ValueError("dataset_type must be one of: auto, colmap, dtu")
     use_white_background = dataset_type == "dtu" if white_background is None else bool(white_background)
+    use_dtu_alpha = str(dtu_eval_mode).lower() == "foreground"
 
     # ── Load data ────────────────────────────────────────────────────
 
     if dataset_type == "dtu":
         train_data = load_dtu_scene(
             scene_root, split="train", downscale=downscale, device=device,
+            white_background=use_white_background,
+            use_alpha=use_dtu_alpha,
         )
     else:
         train_data = load_mipnerf360_scene(
@@ -190,6 +225,13 @@ def main(
     # ── Precompute GT and MVPs ───────────────────────────────────────
 
     gt_rgb = torch.stack([fr["image"].clamp(0, 1) for fr in frames], dim=0)
+
+    gt_masks = None
+    if foreground_training and dataset_type == "dtu":
+        if all("mask" in fr for fr in frames):
+            gt_masks = torch.stack([fr["mask"].to(device) for fr in frames], dim=0)
+        else:
+            gt_masks = _load_dtu_masks(scene_root, frames, H, W, downscale, device)
 
     z_near_train, z_near_test, z_far = 0.01, 0.5, 100.0
 
@@ -302,9 +344,15 @@ def main(
             level=Rmax, alpha_src=alpha_acc,
         )
         color = ds.edge_grad(color, rast_out, V_clip, F)
-        l1_loss = (batch_gt_rgb - color).abs().mean()
+        loss_color = color
+        loss_gt = batch_gt_rgb
+        if gt_masks is not None:
+            batch_mask = gt_masks[batch_idx]
+            loss_color = loss_color * batch_mask
+            loss_gt = loss_gt * batch_mask
+        l1_loss = (loss_gt - loss_color).abs().mean()
         ssim_loss = 0.5 * (1 - ssim(
-            batch_gt_rgb.permute(0, 3, 1, 2), color.permute(0, 3, 1, 2), data_range=1.0,
+            loss_gt.permute(0, 3, 1, 2), loss_color.permute(0, 3, 1, 2), data_range=1.0,
         ))
         loss = aux_loss + 0.8 * l1_loss + 0.2 * ssim_loss
 
@@ -441,6 +489,8 @@ def main(
         "K": K.detach().cpu(), "H": H, "W": W,
         "flip_z": flip_z,
         "dataset_type": dataset_type,
+        "dtu_eval_mode": str(dtu_eval_mode).lower(),
+        "white_background": bool(use_white_background),
         "steps": steps,
         "losses": losses,
         "seed": SEED,
@@ -452,6 +502,8 @@ def main(
     if dataset_type == "dtu":
         test_data = load_dtu_scene(
             scene_root, split="test", downscale=downscale, device=device,
+            white_background=use_white_background,
+            use_alpha=use_dtu_alpha,
         )
     else:
         test_data = load_mipnerf360_scene(
@@ -525,6 +577,9 @@ if __name__ == "__main__":
                         help="Output directory (default: ./results/01_mip360/<scene>)")
     parser.add_argument("--white_background", action="store_true", default=None,
                         help="Composite unrasterized pixels over white; defaults to true for DTU only.")
+    parser.add_argument("--foreground_training", action="store_true", default=False,
+                        help="Apply foreground mask to loss (Mode B).")
+    parser.add_argument("--dtu_eval_mode", choices=["full", "foreground"], default="full")
     args = parser.parse_args()
 
     main(
@@ -537,4 +592,6 @@ if __name__ == "__main__":
         dataset_type=args.dataset_type,
         out_dir=args.out_dir,
         white_background=args.white_background,
+        foreground_training=args.foreground_training,
+        dtu_eval_mode=args.dtu_eval_mode,
     )

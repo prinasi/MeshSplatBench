@@ -1,0 +1,11 @@
+# @format
+# Mode A: full-image DTU protocol.
+# DTU images are loaded from RGB only; alpha/mask channels are ignored.
+
+_base_: dtu.yaml
+
+dataset:
+  dtu_eval_mode: full
+
+trainer:
+  foreground_training: false

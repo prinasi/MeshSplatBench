@@ -52,10 +52,9 @@ def _coerce_value(value: str) -> object:
         return value
 
 
-def _force_dtu_white_background(dataset_root: str | Path, trainer_cfg: dict) -> None:
-    root = Path(dataset_root).expanduser()
-    if (root / "cameras.npz").is_file():
-        trainer_cfg["white_background"] = True
+def _preserve_dtu_background_defaults(dataset_root: str | Path, trainer_cfg: dict) -> None:
+    """Keep DTU background colours under method/config control."""
+    return None
 
 
 def _parse_extra_args(raw_args: list[str]) -> dict[str, object]:
@@ -157,7 +156,7 @@ def train(
     except KeyError:
         canonical_method = method.lower().replace("_", "-")
 
-    _force_dtu_white_background(dataset.expanduser(), kwargs)
+    _preserve_dtu_background_defaults(dataset.expanduser(), kwargs)
 
     if canonical_method == "diffsoup":
         from tribench.trainers.diffsoup_native import run_diffsoup_native_config
@@ -259,12 +258,12 @@ def _train_from_structured_config(
 
     if "image_dir" in dataset_cfg and "images" not in trainer_cfg:
         trainer_cfg["images"] = dataset_cfg["image_dir"]
-    for key in ("resolution", "eval_split", "llffhold"):
+    for key in ("resolution", "eval_split", "llffhold", "dtu_eval_mode"):
         if key in dataset_cfg and key not in trainer_cfg:
             trainer_cfg[key] = dataset_cfg[key]
 
     method_name = str(trainer_cfg.get("type", trainer_cfg.get("name", ""))).replace("_", "-")
-    _force_dtu_white_background(dataset_root, trainer_cfg)
+    _preserve_dtu_background_defaults(dataset_root, trainer_cfg)
     native_loop = bool(
         trainer_cfg.pop(
             "native_loop",
@@ -477,6 +476,9 @@ def _triangle_splatting_native_argv(
     resolution = trainer_cfg.get("resolution")
     if resolution is not None:
         argv.extend(["-r", str(resolution)])
+    dtu_eval_mode = trainer_cfg.get("dtu_eval_mode")
+    if dtu_eval_mode is not None:
+        argv.extend(["--dtu_eval_mode", str(dtu_eval_mode)])
     if bool(trainer_cfg.get("white_background", False)):
         argv.append("--white_background")
     if bool(trainer_cfg.get("eval_split", True)):
@@ -522,6 +524,8 @@ def _triangle_splatting_native_argv(
             argv.extend([f"--{key}", str(trainer_cfg[key])])
     if bool(trainer_cfg.get("random_background", False)):
         argv.append("--random_background")
+    if bool(trainer_cfg.get("foreground_training", False)):
+        argv.append("--foreground_training")
     return argv
 
 
@@ -551,6 +555,9 @@ def _mesh_splatting_native_argv(
     resolution = trainer_cfg.get("resolution")
     if resolution is not None:
         argv.extend(["-r", str(resolution)])
+    dtu_eval_mode = trainer_cfg.get("dtu_eval_mode")
+    if dtu_eval_mode is not None:
+        argv.extend(["--dtu_eval_mode", str(dtu_eval_mode)])
     if bool(trainer_cfg.get("white_background", False)):
         argv.append("--white_background")
     if bool(trainer_cfg.get("eval_split", True)):
@@ -608,4 +615,6 @@ def _mesh_splatting_native_argv(
             argv.extend([f"--{key}", str(trainer_cfg[key])])
     if bool(trainer_cfg.get("random_background", False)):
         argv.append("--random_background")
+    if bool(trainer_cfg.get("foreground_training", False)):
+        argv.append("--foreground_training")
     return argv
