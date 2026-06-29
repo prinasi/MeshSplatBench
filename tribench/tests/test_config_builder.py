@@ -93,6 +93,7 @@ def test_dtu_config_templates_include_eval_mode(tmp_path: Path):
     assert cfg["dataset"]["name"] == "dtu"
     assert cfg["dataset"]["dtu_eval_mode"] == "foreground"
     assert cfg["dataset"]["root"] == "data/dtu/scan24"
+    assert cfg["trainer"]["foreground_training"] is True
     assert cfg["output"]["dir"] == "outputs/triangle-splatting/dtu-fg/scan24"
     assert cfg["output"]["metrics_file"] == "outputs/triangle-splatting/dtu-fg/scan24/metrics.json"
 
@@ -114,7 +115,28 @@ def test_dtu_config_templates_default_to_full(tmp_path: Path):
     cfg = load_config(config)
 
     assert cfg["dataset"]["dtu_eval_mode"] == "full"
+    assert cfg["trainer"]["foreground_training"] is False
     assert cfg["output"]["dir"] == "outputs/triangle-splatting/dtu-full/scan24"
+
+
+def test_dtu_config_respects_explicit_foreground_training_override(tmp_path: Path):
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "dataset:\n"
+        "  name: dtu\n"
+        "  type: dtu\n"
+        "  root: data/dtu\n"
+        "  scene: scan24\n"
+        "  dtu_eval_mode: foreground\n"
+        "trainer:\n"
+        "  type: triangle-splatting\n"
+        "  foreground_training: false\n"
+    )
+
+    cfg = load_config(config)
+
+    assert cfg["dataset"]["dtu_eval_mode"] == "foreground"
+    assert cfg["trainer"]["foreground_training"] is False
 
 
 def test_resolve_dataset_config_does_not_duplicate_scene():

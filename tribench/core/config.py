@@ -221,8 +221,19 @@ def _apply_dtu_defaults(config: dict[str, Any]) -> dict[str, Any]:
     if dataset_type != "dtu" and dataset_name != "dtu":
         return config
     dataset = dict(dataset_cfg)
-    dataset.setdefault("dtu_eval_mode", "full")
+    mode = str(dataset.get("dtu_eval_mode", "full")).lower()
+    if mode == "fg":
+        mode = "foreground"
+    if mode not in {"full", "foreground"}:
+        raise ValueError(f"dtu_eval_mode must be 'full' or 'foreground', got {mode!r}")
+    dataset["dtu_eval_mode"] = mode
     config["dataset"] = dataset
+
+    trainer_cfg = config.get("trainer", {})
+    if isinstance(trainer_cfg, Mapping):
+        trainer = dict(trainer_cfg)
+        trainer.setdefault("foreground_training", mode == "foreground")
+        config["trainer"] = trainer
     return config
 
 
