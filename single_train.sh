@@ -20,6 +20,8 @@ CONFIG_ROOT="configs"
 LOG_ROOT=""
 LOG_DIR=""
 METHOD=""
+DTU_EVAL_MODE=""
+DTU_EVAL_MODE_CONFIG_DIR=""
 
 if [[ -n "${PYTHON_BIN:-}" ]]; then
     PYTHON_BIN="${PYTHON_BIN}"
@@ -111,12 +113,17 @@ Options:
   --retrain                Delete existing scene output and train again; also selects training when combined with stage flags
   --force_retrain          Alias for --retrain
   --rerun_existing         Rerun render/metrics/video/mesh even if outputs exist; does not retrain checkpoints
+  --dtu_eval_mode MODE     Override DTU mode for this run: full or foreground
+  --dtu-full               Shortcut for --dtu_eval_mode full
+  --dtu-foreground         Shortcut for --dtu_eval_mode foreground
   --python PATH            Python executable
   -h, --help               Show this help
 
 Each stage reads configs/<method>/<dataset>/<scene>.yaml. Dataset roots,
 image dirs, resolutions, max steps, eval stride, output paths, and video
-settings should be set in the YAML config files. When training is selected,
+settings should be set in the YAML config files. --dtu_eval_mode creates
+temporary per-scene config overrides, so the base YAML files are not modified.
+When training is selected,
 scenes with existing training outputs are skipped by default; pass --retrain
 to remove the old scene output directory before training again. Rendering,
 NVS metrics, video, and DTU mesh metrics are also skipped when their
@@ -141,6 +148,18 @@ require_value() {
 
 lower() {
     printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+validate_dtu_eval_mode() {
+    local mode
+    mode="$(lower "$1")"
+    case "${mode}" in
+        full|foreground) echo "${mode}" ;;
+        *)
+            echo "Invalid DTU eval mode: ${1}. Expected 'full' or 'foreground'." >&2
+            exit 1
+            ;;
+    esac
 }
 
 canonical_method() {
@@ -241,6 +260,40 @@ parse_target() {
 scene_config_path() {
     local method="$1" dataset="$2" scene="$3"
     echo "${CONFIG_ROOT}/${method}/$(dataset_label "${dataset}")/${scene}.yaml"
+}
+
+cleanup_temp_configs() {
+    if [[ -n "${DTU_EVAL_MODE_CONFIG_DIR}" && -d "${DTU_EVAL_MODE_CONFIG_DIR}" ]]; then
+        rm -rf -- "${DTU_EVAL_MODE_CONFIG_DIR}"
+    fi
+}
+
+ensure_dtu_eval_mode_config_dir() {
+    if [[ -z "${DTU_EVAL_MODE_CONFIG_DIR}" ]]; then
+        DTU_EVAL_MODE_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tribench-dtu-mode.XXXXXX")"
+        trap cleanup_temp_configs EXIT
+    fi
+}
+
+config_with_dtu_eval_mode() {
+    local config_file="$1" dataset="$2" scene="$3"
+    local base_abs output_file
+
+    if [[ -z "${DTU_EVAL_MODE}" || "$(normalize_dataset "${dataset}")" != "dtu" ]]; then
+        echo "${config_file}"
+        return 0
+    fi
+
+    ensure_dtu_eval_mode_config_dir
+    base_abs="$(cd "$(dirname "${config_file}")" && pwd)/$(basename "${config_file}")"
+    output_file="${DTU_EVAL_MODE_CONFIG_DIR}/${METHOD_ID}_$(dataset_label "${dataset}")_${scene}_${DTU_EVAL_MODE}.yaml"
+    cat > "${output_file}" <<EOF
+_base_: ${base_abs}
+
+dataset:
+  dtu_eval_mode: ${DTU_EVAL_MODE}
+EOF
+    echo "${output_file}"
 }
 
 config_value() {
@@ -858,6 +911,9 @@ while [[ $# -gt 0 ]]; do
         --skip_video|--skip-video) EXPLICIT_SKIP_VIDEO=1; shift ;;
         --retrain|--force_retrain|--force-retrain) FORCE_RETRAIN=1; shift ;;
         --rerun_existing|--rerun-existing|--force_existing|--force-existing) FORCE_RERUN_EXISTING=1; shift ;;
+        --dtu_eval_mode|--dtu-eval-mode) require_value "$@"; DTU_EVAL_MODE="$(validate_dtu_eval_mode "$2")"; shift 2 ;;
+        --dtu_full|--dtu-full|--full-dtu) DTU_EVAL_MODE="full"; shift ;;
+        --dtu_foreground|--dtu-foreground|--foreground-dtu) DTU_EVAL_MODE="foreground"; shift ;;
         --python)            require_value "$@"; PYTHON_BIN="$2"; shift 2 ;;
         -h|--help)           usage; exit 0 ;;
         *)
@@ -922,6 +978,9 @@ fi
 resolve_python_bin
 resolve_tb_cmd
 expand_targets "${TARGETS[@]}"
+if [[ -n "${DTU_EVAL_MODE}" ]]; then
+    ensure_dtu_eval_mode_config_dir
+fi
 
 # ---------------------------------------------------------------------------
 # Main loop
@@ -935,6 +994,7 @@ for TARGET in "${EXPANDED_TARGETS[@]}"; do
         echo "[${DATASET}/${SCENE}] Config missing: ${CONFIG_FILE}" >&2
         exit 1
     }
+    CONFIG_FILE="$(config_with_dtu_eval_mode "${CONFIG_FILE}" "${DATASET}" "${SCENE}")"
     MODEL_PATH="$(config_output_dir "${CONFIG_FILE}")"
     [[ -z "${MODEL_PATH}" ]] && {
         echo "[${DATASET}/${SCENE}] Config missing output.dir: ${CONFIG_FILE}" >&2
@@ -991,6 +1051,9 @@ for TARGET in "${EXPANDED_TARGETS[@]}"; do
     echo "--------------------------------------------------------------------------------"
     echo "[${DATASET}/${SCENE}] method=${METHOD_ID} gpu=${GPU_ID}"
     echo "[${DATASET}/${SCENE}] config=${CONFIG_FILE}"
+    if [[ -n "${DTU_EVAL_MODE}" && "$(normalize_dataset "${DATASET}")" == "dtu" ]]; then
+        echo "[${DATASET}/${SCENE}] dtu_eval_mode=${DTU_EVAL_MODE}"
+    fi
     echo "[${DATASET}/${SCENE}] output=${MODEL_PATH}"
     echo "[${DATASET}/${SCENE}] logs=${LOG_DIR}"
     if [[ "${TRAINING_ALREADY_DONE}" -eq 1 ]]; then

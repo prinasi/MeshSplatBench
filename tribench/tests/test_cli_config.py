@@ -154,6 +154,35 @@ def test_2dts_dtu_foreground_keeps_native_full_image_mask_defaults():
     assert native.trainer.eval_alpha_mask is False
 
 
+def test_2dts_dtu_full_disables_native_alpha_loading(tmp_path: Path):
+    from tribench.trainers.d2ts_native import _build_d2ts_native_config
+
+    config = tmp_path / "scan24_full.yaml"
+    base_config = Path("configs/2dts/dtu/scan24.yaml").resolve()
+    config.write_text(
+        f"_base_: {base_config}\n"
+        "dataset:\n"
+        "  dtu_eval_mode: full\n"
+    )
+
+    cfg = Config.fromfile(config)
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=Path(cfg.output.dir),
+        max_steps=cfg.trainer.max_steps,
+    )
+
+    assert cfg.dataset.dtu_eval_mode == "full"
+    assert "dtu_use_alpha" not in cfg.dataset
+    assert cfg.adapter.render_params.bg_color == "black"
+    assert cfg.output.dir == "outputs/2dts/dtu-full/scan24"
+    assert native.dataset.dtu_eval_mode == "full"
+    assert native.dataset.dtu_use_alpha is False
+    assert native.trainer.train_alpha_mask is False
+    assert native.trainer.eval_alpha_mask is False
+
+
 def test_2dts_disables_native_training_eval_by_default():
     cfg = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")
 
