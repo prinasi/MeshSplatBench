@@ -31,37 +31,11 @@ def dtu_image_paths(scene_root: str | Path, image_dir: str = "images") -> list[P
     return sorted(paths)
 
 
-def dtu_mask_path(scene_root: str | Path, image_path: str | Path) -> Path | None:
-    """Resolve the DTU mask matching an image, including common 3-digit stems."""
-    mask_dir = Path(scene_root) / "mask"
-    if not mask_dir.is_dir():
-        return None
-    image_path = Path(image_path)
-    candidates = [mask_dir / image_path.name]
-    stem = image_path.stem
-    candidates.extend(sorted(mask_dir.glob(f"{stem}.*")))
-    if stem.isdigit():
-        candidates.extend(sorted(mask_dir.glob(f"{int(stem):03d}.*")))
-        candidates.extend(sorted(mask_dir.glob(f"{int(stem):04d}.*")))
-    for path in candidates:
-        if path.is_file():
-            return path
-    return None
-
-
 def load_dtu_pil_image(scene_root: str | Path, image_path: str | Path) -> Image.Image:
-    """Load a DTU RGB image and attach the separate mask as an alpha channel."""
+    """Load a DTU image without applying the separate ``mask/`` directory."""
     image_path = Path(image_path)
     with Image.open(image_path) as image:
-        rgba = image.convert("RGBA")
-    mask_path = dtu_mask_path(scene_root, image_path)
-    if mask_path is not None:
-        with Image.open(mask_path) as mask_image:
-            mask = mask_image.convert("L")
-            if mask.size != rgba.size:
-                mask = mask.resize(rgba.size, Image.NEAREST)
-            rgba.putalpha(mask)
-    return rgba
+        return image.convert("RGBA")
 
 
 def split_dtu_indices(

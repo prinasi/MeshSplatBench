@@ -8,7 +8,7 @@ adapter:
     bg_color: white
 
 dataset:
-  resolution: 1
+  resolution: 2
 
 eval:
   mesh:

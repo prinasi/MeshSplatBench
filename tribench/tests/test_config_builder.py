@@ -98,11 +98,35 @@ def test_dtu_config_templates_include_eval_mode(tmp_path: Path):
     assert cfg["dataset"]["name"] == "dtu"
     assert cfg["dataset"]["dtu_eval_mode"] == "foreground"
     assert cfg["dataset"]["root"] == "data/dtu/scan24"
-    assert cfg["trainer"]["foreground_training"] is True
+    assert cfg["trainer"]["foreground_training"] is False
     assert cfg["trainer"]["white_background"] is True
     assert cfg["adapter"]["render_params"]["bg_color"] == "white"
     assert cfg["output"]["dir"] == "outputs/triangle-splatting/dtu-fg/scan24"
     assert cfg["output"]["metrics_file"] == "outputs/triangle-splatting/dtu-fg/scan24/metrics.json"
+
+
+def test_dtu_foreground_defaults_enable_diff_soup_foreground_loss(tmp_path: Path):
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "dataset:\n"
+        "  name: dtu\n"
+        "  type: dtu\n"
+        "  root: data/dtu\n"
+        "  scene: scan24\n"
+        "  dtu_eval_mode: foreground\n"
+        "trainer:\n"
+        "  type: diffsoup\n"
+        "adapter:\n"
+        "  type: diffsoup\n"
+        "  render_params:\n"
+        "    bg_color: black\n"
+    )
+
+    cfg = load_config(config)
+
+    assert cfg["trainer"]["foreground_training"] is True
+    assert cfg["trainer"]["white_background"] is True
+    assert cfg["adapter"]["render_params"]["bg_color"] == "white"
 
 
 def test_dtu_config_templates_default_to_full(tmp_path: Path):

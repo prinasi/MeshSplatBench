@@ -89,7 +89,7 @@ def test_dtu_mesh_eval_can_infer_required_options_from_config():
 
     cfg = Config.fromfile(config)
 
-    assert _infer_pred_mesh(cfg) == "outputs/triangle-splatting/dtu/scan24/mesh/fuse_post.ply"
+    assert _infer_pred_mesh(cfg) == "outputs/triangle-splatting/dtu-fg/scan24/mesh/fuse_post.ply"
     assert _infer_dtu_eval_target(cfg) == ("data/dtu", "scan24")
 
     assert cfg.adapter.render_params.bg_color == "white"
@@ -112,7 +112,7 @@ def test_triangle_splatting_native_argv_maps_dtu_config():
     )
 
     assert argv[argv.index("-s") + 1] == "data/dtu/scan24"
-    assert argv[argv.index("-m") + 1] == "outputs/triangle-splatting/dtu/scan24"
+    assert argv[argv.index("-m") + 1] == "outputs/triangle-splatting/dtu-fg/scan24"
     assert argv[argv.index("-r") + 1] == "2"
     assert "--eval" in argv
     assert "--no_dome" in argv
@@ -120,19 +120,38 @@ def test_triangle_splatting_native_argv_maps_dtu_config():
     assert argv[argv.index("--lambda_opacity") + 1] == "0.0044"
     assert argv[argv.index("--importance_threshold") + 1] == "0.027"
     assert argv[argv.index("--test_iterations") + 1] == "-1"
+    assert "--white_background" in argv
+    assert "--foreground_training" not in argv
 
 
 def test_2dts_config_resolves_native_training_paths():
     cfg = Config.fromfile("configs/2dts/dtu/scan24.yaml")
 
     assert cfg.trainer.type == "2dts"
-    assert cfg.adapter.checkpoint == "outputs/2dts/dtu/scan24/ckpt"
+    assert cfg.adapter.checkpoint == "outputs/2dts/dtu-fg/scan24/ckpt"
     assert cfg.dataset.root == "data/dtu/scan24"
-    assert cfg.dataset.resolution == 1
+    assert cfg.dataset.resolution == 2
     assert cfg.d2ts.native_config == "configs/2dts/native/dtu.yaml"
     assert cfg.d2ts.target_point_num == 1_000_000
     assert cfg.eval.mesh.geometry_mode == "pcd"
-    assert cfg.output.mesh_file == "outputs/2dts/dtu/scan24/mesh/30000_pcd.ply"
+    assert cfg.output.mesh_file == "outputs/2dts/dtu-fg/scan24/mesh/30000_pcd.ply"
+
+
+def test_2dts_dtu_foreground_keeps_native_full_image_mask_defaults():
+    from tribench.trainers.d2ts_native import _build_d2ts_native_config
+
+    cfg = Config.fromfile("configs/2dts/dtu/scan24.yaml")
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=Path(cfg.output.dir),
+        max_steps=cfg.trainer.max_steps,
+    )
+
+    assert native.dataset.dtu_eval_mode == "foreground"
+    assert native.dataset.dtu_use_alpha is True
+    assert native.trainer.train_alpha_mask is False
+    assert native.trainer.eval_alpha_mask is False
 
 
 def test_2dts_disables_native_training_eval_by_default():

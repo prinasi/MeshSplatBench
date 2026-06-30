@@ -136,6 +136,7 @@ class MeshSplattingTrainingMethod(TrainingMethod):
         resolution: int = -1,
         eval_split: bool = True,
         white_background: bool = False,
+        dtu_eval_mode: str = "full",
         indoor: bool = False,
         extra_args: dict[str, Any] | None = None,
     ) -> None:
@@ -147,6 +148,7 @@ class MeshSplattingTrainingMethod(TrainingMethod):
         self.resolution = resolution
         self.eval_split = eval_split
         self.white_background = white_background
+        self.dtu_eval_mode = str((extra_args or {}).get("dtu_eval_mode", dtu_eval_mode)).lower()
         self.indoor = indoor
         self.extra_args = extra_args or {}
 
@@ -167,6 +169,19 @@ class MeshSplattingTrainingMethod(TrainingMethod):
         self._final_cleaned = False
         self._depth_l1_weight = None
         self._last_native_cam = None
+
+    def _build_dataset_args(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            sh_degree=3,
+            source_path=str(self.dataset_path),
+            model_path=str(self.output_dir),
+            images=self.images_dir,
+            resolution=self.resolution,
+            white_background=self.white_background,
+            dtu_eval_mode=self.dtu_eval_mode,
+            data_device=str(self.extra_args.get("data_device", "cuda")),
+            eval=self.eval_split,
+        )
 
     def _ensure_initialized(self) -> None:
         if self._initialized:
@@ -261,16 +276,7 @@ class MeshSplattingTrainingMethod(TrainingMethod):
         )
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        dataset_args = SimpleNamespace(
-            sh_degree=3,
-            source_path=str(self.dataset_path),
-            model_path=str(self.output_dir),
-            images=self.images_dir,
-            resolution=self.resolution,
-            white_background=self.white_background,
-            data_device=str(self.extra_args.get("data_device", "cuda")),
-            eval=self.eval_split,
-        )
+        dataset_args = self._build_dataset_args()
         (self.output_dir / "cfg_args").write_text(
             str(SimpleNamespace(**vars(dataset_args))), encoding="utf-8"
         )

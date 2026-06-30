@@ -9,7 +9,7 @@ dataset:
   image_dir: images
   resolution: 2
   eval_every: 8
-  # "foreground" also enables foreground training and white render background by default.
+  # "foreground" uses white DTU RGBA compositing/rendering; foreground-loss defaults are method-specific.
   dtu_eval_mode: foreground # "full" (Mode A) or "foreground" (Mode B)
 
 trainer:

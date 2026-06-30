@@ -91,3 +91,27 @@ def test_triangle_model_reset_training_statistics_initializes_tensor_buffers():
     assert torch.equal(model.triangle_area, torch.zeros(7))
     assert torch.equal(model.image_size, torch.zeros(7))
     assert torch.equal(model.importance_score, torch.zeros(7))
+
+
+def test_training_method_dataset_args_include_dtu_eval_mode(tmp_path):
+    method = TriangleSplattingTrainingMethod(
+        dataset=tmp_path / "scan24",
+        output_dir=tmp_path / "out",
+        white_background=True,
+        dtu_eval_mode="foreground",
+    )
+
+    args = method._build_dataset_args()
+
+    assert args.white_background is True
+    assert args.dtu_eval_mode == "foreground"
+
+
+def test_training_method_accepts_dtu_eval_mode_from_extra_args(tmp_path):
+    method = TriangleSplattingTrainingMethod(
+        dataset=tmp_path / "scan24",
+        output_dir=tmp_path / "out",
+        extra_args={"dtu_eval_mode": "foreground"},
+    )
+
+    assert method._build_dataset_args().dtu_eval_mode == "foreground"

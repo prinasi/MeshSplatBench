@@ -13,7 +13,9 @@ import torch
 from PIL import Image
 
 from tribench.core.cameras import CameraBatch
-from tribench.vendor.dtu_utils import decompose_dtu_projection
+from tribench.vendor.dtu_utils import decompose_dtu_projection, load_dtu_pil_image
+from tribench.vendor.training_images import load_rgba_for_training
+from tribench.vendor.triangle_splatting.utils.general_utils import PILtoTorch
 
 
 @dataclass
@@ -111,31 +113,6 @@ def _load_image(
     return torch.from_numpy(arr[..., :3]).contiguous()
 
 
-def _resolve_dtu_mask_path(mask_dir: Path, image_path: Path) -> Path | None:
-    image_base = image_path.name
-    candidates = [mask_dir / image_base]
-    stem = image_path.stem
-    candidates.extend(sorted(mask_dir.glob(f"{stem}.*")))
-    if stem.isdigit():
-        candidates.extend(sorted(mask_dir.glob(f"{int(stem):03d}.*")))
-
-    for path in candidates:
-        if path.exists():
-            return path
-    return None
-
-
-def _load_mask(path: Path | None, size: tuple[int, int] | None = None) -> torch.Tensor | None:
-    if path is None or not path.exists():
-        return None
-    with Image.open(path) as image:
-        mask = image.convert("L")
-        if size is not None and mask.size != size:
-            mask = mask.resize(size, Image.NEAREST)
-        arr = np.asarray(mask, dtype=np.float32) / 255.0
-    return torch.from_numpy(arr[..., None].clip(0.0, 1.0)).contiguous()
-
-
 def _load_alpha_mask(path: Path | None, size: tuple[int, int] | None = None) -> torch.Tensor | None:
     if path is None or not path.exists():
         return None
@@ -148,6 +125,24 @@ def _load_alpha_mask(path: Path | None, size: tuple[int, int] | None = None) -> 
             alpha = alpha.resize(size, Image.NEAREST)
         arr = np.asarray(alpha, dtype=np.float32) / 255.0
     return torch.from_numpy(arr[..., None].clip(0.0, 1.0)).contiguous()
+
+
+def _load_dtu_foreground_image(
+    scene_root: Path,
+    image_path: Path,
+    size: tuple[int, int],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    image = load_dtu_pil_image(scene_root, image_path)
+    try:
+        rgb, alpha = load_rgba_for_training(
+            image,
+            size,
+            PILtoTorch,
+            composite_white=True,
+        )
+    finally:
+        image.close()
+    return rgb.permute(1, 2, 0).contiguous(), alpha.permute(1, 2, 0).contiguous()
 
 
 def _camera_batch_from_w2c(
@@ -432,7 +427,7 @@ class NerfSyntheticDataset(DatasetBase):
 
 
 class DTUDataset(DatasetBase):
-    """DTU loader using ``cameras.npz`` plus ``images/`` and optional ``mask/``."""
+    """DTU loader using ``cameras.npz`` plus RGBA ``images/``."""
 
     def __init__(
         self,
@@ -468,41 +463,33 @@ class DTUDataset(DatasetBase):
         if not image_paths:
             image_paths = sorted((self.dataset_path / "image").glob("*.png"))
         selected = _split_indices(len(image_paths), self.split, self.eval_every)
-        mask_dir = self.dataset_path / "mask"
         samples: list[DatasetSample] = []
         fg_bg_color = (1.0, 1.0, 1.0)
-        bg_color = fg_bg_color if self.use_alpha else None
         for out_idx, image_idx in enumerate(selected):
             image_path = image_paths[image_idx]
-            mask_path = _resolve_dtu_mask_path(mask_dir, image_path)
-            gt = _load_image(
-                image_path,
-                bg_color=bg_color,
-                resample=Image.BICUBIC,
-            )
-            if gt is None:
-                continue
-            image_height, image_width = gt.shape[:2]
+            with Image.open(image_path) as image:
+                image_width, image_height = image.size
             width, height = _resolve_resolution(
                 image_width,
                 image_height,
                 self.resolution,
                 self.resolution_rounding,
             )
-            if (image_width, image_height) != (width, height):
+            mask = None
+            if self.use_alpha:
+                gt, mask = _load_dtu_foreground_image(
+                    self.dataset_path,
+                    image_path,
+                    (width, height),
+                )
+            else:
                 gt = _load_image(
                     image_path,
                     size=(width, height),
-                    bg_color=bg_color,
                     resample=Image.BICUBIC,
                 )
-            mask = None
-            if self.use_alpha:
-                mask = _load_alpha_mask(image_path, size=(width, height))
-                if mask is None:
-                    mask = _load_mask(mask_path, size=(width, height))
-                    if mask is not None:
-                        gt = gt * mask + (1.0 - mask)
+                if gt is None:
+                    continue
             K, native_R, native_T, _, _ = decompose_dtu_projection(
                 data,
                 image_idx,

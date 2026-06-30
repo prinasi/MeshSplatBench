@@ -232,7 +232,19 @@ def _apply_dtu_defaults(config: dict[str, Any]) -> dict[str, Any]:
     trainer_cfg = config.get("trainer", {})
     if isinstance(trainer_cfg, Mapping):
         trainer = dict(trainer_cfg)
-        trainer.setdefault("foreground_training", mode == "foreground")
+        adapter_cfg = config.get("adapter", {})
+        adapter_type = (
+            str(adapter_cfg.get("type", "")).lower()
+            if isinstance(adapter_cfg, Mapping)
+            else ""
+        )
+        trainer_type = str(trainer.get("type", "")).lower()
+        method_type = trainer_type or adapter_type
+        foreground_loss_methods = {"diffsoup"}
+        trainer.setdefault(
+            "foreground_training",
+            mode == "foreground" and method_type in foreground_loss_methods,
+        )
         if mode == "foreground":
             trainer["white_background"] = True
         else:

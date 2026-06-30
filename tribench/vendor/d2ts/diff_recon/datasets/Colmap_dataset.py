@@ -90,32 +90,8 @@ class ColmapDataset(Dataset):
         return bg_color
 
     def _load_external_mask(self, cam_info: CameraInfo, height: int, width: int):
-        """Load a foreground mask from the mask/ directory if available."""
-        if not hasattr(self, "_mask_dir"):
-            base_dir = os.path.dirname(os.path.dirname(cam_info.image_path))
-            self._mask_dir = os.path.join(base_dir, "mask")
-            if not os.path.isdir(self._mask_dir):
-                self._mask_dir = None
-        if self._mask_dir is None:
-            return None
-        img_name = os.path.basename(cam_info.image_path)
-        stem = os.path.splitext(img_name)[0]
-        import glob
-        candidates = [os.path.join(self._mask_dir, img_name)]
-        candidates.extend(sorted(glob.glob(os.path.join(self._mask_dir, f"{stem}.*"))))
-        if stem.isdigit():
-            candidates.extend(sorted(glob.glob(os.path.join(self._mask_dir, f"{int(stem):03d}.*"))))
-        mask_path = None
-        for c in candidates:
-            if os.path.isfile(c):
-                mask_path = c
-                break
-        if mask_path is None:
-            return None
-        mask = Image.open(mask_path).convert("L")
-        if mask.size != (width, height):
-            mask = mask.resize((width, height), Image.NEAREST)
-        return np.asarray(mask, dtype=np.float32) / 255.0
+        """DTU image metrics use PNG alpha; ``mask/`` is reserved for geometry eval."""
+        return None
 
     def _get_image(self, image_path: str) -> np.ndarray:
         """

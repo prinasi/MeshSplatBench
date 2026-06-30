@@ -19,6 +19,36 @@ def run_d2ts_native_config(
 ) -> dict[str, Any]:
     """Run the bundled 2DTS VanillaTS trainer from a TriBench config."""
     from tribench.vendor.d2ts.diff_recon import VanillaTSTrainer
+
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=dataset_root,
+        output_dir=output_dir,
+        max_steps=max_steps,
+        quiet=quiet,
+    )
+
+    start = time.time()
+    trainer = VanillaTSTrainer(native, exp_name=output_dir.name, device=None, log_file=not quiet)
+    trainer.train()
+    total_time = time.time() - start
+    return {
+        "total_steps": int(max_steps),
+        "total_time_s": total_time,
+        "avg_step_time_ms": total_time * 1000.0 / max(int(max_steps), 1),
+        "final_losses": {},
+    }
+
+
+def _build_d2ts_native_config(
+    *,
+    cfg: Mapping[str, Any],
+    dataset_root: str,
+    output_dir: Path,
+    max_steps: int,
+    quiet: bool = True,
+):
+    """Build the native 2DTS config without launching training."""
     from tribench.vendor.d2ts.diff_recon.utils.config import configToDict, dictToConfig, loadConfig
 
     tri_cfg = Config(cfg).to_dict()
@@ -79,10 +109,10 @@ def run_d2ts_native_config(
         native.trainer.save_train_img = False
         native.trainer.save_eval_img = False
 
-    trainer_cfg = tri_cfg.get("trainer", {}) or {}
-    if bool(trainer_cfg.get("foreground_training", False)):
-        native.trainer.train_alpha_mask = True
-        native.trainer.eval_alpha_mask = True
+    # Keep native 2DTS DTU semantics: foreground mode means RGBA loading and
+    # white-background compositing, but the published DTU protocol trains and
+    # evaluates on the full composited image. Users can still opt into masked
+    # losses explicitly through d2ts.native_overrides.trainer.*_alpha_mask.
 
     target_point_num = d2ts_cfg.get("target_point_num")
     if target_point_num is not None:
@@ -90,16 +120,7 @@ def run_d2ts_native_config(
         if densification is not None:
             densification.target_point_num = int(target_point_num)
 
-    start = time.time()
-    trainer = VanillaTSTrainer(native, exp_name=output_dir.name, device=None, log_file=not quiet)
-    trainer.train()
-    total_time = time.time() - start
-    return {
-        "total_steps": int(max_steps),
-        "total_time_s": total_time,
-        "avg_step_time_ms": total_time * 1000.0 / max(int(max_steps), 1),
-        "final_losses": {},
-    }
+    return native
 
 
 def _retarget_iteration_list(obj: Any, name: str, max_steps: int, *, force: bool = False) -> None:

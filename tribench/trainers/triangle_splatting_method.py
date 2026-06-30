@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import torch
@@ -81,6 +82,9 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         Whether to hold out every 8th image for testing.
     white_background:
         Use white instead of black background.
+    dtu_eval_mode:
+        DTU image loading mode. ``foreground`` composites PNG alpha
+        consistently with a white DTU foreground benchmark target.
     extra_args:
         Additional keyword arguments forwarded to the native training
         configuration (e.g. ``densify_until_iter``, ``test_iterations``).
@@ -97,6 +101,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         resolution: int = -1,
         eval_split: bool = True,
         white_background: bool = False,
+        dtu_eval_mode: str = "full",
         extra_args: dict[str, Any] | None = None,
     ) -> None:
         self.dataset_path = Path(dataset).expanduser()
@@ -108,6 +113,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         self.eval_split = eval_split
         self.white_background = white_background
         self.extra_args = extra_args or {}
+        self.dtu_eval_mode = str(self.extra_args.get("dtu_eval_mode", dtu_eval_mode)).lower()
 
         # Lazy-initialized state
         self._model = None
@@ -122,6 +128,19 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         self._last_structure_update: dict[str, Any] | None = None
         self._initialized = False
         self._step = 0
+
+    def _build_dataset_args(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            sh_degree=3,
+            source_path=str(self.dataset_path),
+            model_path=str(self.output_dir),
+            images=self.images_dir,
+            resolution=self.resolution,
+            white_background=self.white_background,
+            dtu_eval_mode=self.dtu_eval_mode,
+            data_device="cuda",
+            eval=self.eval_split,
+        )
 
     def _resolve_resolution(self, width: int, height: int) -> tuple[int, int, float, float]:
         """Match the native triangle-splatting resolution argument semantics."""
@@ -165,8 +184,6 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         self._getWorld2View2 = getWorld2View2
         self._getProjectionMatrix = getProjectionMatrix
 
-        from types import SimpleNamespace
-
         opt_defaults = dict(
             split_size=24.0,
             start_lr_sigma=0,
@@ -205,16 +222,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         self._opt = SimpleNamespace(**opt_defaults)
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        dataset_args = SimpleNamespace(
-            sh_degree=3,
-            source_path=str(self.dataset_path),
-            model_path=str(self.output_dir),
-            images=self.images_dir,
-            resolution=self.resolution,
-            white_background=self.white_background,
-            data_device="cuda",
-            eval=self.eval_split,
-        )
+        dataset_args = self._build_dataset_args()
         self._model = TriangleModel(dataset_args.sh_degree)
         self._scene = Scene(
             dataset_args,

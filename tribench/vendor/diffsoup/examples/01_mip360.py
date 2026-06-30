@@ -95,36 +95,6 @@ def _colmap_point_init(
     return xyz_np, total_points, spacing
 
 
-def _load_dtu_masks(scene_root, frames, H, W, downscale, device):
-    """Load DTU foreground masks for training frames."""
-    import glob
-    from PIL import Image as _PILImage
-    mask_dir = os.path.join(scene_root, "mask")
-    if not os.path.isdir(mask_dir):
-        return None
-    masks = []
-    for fr in frames:
-        img_name = os.path.basename(fr.get("img_path", fr.get("image_path", "")))
-        stem = os.path.splitext(img_name)[0]
-        candidates = [os.path.join(mask_dir, img_name)]
-        candidates.extend(sorted(glob.glob(os.path.join(mask_dir, f"{stem}.*"))))
-        if stem.isdigit():
-            candidates.extend(sorted(glob.glob(os.path.join(mask_dir, f"{int(stem):03d}.*"))))
-        mask_path = None
-        for c in candidates:
-            if os.path.isfile(c):
-                mask_path = c
-                break
-        if mask_path is None:
-            return None
-        mask = _PILImage.open(mask_path).convert("L")
-        if mask.size != (W, H):
-            mask = mask.resize((W, H), _PILImage.NEAREST)
-        arr = np.asarray(mask, dtype=np.float32) / 255.0
-        masks.append(torch.from_numpy(arr).to(device))
-    return torch.stack(masks, dim=0).unsqueeze(-1)
-
-
 def _composite_white_background(color: torch.Tensor, rast_out: torch.Tensor) -> torch.Tensor:
     mask = (rast_out.detach()[..., -1:] > 0).to(color.dtype)
     return mask * color + (1.0 - mask)
@@ -230,8 +200,6 @@ def main(
     if foreground_training and dataset_type == "dtu":
         if all("mask" in fr for fr in frames):
             gt_masks = torch.stack([fr["mask"].to(device) for fr in frames], dim=0)
-        else:
-            gt_masks = _load_dtu_masks(scene_root, frames, H, W, downscale, device)
 
     z_near_train, z_near_test, z_far = 0.01, 0.5, 100.0
 

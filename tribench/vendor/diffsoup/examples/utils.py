@@ -551,7 +551,7 @@ def load_dtu_scene(
     white_background: bool = True,
     use_alpha: bool = True,
 ) -> Dict:
-    """Load a DTU scan in the common ``images/``, ``mask/``, ``cameras.npz`` format.
+    """Load a DTU scan in the common ``images/`` and ``cameras.npz`` format.
 
     The returned geometry coordinates stay in the normalized DTU space used by
     ``world_mat_i @ scale_mat_i``. The official DTU mesh evaluator later maps
@@ -581,7 +581,6 @@ def load_dtu_scene(
     else:
         selected = [idx for idx in sorted_indices if idx not in test_set]
 
-    mask_dir = os.path.join(scene_root, "mask")
     frames = []
     K_ref: Optional[torch.Tensor] = None
     for idx in selected:
@@ -613,24 +612,6 @@ def load_dtu_scene(
         mask: Optional[torch.Tensor] = None
         if use_alpha:
             mask = alpha_mask
-            if mask is None:
-                image_base = os.path.basename(image_paths[idx])
-                mask_path = os.path.join(mask_dir, image_base)
-                if not os.path.isfile(mask_path):
-                    mask_matches = sorted(glob.glob(os.path.join(mask_dir, os.path.splitext(image_base)[0] + ".*")))
-                    mask_path = mask_matches[0] if mask_matches else mask_path
-                if not os.path.isfile(mask_path):
-                    stem = os.path.splitext(image_base)[0]
-                    if stem.isdigit():
-                        mask_matches = sorted(glob.glob(os.path.join(mask_dir, f"{int(stem):03d}.*")))
-                        mask_path = mask_matches[0] if mask_matches else mask_path
-                if os.path.isfile(mask_path):
-                    mask_np = iio.imread(mask_path).astype(np.float32) / 255.0
-                    if mask_np.ndim == 3:
-                        mask_np = mask_np[..., :1]
-                    else:
-                        mask_np = mask_np[..., None]
-                    mask = torch.from_numpy(mask_np).clamp(0, 1)
 
         if resize_to is not None:
             image = TF.resize(

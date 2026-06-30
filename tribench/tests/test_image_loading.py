@@ -12,6 +12,7 @@ from tribench.core.datasets import (
     _load_image,
 )
 from tribench.trainers.triangle_splatting_method import _pil_rgb_uint8
+from tribench.vendor.dtu_utils import load_dtu_pil_image
 from tribench.vendor.training_images import is_dtu_scene, load_rgba_for_training
 from tribench.vendor.triangle_splatting.scene.dataset_readers import readDTUSceneInfo
 from tribench.vendor.triangle_splatting.utils.general_utils import PILtoTorch
@@ -105,12 +106,13 @@ def test_dtu_dataset_foreground_composites_mask_to_white(tmp_path):
     (root / "images").mkdir(parents=True)
     (root / "mask").mkdir()
 
-    image = Image.new("RGB", (4, 4), (255, 0, 0))
+    image = Image.new("RGBA", (4, 4), (255, 0, 0, 255))
+    image.putalpha(Image.new("L", (4, 4), 255))
+    image.getchannel("A").save(root / "mask" / "000.png")
+    alpha = Image.new("L", (4, 4), 0)
+    alpha.putdata([255, 255, 0, 0] * 4)
+    image.putalpha(alpha)
     image.save(root / "images" / "0000.png")
-
-    mask = Image.new("L", (4, 4), 0)
-    mask.putdata([255, 255, 0, 0] * 4)
-    mask.save(root / "mask" / "000.png")
 
     K = np.array(
         [[2.0, 0.0, 2.0], [0.0, 2.0, 2.0], [0.0, 0.0, 1.0]],
@@ -130,11 +132,19 @@ def test_dtu_dataset_foreground_composites_mask_to_white(tmp_path):
 
     dataset = DTUDataset(root, split="all", resolution=2, dtu_eval_mode="foreground")
     sample = dataset.sample(0)
+    expected_rgb, expected_mask = load_rgba_for_training(
+        load_dtu_pil_image(root, root / "images" / "0000.png"),
+        (2, 2),
+        PILtoTorch,
+        composite_white=True,
+    )
+    expected_image = expected_rgb.permute(1, 2, 0)
+    expected_mask = expected_mask.permute(1, 2, 0)
 
     assert sample.image.shape == (2, 2, 3)
-    assert torch.allclose(sample.image[:, 0], torch.tensor([1.0, 0.0, 0.0]).expand(2, 3), atol=1 / 255)
-    assert torch.allclose(sample.image[:, 1], torch.ones(2, 3), atol=1 / 255)
+    assert torch.allclose(sample.image, expected_image, atol=1 / 255)
     assert sample.mask is not None
+    assert torch.allclose(sample.mask, expected_mask, atol=1 / 255)
 
 
 def test_dtu_dataset_prefers_rgba_alpha_without_double_compositing(tmp_path):
@@ -145,9 +155,6 @@ def test_dtu_dataset_prefers_rgba_alpha_without_double_compositing(tmp_path):
     image = Image.new("RGBA", (2, 1))
     image.putdata([(255, 0, 0, 128), (0, 255, 0, 255)])
     image.save(root / "images" / "0000.png")
-
-    external_mask = Image.new("L", (2, 1), 0)
-    external_mask.save(root / "mask" / "000.png")
 
     K = np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 0.5], [0.0, 0.0, 1.0]], dtype=np.float32)
     extrinsic = np.array(
@@ -177,11 +184,13 @@ def test_native_dtu_reader_matches_eval_camera_and_mask(tmp_path):
     (root / "mask").mkdir()
     _write_basic_ply(root / "points3d_dtu.ply")
 
-    image = Image.new("RGB", (4, 4), (255, 0, 0))
+    image = Image.new("RGBA", (4, 4), (255, 0, 0, 255))
+    alpha = Image.new("L", (4, 4), 0)
+    alpha.putdata([255, 255, 0, 0] * 4)
+    image.putalpha(alpha)
     image.save(root / "images" / "0000.png")
 
-    mask = Image.new("L", (4, 4), 0)
-    mask.putdata([255, 255, 0, 0] * 4)
+    mask = Image.new("L", (4, 4), 255)
     mask.save(root / "mask" / "000.png")
 
     K = np.array([[2.0, 0.0, 2.0], [0.0, 2.0, 2.0], [0.0, 0.0, 1.0]], dtype=np.float32)
