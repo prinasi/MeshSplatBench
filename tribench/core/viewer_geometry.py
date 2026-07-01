@@ -335,6 +335,33 @@ class GeometryExportResult:
     has_glb: bool = False
 
 
+@dataclass
+class ViewerPointCloudExportConfig:
+    viewer_num_points: int = 500_000
+    color_mode: str = "dc"
+    normal_mode: str = "none"
+    voxel_downsample: bool = True
+    voxel_size: float = 0.01
+
+
+@dataclass
+class ViewerPointCloudExportResult:
+    viewer_ply: str
+    metadata_path: str | None = None
+    num_viewer_points: int = 0
+
+
+@dataclass
+class OriginalGeometryExportResult:
+    geometry_ply: str
+    mesh_glb_path: str | None = None
+    metadata_path: str | None = None
+    attributes_path: str | None = None
+    num_vertices: int = 0
+    num_faces: int = 0
+    has_glb: bool = False
+
+
 def primitive_to_point_cloud(
     primitive: BasePrimitive,
     num_points: int,
@@ -543,6 +570,181 @@ def export_viewer_geometry(
         num_viewer_points=int(v_xyz.shape[0]),
         num_cg_points=int(c_xyz.shape[0]),
         has_mesh=has_mesh,
+        has_glb=has_glb,
+    )
+
+
+def export_viewer_point_cloud(
+    primitive: BasePrimitive,
+    output_dir: str | Path,
+    *,
+    method_name: str = "unknown",
+    checkpoint_path: str | None = None,
+    config: ViewerPointCloudExportConfig | None = None,
+    generator: torch.Generator | None = None,
+) -> ViewerPointCloudExportResult:
+    """Export only the lightweight point cloud needed by the web viewer."""
+    cfg = config or ViewerPointCloudExportConfig()
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    viewer_path = out / "geometry_viewer_points.ply"
+    meta_path = out / "geometry_viewer_metadata.json"
+    xyz, rgb, normals, _ = primitive_to_point_cloud(
+        primitive,
+        cfg.viewer_num_points,
+        color_mode=cfg.color_mode,
+        normal_mode=cfg.normal_mode,
+        generator=generator,
+    )
+
+    if cfg.voxel_downsample and xyz.shape[0] > 0:
+        xyz, rgb, normals = _voxel_downsample(xyz, rgb, normals, cfg.voxel_size)
+
+    def _to_np_uint8(value):
+        if value is None:
+            return None
+        return (value.cpu().numpy().clip(0, 1) * 255).astype(np.uint8)
+
+    def _to_np_f32(value):
+        if value is None:
+            return None
+        return value.cpu().numpy().astype(np.float32)
+
+    write_point_cloud_ply(
+        viewer_path,
+        _to_np_f32(xyz),
+        _to_np_uint8(rgb),
+        _to_np_f32(normals),
+    )
+
+    areas = primitive.compute_areas()
+    metadata = {
+        "method": method_name,
+        "checkpoint": checkpoint_path,
+        "schema_version": "1.0",
+        "export_mode": "viewer_pointcloud",
+        "assets": {
+            "viewer_points": "geometry_viewer_points.ply",
+        },
+        "num_viewer_points": int(xyz.shape[0]),
+        "num_primitives": int(primitive.num_primitives),
+        "color_mode": cfg.color_mode,
+        "normal_mode": cfg.normal_mode,
+        "viewer_num_points_target": cfg.viewer_num_points,
+        "voxel_downsample": cfg.voxel_downsample,
+        "voxel_size": cfg.voxel_size,
+        "area_stats": {
+            "total": float(areas.sum().item()),
+            "mean": float(areas.mean().item()),
+            "min": float(areas.min().item()),
+            "max": float(areas.max().item()),
+        },
+    }
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    return ViewerPointCloudExportResult(
+        viewer_ply=str(viewer_path),
+        metadata_path=str(meta_path),
+        num_viewer_points=int(xyz.shape[0]),
+    )
+
+
+def export_original_geometry(
+    primitive: BasePrimitive,
+    output_dir: str | Path,
+    *,
+    method_name: str = "unknown",
+    checkpoint_path: str | None = None,
+    filename: str = "geometry_original.ply",
+    export_glb: bool = False,
+) -> OriginalGeometryExportResult:
+    """Export the primitive's original topology as a CG-readable PLY.
+
+    Unlike ``export_viewer_geometry()``, this does not sample, downsample, or
+    target a fixed number of points. Triangle-soup primitives are written as
+    triangle-soup meshes; indexed primitives keep their shared vertex topology.
+    """
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    mesh_data = _extract_indexed_mesh_from_primitive(primitive)
+    if mesh_data is None:
+        raise ValueError("Primitive cannot be exported as original mesh geometry")
+
+    verts, faces, rgb, normals = mesh_data
+    geometry_path = out / filename
+    glb_path = out / "geometry_original.glb" if export_glb else None
+    meta_path = out / "geometry_metadata.json"
+    attr_path = out / "geometry_attributes.npz"
+
+    write_mesh_ply(geometry_path, verts, faces, rgb, normals)
+
+    has_glb = False
+    if glb_path is not None:
+        try:
+            write_mesh_glb(glb_path, verts, faces, rgb, normals)
+            has_glb = True
+        except Exception:
+            pass
+
+    areas = primitive.compute_areas()
+    metadata = {
+        "method": method_name,
+        "checkpoint": checkpoint_path,
+        "schema_version": "1.0",
+        "export_mode": "original",
+        "coordinate_system": "tribench_world",
+        "up_axis": "+y",
+        "scale": 1.0,
+        "assets": {
+            "geometry": filename,
+            "mesh_glb": "geometry_original.glb" if has_glb else None,
+        },
+        "num_vertices": int(verts.shape[0]),
+        "num_faces": int(faces.shape[0]),
+        "num_primitives": int(primitive.num_primitives),
+        "has_glb": has_glb,
+        "sampling": None,
+        "downsampling": None,
+        "area_stats": {
+            "total": float(areas.sum().item()),
+            "mean": float(areas.mean().item()),
+            "min": float(areas.min().item()),
+            "max": float(areas.max().item()),
+        },
+    }
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    opacity = primitive.get_opacity()
+    colors = primitive.get_colors()
+    attrs = {
+        "opacity": opacity.cpu().numpy() if opacity is not None else None,
+        "area": areas.cpu().numpy(),
+        "primitive_id": np.arange(primitive.num_primitives, dtype=np.int64),
+    }
+    if colors is not None:
+        attrs["sh_dc"] = colors.cpu().numpy()
+    if hasattr(primitive, "sh_coeffs") and primitive.sh_coeffs is not None:
+        attrs["sh_coeffs"] = primitive.sh_coeffs.cpu().numpy()
+    if hasattr(primitive, "sigma") and primitive.sigma is not None:
+        sigma = primitive.sigma
+        attrs["sigma"] = (
+            sigma.detach().cpu().numpy()
+            if isinstance(sigma, torch.Tensor)
+            else np.asarray(sigma)
+        )
+    np.savez(attr_path, **attrs)
+
+    return OriginalGeometryExportResult(
+        geometry_ply=str(geometry_path),
+        mesh_glb_path=str(glb_path) if has_glb else None,
+        metadata_path=str(meta_path),
+        attributes_path=str(attr_path),
+        num_vertices=int(verts.shape[0]),
+        num_faces=int(faces.shape[0]),
         has_glb=has_glb,
     )
 

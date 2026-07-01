@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -18,6 +19,8 @@ from tribench.core.viewer_geometry import (
     _primitive_triangle_vertices,
     _sample_triangle_surface,
     _voxel_downsample,
+    export_original_geometry,
+    export_viewer_point_cloud,
     export_viewer_geometry,
     primitive_to_point_cloud,
     write_mesh_ply,
@@ -528,3 +531,41 @@ class TestExportViewerGeometry:
         )
         # Voxel downsampling should reduce viewer cloud below target
         assert result.num_viewer_points <= 5000
+
+
+class TestExportViewerPointCloud:
+    def test_exports_only_viewer_pointcloud(self, simple_triangles, tmp_path):
+        result = export_viewer_point_cloud(simple_triangles, tmp_path)
+
+        assert Path(result.viewer_ply).exists()
+        assert Path(result.metadata_path).exists()
+        assert not (tmp_path / "geometry_cg_points.ply").exists()
+
+
+class TestExportOriginalGeometry:
+    def test_triangle_soup_export_keeps_original_counts(self, simple_triangles, tmp_path):
+        result = export_original_geometry(
+            simple_triangles,
+            tmp_path,
+            method_name="triangle-splatting",
+            checkpoint_path="/fake/path",
+        )
+
+        assert result.num_vertices == simple_triangles.num_vertices
+        assert result.num_faces == simple_triangles.num_primitives
+        from plyfile import PlyData
+
+        data = PlyData.read(result.geometry_ply)
+        assert data["vertex"].count == simple_triangles.num_vertices
+        assert data["face"].count == simple_triangles.num_primitives
+        with open(result.metadata_path) as f:
+            meta = json.load(f)
+        assert meta["export_mode"] == "original"
+        assert meta["sampling"] is None
+        assert meta["downsampling"] is None
+
+    def test_indexed_mesh_export_keeps_shared_topology(self, indexed_mesh, tmp_path):
+        result = export_original_geometry(indexed_mesh, tmp_path)
+
+        assert result.num_vertices == indexed_mesh.num_vertices
+        assert result.num_faces == indexed_mesh.num_primitives

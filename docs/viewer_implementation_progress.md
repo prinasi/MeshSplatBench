@@ -7,15 +7,15 @@
 
 | 阶段 | 名称 | 状态 | 说明 |
 |------|------|------|------|
-| 1 | 静态资源迁移 | ✅ 完成 | 26个文件从nerfbaselines迁移至 viewer_static/，3DGS本地渲染入口已禁用 |
-| 2 | 双点云导出 | ✅ 完成 | viewer_geometry.py (533行) + CLI导出工具 (109行) |
+| 1 | 静态资源迁移 | ✅ 完成 | viewer_static/ 保留22个必要文件，3DGS本地渲染入口已禁用并移除静态文件 |
+| 2 | 双点云导出 | ✅ 完成 | viewer_geometry.py + 独立 CLI 导出工具 |
 | 3 | train/test dataset | ✅ 完成 | viewer.py 同时加载多个split |
 | 4 | geometry endpoint | ✅ 完成 | /dataset/pointcloud.ply + /dataset/geometry/* 路由 |
 | 5 | HTTP remote renderer | ✅ 完成 | POST /render 兼容nerfbaselines pose格式 |
 | 6 | WebSocket renderer | ✅ 完成 | /render-websocket + 完整RFC 6455实现 |
 | 7 | Keyframe/轨迹 | ✅ 基础完成 | 复用前端camera path UI，新增 viewer-path 离线渲染 |
 | 8 | Mesh 适配 | ✅ 基础完成 | mesh PLY/GLB best-effort导出 + mesh preview参数 |
-| 9 | 配置与 CLI | ✅ 完成 | --geometry/--cg-geometry/--mesh-geometry/--viewer-splits/--auto-export-geometry |
+| 9 | 配置与 CLI | ✅ 完成 | viewer 读取显式 geometry 参数；几何导出拆分到 tools/export_viewer_geometry.py |
 | 10 | 测试矩阵 | ✅ 完成 | 327项pytest：324 passed, 3 skipped |
 
 ## macOS 无 CUDA 适配
@@ -78,13 +78,13 @@ Test 10: GET  /styles.css               → 200, 15,352 bytes
 | 文件路径 | 行数 | 说明 |
 |----------|------|------|
 | `tribench/core/viewer.py` | 1,108 | 完全重写：nerfbaselines兼容的HTTP+WS viewer server |
-| `tribench/core/viewer_geometry.py` | 533 | 双点云导出核心模块 |
+| `tribench/core/viewer_geometry.py` | 核心模块 | 双点云导出与原始几何导出 |
 | `tribench/core/trajectory.py` | 279 | nerfbaselines-v1 trajectory读写和离线渲染 |
 | `tribench/core/_websocket.py` | 1,732 | RFC 6455 WebSocket实现（从nerfbaselines复制） |
 | `tribench/core/palettes.json` | — | 色彩调色板定义（从nerfbaselines复制） |
 | `tribench/renderers/dummy.py` | 125 | CPU-only DummyRenderer（macOS无CUDA回退） |
-| `tools/export_viewer_geometry.py` | 109 | 几何导出CLI工具 |
-| `tribench/core/viewer_static/` | 26文件 | nerfbaselines前端静态资源 |
+| `tools/export_viewer_geometry.py` | 独立入口 | 几何导出CLI工具 |
+| `tribench/core/viewer_static/` | 22文件 | nerfbaselines前端必要静态资源 |
 
 ### 修改文件
 
@@ -104,7 +104,6 @@ viewer_static/
 ├── interpolation.js        # 相机插值
 ├── mesh.js                 # Mesh显示
 ├── styles.css              # 样式表
-├── 3dgs.js                 # 已在HTTP路由层禁用，不作为TriBench viewer入口暴露
 ├── favicon.ico
 └── third-party/
     ├── three.module.js     # Three.js r128+
@@ -113,9 +112,8 @@ viewer_static/
     ├── mp4-muxer.js        # MP4封装
     ├── webm-muxer.js       # WebM封装
     ├── es-module-shims.wasm.js
-    ├── gaussian-splats-3d.module.min.js
     ├── LICENSE
-    ├── fonts/              # tabler-icons字体 (woff/woff2/ttf)
+    ├── fonts/              # tabler-icons字体 (仅woff2)
     ├── lines/              # Three.js Line2系列 (5个文件)
     └── loaders/PLYLoader.js
 ```
@@ -124,26 +122,30 @@ viewer_static/
 
 ### Phase 1: 静态资源迁移 — ✅ 完成
 
-- [x] 从 nerfbaselines 复制 26个前端文件到 `tribench/core/viewer_static/`
+- [x] 从 nerfbaselines 迁移前端文件到 `tribench/core/viewer_static/`，仅保留22个必要静态资源
 - [x] 包含 Three.js、viewer.js、controls.js、PLYLoader 等核心组件
 - [x] 保留 third-party/ 子目录结构（fonts/、lines/、loaders/）
 - [x] 禁用 `GET /3dgs.js`，TriBench viewer 不暴露 3DGS local renderer。
+- [x] 物理移除 `viewer_static/3dgs.js` 与 gaussian-splats 第三方文件；Tabler 字体仅保留 woff2。
 
 ### Phase 2: 双点云导出 — ✅ 完成
 
-- [x] 创建 `tribench/core/viewer_geometry.py` (533行)
+- [x] 创建 `tribench/core/viewer_geometry.py`
   - `primitive_to_point_cloud()`: 从任意 BasePrimitive 采样三角形表面点
   - `_sample_triangle_surface()`: 面积加权重心坐标采样
   - `write_point_cloud_ply()` / `write_mesh_ply()`: PLY写入
   - `export_viewer_geometry()`: 一站式导出接口
   - 导出: `geometry_viewer_points.ply` (500K), `geometry_cg_points.ply` (3M), `geometry_metadata.json`, `geometry_attributes.npz`, 可选 `geometry_mesh.ply`
   - `GeometryExportConfig` dataclass: viewer_num_points=500K, cg_num_points=3M
+  - `export_viewer_point_cloud()`: 只导出 viewer 所需的 `geometry_viewer_points.ply`
+  - `export_original_geometry()`: 不采样、不降采样，按训练后的 primitive 原始拓扑导出 `geometry_original.ply`
   - Color modes: dc (SH DC), opacity, white, rendered
   - Normal modes: none, primitive, estimated
   - 体素降采样用于viewer点云
-- [x] 创建 `tools/export_viewer_geometry.py` (109行)
+- [x] 创建 `tools/export_viewer_geometry.py` 独立导出入口
   - CLI: `--config` 或 `--method --checkpoint` 输入
-  - 参数: `--viewer-num-points`, `--cg-num-points`, `--color-mode`, `--normal-mode`, `--export-mesh`, `--export-glb`, `--voxel-size`
+  - 默认导出原始 `geometry_original.ply`，不施加额外点数限制
+  - 参数: `--filename`, `--export-glb`
 
 ### Phase 3: train/test dataset 加载 — ✅ 完成
 
@@ -199,19 +201,19 @@ viewer_static/
 - [x] 对暴露 `V/F` 的 primitive 优先导出 indexed mesh。
 - [x] 对 triangle soup primitive 回退到独立顶点 face PLY。
 - [x] `write_mesh_glb()` 支持可选 `geometry_mesh.glb`，便于 Unity/Blender 使用。
-- [x] viewer server 支持 `/dataset/geometry/mesh.ply` 和 `/dataset/geometry/mesh.glb`。
-- [x] CLI 支持 `--mesh-geometry`、`--glb-geometry`、`--mesh-preview`。
+- [x] viewer server 保留 `/dataset/geometry/mesh.ply` 和 `/dataset/geometry/mesh.glb` 支持。
+- [x] viewer CLI 不再接收 CG/mesh 几何参数，避免 CG 导出资产进入 viewer 流程。
 
 ### Phase 9: 配置与 CLI 集成 — ✅ 完成
 
-- [x] `tribench viewer` 命令新增参数:
+- [x] `tribench render viewer` 命令新增参数:
   - `--viewer-splits` (默认 "train,test")
-  - `--geometry` / `--cg-geometry` / `--mesh-geometry` / `--glb-geometry`
+  - `--geometry` 指定 viewer 点云，默认自动生成/复用 `geometry_viewer_points.ply`
   - `--auto-export-geometry` / `--no-auto-export-geometry`
-  - `--mesh-preview`
+- [x] `tools/export_viewer_geometry.py` 只负责导出 CG 软件用的原始几何资产
+- [x] viewer 启动时自动发现 `<output.dir>/viewer/geometry_viewer_points.ply`；缺失时只生成 viewer 点云
 - [x] `_try_build_adapter()` / `_try_load_adapter()`: CUDA不可用时自动回退到DummyRenderer
-- [x] `_maybe_auto_export_geometry()`: 自动从adapter primitive导出几何
-- [x] 配置文件中 `render.viewer` section 支持 host/port/max_render_size/jpeg_quality
+- [x] 配置文件中 `render.viewer` section 支持 host/port/max_render_size/jpeg_quality/geometry 路径
 
 ### Phase 10: 测试矩阵 — ✅ 完成
 
@@ -227,4 +229,3 @@ viewer_static/
 1. 使用真实TriBench checkpoint测试完整viewer流程，尤其是四个方法的自由视角交互。
 2. 用真实 `mesh-splatting` checkpoint 验证 indexed mesh PLY/GLB 与 Unity/Blender 导入效果。
 3. 用浏览器端手动验收 keyframe preview、前端 mp4/webm/png zip 导出。
-4. 后续可考虑物理删除 `viewer_static/3dgs.js` 及 gaussian-splats 第三方文件，进一步缩小静态资产体积。

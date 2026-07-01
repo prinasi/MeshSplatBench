@@ -14,7 +14,7 @@ from tribench.cli.eval import (
 )
 from tribench.cli.train import _triangle_splatting_native_argv
 from tribench.cli.main import app
-from tribench.cli.render import _mesh_export_kwargs
+from tribench.cli.render import _default_viewer_pointcloud_paths, _mesh_export_kwargs
 from tribench.core.config import Config
 from tribench.core.mesh_eval import export_adapter_mesh
 
@@ -58,6 +58,36 @@ def test_render_subcommands_accept_config_without_required_triple(tmp_path: Path
         result = CliRunner().invoke(app, ["render", subcommand, "--config", str(config)])
         assert result.exit_code != 2, subcommand
         assert "Missing option" not in result.output
+
+
+def test_render_viewer_help_uses_explicit_geometry_only():
+    result = CliRunner().invoke(app, ["render", "viewer", "--help"])
+
+    assert result.exit_code == 0
+    assert "--geometry" in result.output
+    assert "Auto-export viewer" in result.output
+    assert "--cg-geometry" not in result.output
+    assert "--mesh-geometry" not in result.output
+
+
+def test_render_viewer_discovers_existing_viewer_pointcloud(tmp_path: Path):
+    viewer_dir = tmp_path / "run" / "viewer"
+    viewer_dir.mkdir(parents=True)
+    pointcloud = viewer_dir / "geometry_viewer_points.ply"
+    metadata = viewer_dir / "geometry_viewer_metadata.json"
+    pointcloud.write_text("ply\n")
+    metadata.write_text("{}\n")
+
+    cfg = {
+        "output": {
+            "dir": str(tmp_path / "run"),
+        },
+    }
+
+    geometry, geometry_metadata = _default_viewer_pointcloud_paths(cfg)
+
+    assert geometry == str(pointcloud)
+    assert geometry_metadata == str(metadata)
 
 
 def test_render_mesh_accepts_config_without_method_checkpoint(tmp_path: Path):

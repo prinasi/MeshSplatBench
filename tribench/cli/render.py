@@ -308,13 +308,11 @@ def viewer(
     jpeg_quality: int = typer.Option(90, "--jpeg-quality", help="JPEG quality for RGB renders."),
     viewer_splits: str = typer.Option("train,test", "--viewer-splits", help="Comma-separated splits to load."),
     geometry: Optional[str] = typer.Option(None, "--geometry", help="Path to viewer point cloud PLY."),
-    cg_geometry: Optional[str] = typer.Option(None, "--cg-geometry", help="Path to CG point cloud PLY."),
-    mesh_geometry: Optional[str] = typer.Option(None, "--mesh-geometry", help="Path to mesh PLY."),
-    glb_geometry: Optional[str] = typer.Option(None, "--glb-geometry", help="Path to mesh GLB."),
-    auto_export_geometry: bool = typer.Option(True, "--auto-export-geometry/--no-auto-export-geometry",
-                                               help="Auto-export geometry if not provided."),
-    mesh_preview: bool = typer.Option(False, "--mesh-preview",
-                                       help="Use mesh local renderer instead of remote (for mesh-splatting)."),
+    auto_export_geometry: bool = typer.Option(
+        True,
+        "--auto-export-geometry/--no-auto-export-geometry",
+        help="Auto-export viewer point cloud if it is not already available.",
+    ),
 ):
     """Start an interactive nerfbaselines-compatible viewer."""
     from tribench.core.viewer import serve_viewer
@@ -354,8 +352,18 @@ def viewer(
         port = int(viewer_cfg.get("port", port))
         max_render_size = int(viewer_cfg.get("max_render_size", max_render_size))
         jpeg_quality = int(viewer_cfg.get("jpeg_quality", jpeg_quality))
+        geometry = _optional_viewer_path(viewer_cfg, "geometry", geometry)
+        auto_export_geometry = bool(
+            viewer_cfg.get("auto_export_geometry", auto_export_geometry)
+        )
+        default_geometry, default_metadata = _default_viewer_pointcloud_paths(cfg)
+        geometry = geometry or default_geometry
         # Try to build adapter, fallback to DummyRenderer if CUDA unavailable
         adapter = _try_build_adapter(adapter_cfg, method)
+        run_dir = config_output_dir(cfg)
+        geometry_output_dir = Path(run_dir) / "viewer" if run_dir else None
+        method_name = str(adapter_cfg.get("type", method or "unknown"))
+        checkpoint_path = str(adapter_cfg.get("checkpoint"))
     else:
         if method is None or checkpoint is None or dataset is None:
             raise typer.BadParameter(
@@ -370,14 +378,19 @@ def viewer(
             else:
                 test_ds = ds
         adapter = _try_load_adapter(method, checkpoint)
+        default_metadata = None
+        geometry_output_dir = None
+        method_name = method
+        checkpoint_path = checkpoint
 
-    # Auto-export geometry if needed
-    geo_path = geometry
-    cg_geo_path = cg_geometry
-    mesh_geo_path = mesh_geometry
-    meta_path = None
-    if geo_path is None and auto_export_geometry:
-        geo_path, cg_geo_path, meta_path = _maybe_auto_export_geometry(adapter, method, checkpoint)
+    metadata_path = default_metadata
+    if geometry is None and auto_export_geometry:
+        geometry, metadata_path = _maybe_auto_export_viewer_geometry(
+            adapter,
+            method_name,
+            checkpoint_path,
+            output_dir=geometry_output_dir,
+        )
 
     serve_viewer(
         adapter,
@@ -387,16 +400,67 @@ def viewer(
         port=port,
         max_render_size=max_render_size,
         jpeg_quality=jpeg_quality,
-        geometry_path=geo_path,
-        cg_geometry_path=cg_geo_path,
-        mesh_geometry_path=mesh_geo_path,
-        glb_geometry_path=glb_geometry if glb_geometry else None,
-        metadata_path=meta_path,
-        mesh_preview=mesh_preview,
+        geometry_path=geometry,
+        metadata_path=metadata_path,
     )
 
 
-def _try_build_adapter(adapter_cfg, method_hint: str = "unknown"):
+def _optional_viewer_path(viewer_cfg: dict, name: str, current: str | None) -> str | None:
+    value = viewer_cfg.get(name, current)
+    return str(value) if value else None
+
+
+def _default_viewer_pointcloud_paths(cfg) -> tuple[str | None, str | None]:
+    """Find an already-exported viewer point cloud under ``<output.dir>/viewer``.
+
+    This never uses the CG export. It only wires in the lightweight viewer
+    point cloud that belongs to ``tribench render viewer``.
+    """
+    run_dir = config_output_dir(cfg)
+    if run_dir is None:
+        return None, None
+    viewer_dir = Path(run_dir) / "viewer"
+    pointcloud = viewer_dir / "geometry_viewer_points.ply"
+    metadata = viewer_dir / "geometry_viewer_metadata.json"
+    return (
+        str(pointcloud) if pointcloud.exists() else None,
+        str(metadata) if metadata.exists() else None,
+    )
+
+
+def _maybe_auto_export_viewer_geometry(
+    adapter,
+    method: str,
+    checkpoint: str | None,
+    *,
+    output_dir: Path | None = None,
+) -> tuple[str | None, str | None]:
+    """Auto-export only the lightweight point cloud needed by the viewer."""
+    import tempfile
+
+    try:
+        primitive = adapter.to_primitive()
+    except Exception:
+        return None, None
+
+    from tribench.core.viewer_geometry import export_viewer_point_cloud
+
+    out_dir = output_dir or Path(tempfile.mkdtemp(prefix="tribench_viewer_geometry_"))
+    try:
+        result = export_viewer_point_cloud(
+            primitive,
+            out_dir,
+            method_name=method,
+            checkpoint_path=checkpoint,
+        )
+        typer.echo(f"[viewer] Auto-exported viewer point cloud: {result.viewer_ply}")
+        return result.viewer_ply, result.metadata_path
+    except Exception as e:
+        typer.echo(f"[viewer] Viewer geometry export skipped: {e}")
+        return None, None
+
+
+def _try_build_adapter(adapter_cfg, method_hint: str | None = "unknown"):
     """Try to build an adapter; fall back to DummyRenderer on CUDA failure."""
     import torch
     from tribench.core.builder import build_adapter
@@ -406,7 +470,7 @@ def _try_build_adapter(adapter_cfg, method_hint: str = "unknown"):
         if not torch.cuda.is_available():
             typer.echo(f"[viewer] WARNING: CUDA not available, falling back to DummyRenderer. Error: {e}")
             from tribench.renderers.dummy import DummyRenderer
-            dummy = DummyRenderer(method_name=method_hint)
+            dummy = DummyRenderer(method_name=method_hint or "unknown")
             cp = adapter_cfg.get("checkpoint") if isinstance(adapter_cfg, dict) else None
             if cp:
                 dummy.load_checkpoint(str(cp))
@@ -427,30 +491,6 @@ def _try_load_adapter(method: str, checkpoint: str):
             dummy.load_checkpoint(checkpoint)
             return dummy
         raise
-
-
-def _maybe_auto_export_geometry(adapter, method: str, checkpoint: str | None):
-    """Auto-export geometry if adapter supports to_primitive()."""
-    import tempfile
-    try:
-        primitive = adapter.to_primitive()
-    except Exception:
-        return None, None, None
-    from tribench.core.viewer_geometry import GeometryExportConfig, export_viewer_geometry
-    out_dir = tempfile.mkdtemp(prefix="tribench_geometry_")
-    cfg = GeometryExportConfig(viewer_num_points=200_000, cg_num_points=1_000_000)
-    try:
-        result = export_viewer_geometry(
-            primitive, out_dir,
-            method_name=method,
-            checkpoint_path=checkpoint,
-            config=cfg,
-        )
-        typer.echo(f"[viewer] Auto-exported geometry: {result.viewer_ply}")
-        return result.viewer_ply, result.cg_ply, result.metadata_path
-    except Exception as e:
-        typer.echo(f"[viewer] Geometry export skipped: {e}")
-        return None, None, None
 
 
 @render_app.command("mesh")

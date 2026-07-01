@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export dual point cloud geometry from a trained TriBench checkpoint.
+"""Export original CG-readable geometry from a trained TriBench checkpoint.
 
 Usage:
   python tools/export_viewer_geometry.py \
@@ -8,8 +8,7 @@ Usage:
       --output-dir /tmp/tribench-geometry
 
   python tools/export_viewer_geometry.py \
-      --config configs/triangle-splatting/dtu/scan24.yaml \
-      --output-dir /tmp/tribench-geometry
+      --config configs/triangle-splatting/dtu/scan24.yaml
 """
 
 from __future__ import annotations
@@ -23,81 +22,100 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-
 def main():
     parser = argparse.ArgumentParser(
-        description="Export viewer + CG point clouds from a TriBench checkpoint."
+        description="Export original CG-readable geometry from a TriBench checkpoint."
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--config", type=str, help="TriBench config YAML path")
-    group.add_argument("--method", type=str, help="Method name (triangle-splatting, mesh-splatting, 2dts, diffsoup)")
+    group.add_argument(
+        "--method",
+        type=str,
+        help="Method name (triangle-splatting, mesh-splatting, 2dts, diffsoup)",
+    )
 
-    parser.add_argument("--checkpoint", "-c", type=str, help="Checkpoint path (required with --method)")
-    parser.add_argument("--output-dir", "-o", type=str, required=True, help="Output directory")
-    parser.add_argument("--viewer-num-points", type=int, default=500_000, help="Viewer point cloud size (default: 500K)")
-    parser.add_argument("--cg-num-points", type=int, default=3_000_000, help="CG point cloud size (default: 3M)")
-    parser.add_argument("--color-mode", choices=["dc", "opacity", "white", "rendered"], default="dc")
-    parser.add_argument("--normal-mode", choices=["none", "primitive", "estimated"], default="none")
-    parser.add_argument("--export-mesh", action="store_true", help="Also export mesh PLY")
-    parser.add_argument("--export-glb", action="store_true", help="Export GLB (future)")
-    parser.add_argument("--no-voxel-downsample", action="store_true", help="Disable voxel downsampling of viewer cloud")
-    parser.add_argument("--voxel-size", type=float, default=0.01, help="Voxel size for downsampling")
+    parser.add_argument(
+        "--checkpoint",
+        "-c",
+        type=str,
+        help="Checkpoint path (required with --method; overrides config)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        type=str,
+        help="Output directory (default with --config: <output.dir>/viewer)",
+    )
+    parser.add_argument("--export-glb", action="store_true", help="Also export mesh GLB")
+    parser.add_argument(
+        "--filename",
+        type=str,
+        default="geometry_original.ply",
+        help="Output PLY filename (default: geometry_original.ply)",
+    )
     args = parser.parse_args()
 
-    # Build adapter
     from tribench.core.builder import build_adapter
-    from tribench.core.viewer_geometry import GeometryExportConfig, export_viewer_geometry
+    from tribench.core.viewer_geometry import export_original_geometry
+    from tribench.cli.config import (
+        adapter_config,
+        load_cli_config,
+        output_dir as config_output_dir,
+    )
 
     if args.config:
-        from tribench.core.config import load_config
-        cfg = load_config(args.config)
-        method = cfg.get("method", "triangle-splatting")
-        checkpoint = cfg.get("checkpoint", None)
-        dataset_path = cfg.get("dataset", {}).get("path", None)
+        cfg = load_cli_config(args.config)
+        adapter_cfg = adapter_config(cfg, checkpoint=args.checkpoint)
+        if args.output_dir:
+            output_dir = Path(args.output_dir)
+        else:
+            run_dir = config_output_dir(cfg)
+            if run_dir is None:
+                parser.error("--output-dir is required when config output.dir is not set")
+            output_dir = Path(run_dir) / "viewer"
     else:
-        method = args.method
-        checkpoint = args.checkpoint
-        dataset_path = None
+        if not args.checkpoint:
+            parser.error("--checkpoint is required when using --method")
+        adapter_cfg = adapter_config(None, method=args.method, checkpoint=args.checkpoint)
+        if not args.output_dir:
+            parser.error("--output-dir is required when using --method")
+        output_dir = Path(args.output_dir)
 
-    if not checkpoint:
-        parser.error("--checkpoint is required when using --method")
+    method = adapter_cfg.get("type")
+    checkpoint = adapter_cfg.get("checkpoint")
+    if method is None or checkpoint is None:
+        parser.error("Could not resolve adapter type and checkpoint")
 
     print(f"[export] method={method}, checkpoint={checkpoint}")
-    adapter = build_adapter(method)
-    adapter.load_checkpoint(checkpoint)
+    print(f"[export] output_dir={output_dir}")
+    adapter = build_adapter(adapter_cfg)
 
-    # Extract primitive
     try:
         primitive = adapter.to_primitive()
-        print(f"[export] primitive: {primitive.num_primitives} triangles")
     except Exception as e:
         print(f"[export] ERROR: to_primitive() failed: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Export
-    geo_cfg = GeometryExportConfig(
-        viewer_num_points=args.viewer_num_points,
-        cg_num_points=args.cg_num_points,
-        color_mode=args.color_mode,
-        normal_mode=args.normal_mode,
-        export_mesh=args.export_mesh,
-        export_glb=args.export_glb,
-        voxel_downsample=not args.no_voxel_downsample,
-        voxel_size=args.voxel_size,
-    )
+    num_primitives = getattr(primitive, "num_primitives", None)
+    if num_primitives is None:
+        vertices = getattr(primitive, "vertices", None)
+        num_primitives = len(vertices) if vertices is not None else "unknown"
+    print(f"[export] primitive: {num_primitives} triangles")
 
-    result = export_viewer_geometry(
+    result = export_original_geometry(
         primitive,
-        args.output_dir,
-        method_name=method,
-        checkpoint_path=checkpoint,
-        config=geo_cfg,
+        output_dir,
+        method_name=str(method),
+        checkpoint_path=str(checkpoint),
+        filename=args.filename,
+        export_glb=args.export_glb,
     )
 
-    print(f"[export] viewer PLY: {result.viewer_ply} ({result.num_viewer_points} pts)")
-    print(f"[export] CG PLY:     {result.cg_ply} ({result.num_cg_points} pts)")
-    if result.mesh_ply:
-        print(f"[export] mesh PLY:   {result.mesh_ply}")
+    print(f"[export] geometry PLY: {result.geometry_ply}")
+    print(f"[export] vertices:     {result.num_vertices}")
+    print(f"[export] faces:        {result.num_faces}")
+    if result.mesh_glb_path:
+        print(f"[export] mesh GLB:     {result.mesh_glb_path}")
     if result.metadata_path:
         print(f"[export] metadata:   {result.metadata_path}")
     if result.attributes_path:
