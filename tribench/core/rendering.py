@@ -696,10 +696,17 @@ def render_video(
     API is available, avoiding the old render-all-frames-then-encode path.
     """
     try:
-        import imageio.v2 as iio
+        import imageio
 
-        writer_factory = iio.get_writer
-        imwrite = None
+        iio_v3 = getattr(imageio, "v3", None)
+        if iio_v3 is not None and not hasattr(imageio, "v2"):
+            writer_factory = None
+            imwrite = iio_v3.imwrite
+        else:
+            import imageio.v2 as iio
+
+            writer_factory = iio.get_writer
+            imwrite = None
     except ImportError:
         try:
             import imageio.v3 as iio_v3

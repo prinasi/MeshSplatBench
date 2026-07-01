@@ -70,6 +70,7 @@ include = ["tribench*"]
 [tool.pytest.ini_options]
 testpaths = ["tribench/tests"]
 python_files = "test_*.py"
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100

@@ -30,6 +30,8 @@ render:
     split: test
     host: 127.0.0.1
     port: 7007
+    max_render_size: 1280
+    jpeg_quality: 90
 
 eval:
   split: test

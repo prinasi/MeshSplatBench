@@ -300,12 +300,29 @@ def viewer(
     eval_every: int = typer.Option(8, "--eval-every"),
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(7007, "--port"),
+    max_render_size: int = typer.Option(
+        1280,
+        "--max-render-size",
+        help="Maximum long edge for interactive renders; use 0 for no cap.",
+    ),
+    jpeg_quality: int = typer.Option(90, "--jpeg-quality", help="JPEG quality for RGB renders."),
+    viewer_splits: str = typer.Option("train,test", "--viewer-splits", help="Comma-separated splits to load."),
+    geometry: Optional[str] = typer.Option(None, "--geometry", help="Path to viewer point cloud PLY."),
+    cg_geometry: Optional[str] = typer.Option(None, "--cg-geometry", help="Path to CG point cloud PLY."),
+    mesh_geometry: Optional[str] = typer.Option(None, "--mesh-geometry", help="Path to mesh PLY."),
+    glb_geometry: Optional[str] = typer.Option(None, "--glb-geometry", help="Path to mesh GLB."),
+    auto_export_geometry: bool = typer.Option(True, "--auto-export-geometry/--no-auto-export-geometry",
+                                               help="Auto-export geometry if not provided."),
+    mesh_preview: bool = typer.Option(False, "--mesh-preview",
+                                       help="Use mesh local renderer instead of remote (for mesh-splatting)."),
 ):
-    """Start a lightweight online viewer for dataset cameras."""
-    from tribench.core.builder import build_adapter, build_dataset
+    """Start an interactive nerfbaselines-compatible viewer."""
     from tribench.core.viewer import serve_viewer
 
+    splits = [s.strip() for s in viewer_splits.split(",") if s.strip()]
+
     if config is not None:
+        from tribench.core.builder import build_adapter, build_dataset
         cfg = load_cli_config(config)
         assert cfg is not None
         viewer_cfg = merged_section(cfg, "render", nested="viewer")
@@ -314,30 +331,126 @@ def viewer(
             raise typer.BadParameter(
                 "Config must set adapter.type and adapter.checkpoint, or trainer.type and output.dir."
             )
-        dataset_cfg = dataset_config(
-            cfg,
-            dataset=dataset,
-            dataset_type=dataset_type if dataset_type != "auto" else None,
-            split=split if split != "test" else None,
-            image_dir=image_dir if image_dir != "images" else None,
-            resolution=resolution if resolution != 1 else None,
-            eval_every=eval_every if eval_every != 8 else None,
-            stage="render",
-        )
-        if "split" in viewer_cfg:
-            dataset_cfg["split"] = viewer_cfg["split"]
+        # Build datasets for all requested splits
+        train_ds = None
+        test_ds = None
+        for sp in splits:
+            dataset_cfg = dataset_config(
+                cfg,
+                dataset=dataset,
+                dataset_type=dataset_type if dataset_type != "auto" else None,
+                split=sp,
+                image_dir=image_dir if image_dir != "images" else None,
+                resolution=resolution if resolution != 1 else None,
+                eval_every=eval_every if eval_every != 8 else None,
+                stage="render",
+            )
+            ds = build_dataset(dataset_cfg)
+            if sp == "train":
+                train_ds = ds
+            else:
+                test_ds = ds
         host = str(viewer_cfg.get("host", host))
         port = int(viewer_cfg.get("port", port))
-        adapter = build_adapter(adapter_cfg)
-        ds = build_dataset(dataset_cfg)
+        max_render_size = int(viewer_cfg.get("max_render_size", max_render_size))
+        jpeg_quality = int(viewer_cfg.get("jpeg_quality", jpeg_quality))
+        # Try to build adapter, fallback to DummyRenderer if CUDA unavailable
+        adapter = _try_build_adapter(adapter_cfg, method)
     else:
         if method is None or checkpoint is None or dataset is None:
             raise typer.BadParameter(
                 "Use --config, or provide --method, --checkpoint, and --dataset."
             )
-        adapter = _load(method, checkpoint)
-        ds = _load_dataset(dataset, dataset_type, split, eval_every, image_dir, resolution)
-    serve_viewer(adapter, ds, host=host, port=port)
+        train_ds = None
+        test_ds = None
+        for sp in splits:
+            ds = _load_dataset(dataset, dataset_type, sp, eval_every, image_dir, resolution)
+            if sp == "train":
+                train_ds = ds
+            else:
+                test_ds = ds
+        adapter = _try_load_adapter(method, checkpoint)
+
+    # Auto-export geometry if needed
+    geo_path = geometry
+    cg_geo_path = cg_geometry
+    mesh_geo_path = mesh_geometry
+    meta_path = None
+    if geo_path is None and auto_export_geometry:
+        geo_path, cg_geo_path, meta_path = _maybe_auto_export_geometry(adapter, method, checkpoint)
+
+    serve_viewer(
+        adapter,
+        train_dataset=train_ds,
+        test_dataset=test_ds,
+        host=host,
+        port=port,
+        max_render_size=max_render_size,
+        jpeg_quality=jpeg_quality,
+        geometry_path=geo_path,
+        cg_geometry_path=cg_geo_path,
+        mesh_geometry_path=mesh_geo_path,
+        glb_geometry_path=glb_geometry if glb_geometry else None,
+        metadata_path=meta_path,
+        mesh_preview=mesh_preview,
+    )
+
+
+def _try_build_adapter(adapter_cfg, method_hint: str = "unknown"):
+    """Try to build an adapter; fall back to DummyRenderer on CUDA failure."""
+    import torch
+    from tribench.core.builder import build_adapter
+    try:
+        return build_adapter(adapter_cfg)
+    except Exception as e:
+        if not torch.cuda.is_available():
+            typer.echo(f"[viewer] WARNING: CUDA not available, falling back to DummyRenderer. Error: {e}")
+            from tribench.renderers.dummy import DummyRenderer
+            dummy = DummyRenderer(method_name=method_hint)
+            cp = adapter_cfg.get("checkpoint") if isinstance(adapter_cfg, dict) else None
+            if cp:
+                dummy.load_checkpoint(str(cp))
+            return dummy
+        raise
+
+
+def _try_load_adapter(method: str, checkpoint: str):
+    """Try to load an adapter; fall back to DummyRenderer on CUDA failure."""
+    import torch
+    try:
+        return _load(method, checkpoint)
+    except Exception as e:
+        if not torch.cuda.is_available():
+            typer.echo(f"[viewer] WARNING: CUDA not available, falling back to DummyRenderer. Error: {e}")
+            from tribench.renderers.dummy import DummyRenderer
+            dummy = DummyRenderer(method_name=method)
+            dummy.load_checkpoint(checkpoint)
+            return dummy
+        raise
+
+
+def _maybe_auto_export_geometry(adapter, method: str, checkpoint: str | None):
+    """Auto-export geometry if adapter supports to_primitive()."""
+    import tempfile
+    try:
+        primitive = adapter.to_primitive()
+    except Exception:
+        return None, None, None
+    from tribench.core.viewer_geometry import GeometryExportConfig, export_viewer_geometry
+    out_dir = tempfile.mkdtemp(prefix="tribench_geometry_")
+    cfg = GeometryExportConfig(viewer_num_points=200_000, cg_num_points=1_000_000)
+    try:
+        result = export_viewer_geometry(
+            primitive, out_dir,
+            method_name=method,
+            checkpoint_path=checkpoint,
+            config=cfg,
+        )
+        typer.echo(f"[viewer] Auto-exported geometry: {result.viewer_ply}")
+        return result.viewer_ply, result.cg_ply, result.metadata_path
+    except Exception as e:
+        typer.echo(f"[viewer] Geometry export skipped: {e}")
+        return None, None, None
 
 
 @render_app.command("mesh")
@@ -377,6 +490,63 @@ def mesh(
         export_kwargs = {}
     path = export_adapter_mesh(adapter, output, **export_kwargs)
     typer.echo(f"Mesh saved to {path}")
+
+
+@render_app.command("viewer-path")
+def viewer_path(
+    method: Optional[str] = typer.Option(None, "--method", "-m"),
+    checkpoint: Optional[str] = typer.Option(None, "--checkpoint", "-c"),
+    config: Optional[Path] = typer.Option(None, "--config", help="TriBench render config YAML"),
+    trajectory: Path = typer.Option(..., "--trajectory", "-t", help="Path to nerfbaselines-v1 trajectory JSON."),
+    output_dir: str = typer.Option("trajectory_render/", "--output-dir", "-o"),
+    output_types: str = typer.Option("color", "--output-types", help="Comma-separated: color,depth,alpha,normal"),
+    device: Optional[str] = typer.Option(None, "--device", help="Override render device (e.g. cpu, cuda:0)."),
+):
+    """Render frames from a viewer-exported camera path (trajectory JSON).
+
+    Loads a nerfbaselines-v1 trajectory JSON (exported from the viewer's
+    ``save_trajectory()`` button), builds CameraBatch for each frame, and
+    renders them offline. Produces per-frame images and an MP4 video.
+    """
+    from tribench.core.trajectory import (
+        load_trajectory,
+        trajectory_cameras,
+        trajectory_get_fps,
+        render_trajectory_frames,
+    )
+
+    traj = load_trajectory(trajectory)
+    fps = trajectory_get_fps(traj)
+    cameras = trajectory_cameras(traj, device=device)
+    out_types = tuple(s.strip() for s in output_types.split(",") if s.strip())
+
+    if config is not None:
+        cfg = load_cli_config(config)
+        assert cfg is not None
+        adapter_cfg = adapter_config(cfg, method=method, checkpoint=checkpoint)
+        if adapter_cfg.get("type") is None or adapter_cfg.get("checkpoint") is None:
+            raise typer.BadParameter(
+                "Config must set adapter.type and adapter.checkpoint, or trainer.type and output.dir."
+            )
+        adapter = _try_build_adapter(adapter_cfg, method or "unknown")
+    else:
+        if method is None or checkpoint is None:
+            raise typer.BadParameter("Use --config, or provide --method and --checkpoint.")
+        adapter = _try_load_adapter(method, checkpoint)
+
+    manifest = render_trajectory_frames(
+        adapter,
+        cameras,
+        output_dir,
+        fps=fps,
+        output_types=out_types,
+        device=device,
+    )
+    typer.echo(
+        f"Rendered {manifest['num_frames']} frames at {fps} fps to {output_dir}"
+    )
+    if manifest.get("video_path"):
+        typer.echo(f"Video: {manifest['video_path']}")
 
 
 def _mesh_export_kwargs(cfg, mesh_cfg: dict, method: str | None = None) -> dict:
