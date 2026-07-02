@@ -129,6 +129,7 @@ def evaluate_images(
     # Prefer metrics computed from existing renders; only render when missing.
     manifest = compute_metrics_from_render_dir(
         render_dir,
+        device=_default_metrics_device(),
         expected_method=str(method_label) if method_label is not None else None,
         expected_checkpoint=checkpoint_label,
         expected_metrics_mode=metrics_mode,
@@ -305,6 +306,12 @@ def _benchmark_diffsoup_inference(
     benchmark = benchmark_adapter.benchmark_cameras(benchmark_cameras, warmup=10, trials=5)
     benchmark["benchmark_split"] = benchmark_split
     return benchmark
+
+
+def _default_metrics_device() -> str:
+    import torch
+
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 @eval_app.command("mesh")

@@ -1,0 +1,18 @@
+# @format
+
+_base_:
+  - ../../base/nerf_synthetic.yaml
+  - ../../base/triangle-splatting.yaml
+
+experiment:
+  name: triangle_splatting_nerf_synthetic_chair
+
+dataset:
+  scene: chair
+
+trainer:
+  white_background: true
+
+adapter:
+  render_params:
+    bg_color: white

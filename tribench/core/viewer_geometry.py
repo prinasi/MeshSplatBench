@@ -12,8 +12,7 @@ Plus optional sidecar files:
 from __future__ import annotations
 
 import json
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +20,36 @@ import numpy as np
 import torch
 
 from tribench.primitives.base import BasePrimitive
+
+_SH_C0 = 0.28209479177387814
+_SH_C1 = 0.4886025119029199
+_SH_C2 = [
+    1.0925484305920792,
+    -1.0925484305920792,
+    0.31539156525252005,
+    -1.0925484305920792,
+    0.5462742152960396,
+]
+_SH_C3 = [
+    -0.5900435899266435,
+    2.890611442640554,
+    -0.4570457994644658,
+    0.3731763325901154,
+    -0.4570457994644658,
+    1.445305721320277,
+    -0.5900435899266435,
+]
+_SH_C4 = [
+    2.5033429417967046,
+    -1.7701307697799304,
+    0.9461746957575601,
+    -0.6690465435572892,
+    0.10578554691520431,
+    -0.6690465435572892,
+    0.47308734787878004,
+    -1.7701307697799304,
+    0.6258357354491761,
+]
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +89,6 @@ def _sample_triangle_surface(
         points: [num_points, 3]  sampled positions
         tri_ids: [num_points]    index of the source triangle for each point
     """
-    N = vertices.shape[0]
     device = vertices.device
     dtype = vertices.dtype
     if areas is None:
@@ -104,14 +132,128 @@ def _sample_triangle_surface(
 
 
 def _colors_from_dc(sh_coeffs: torch.Tensor | None, num_prims: int) -> torch.Tensor | None:
-    """Extract DC (SH degree-0) component as RGB, shape [N, 3] in [0, 1]."""
+    """Extract SH degree-0 RGB, shape [N, 3] in [0, 1]."""
     if sh_coeffs is None:
         return None
-    # SH DC is the first 3 coefficients (constant term)
-    if sh_coeffs.shape[-1] >= 3:
-        dc = sh_coeffs[:, :3].clamp(0, 1)
-        return dc
-    return None
+    if sh_coeffs.shape[0] != num_prims or sh_coeffs.shape[-1] < 3:
+        return None
+    dc = sh_coeffs[:, :3]
+    return (dc * _SH_C0 + 0.5).clamp(0, 1)
+
+
+def _infer_sh_degree(flat_coeffs: torch.Tensor) -> int | None:
+    """Infer SH degree from flattened [N, coeff_count * 3] coefficients."""
+    if flat_coeffs.dim() != 2 or flat_coeffs.shape[-1] < 3:
+        return None
+    channels = int(flat_coeffs.shape[-1])
+    if channels % 3 != 0:
+        return None
+    coeff_count = channels // 3
+    degree = int(np.sqrt(coeff_count) - 1)
+    if (degree + 1) ** 2 != coeff_count or degree < 0 or degree > 4:
+        return None
+    return degree
+
+
+def _eval_sh(degree: int, sh: torch.Tensor, dirs: torch.Tensor) -> torch.Tensor:
+    """Evaluate spherical harmonics, matching the Gaussian-splatting SH layout."""
+    assert 0 <= degree <= 4
+    coeff_count = (degree + 1) ** 2
+    assert sh.shape[-1] >= coeff_count
+
+    result = _SH_C0 * sh[..., 0]
+    if degree > 0:
+        x, y, z = dirs[..., 0:1], dirs[..., 1:2], dirs[..., 2:3]
+        result = result - _SH_C1 * y * sh[..., 1] + _SH_C1 * z * sh[..., 2] - _SH_C1 * x * sh[..., 3]
+
+        if degree > 1:
+            xx, yy, zz = x * x, y * y, z * z
+            xy, yz, xz = x * y, y * z, x * z
+            result = (
+                result
+                + _SH_C2[0] * xy * sh[..., 4]
+                + _SH_C2[1] * yz * sh[..., 5]
+                + _SH_C2[2] * (2.0 * zz - xx - yy) * sh[..., 6]
+                + _SH_C2[3] * xz * sh[..., 7]
+                + _SH_C2[4] * (xx - yy) * sh[..., 8]
+            )
+
+            if degree > 2:
+                result = (
+                    result
+                    + _SH_C3[0] * y * (3 * xx - yy) * sh[..., 9]
+                    + _SH_C3[1] * xy * z * sh[..., 10]
+                    + _SH_C3[2] * y * (4 * zz - xx - yy) * sh[..., 11]
+                    + _SH_C3[3] * z * (2 * zz - 3 * xx - 3 * yy) * sh[..., 12]
+                    + _SH_C3[4] * x * (4 * zz - xx - yy) * sh[..., 13]
+                    + _SH_C3[5] * z * (xx - yy) * sh[..., 14]
+                    + _SH_C3[6] * x * (xx - 3 * yy) * sh[..., 15]
+                )
+
+                if degree > 3:
+                    result = (
+                        result
+                        + _SH_C4[0] * xy * (xx - yy) * sh[..., 16]
+                        + _SH_C4[1] * yz * (3 * xx - yy) * sh[..., 17]
+                        + _SH_C4[2] * xy * (7 * zz - 1) * sh[..., 18]
+                        + _SH_C4[3] * yz * (7 * zz - 3) * sh[..., 19]
+                        + _SH_C4[4] * (zz * (35 * zz - 30) + 3) * sh[..., 20]
+                        + _SH_C4[5] * xz * (7 * zz - 3) * sh[..., 21]
+                        + _SH_C4[6] * (xx - yy) * (7 * zz - 1) * sh[..., 22]
+                        + _SH_C4[7] * xz * (xx - 3 * yy) * sh[..., 23]
+                        + _SH_C4[8]
+                        * (xx * (xx - 3 * yy) - yy * (3 * xx - yy))
+                        * sh[..., 24]
+                    )
+    return result
+
+
+def _primitive_reference_points(primitive: BasePrimitive) -> torch.Tensor:
+    points = getattr(primitive, "points", None)
+    if isinstance(points, torch.Tensor) and points.dim() == 2 and points.shape[1] == 3:
+        return points
+    return _primitive_triangle_vertices(primitive).mean(dim=1)
+
+
+def _colors_from_sh(
+    sh_coeffs: torch.Tensor | None,
+    reference_points: torch.Tensor,
+    *,
+    camera_center: torch.Tensor | None = None,
+) -> torch.Tensor | None:
+    """Bake SH colors from the origin-facing direction used by create_off.py."""
+    if sh_coeffs is None:
+        return None
+    degree = _infer_sh_degree(sh_coeffs)
+    if degree is None:
+        return None
+
+    ref = reference_points.to(device=sh_coeffs.device, dtype=sh_coeffs.dtype)
+    center = (
+        torch.zeros(3, device=sh_coeffs.device, dtype=sh_coeffs.dtype)
+        if camera_center is None
+        else camera_center.to(device=sh_coeffs.device, dtype=sh_coeffs.dtype)
+    )
+    dirs = ref - center
+    dirs = dirs / torch.linalg.norm(dirs, dim=1, keepdim=True).clamp(min=1e-8)
+
+    coeff_count = (degree + 1) ** 2
+    sh = sh_coeffs.reshape(sh_coeffs.shape[0], coeff_count, 3).permute(0, 2, 1).contiguous()
+    return (_eval_sh(degree, sh, dirs) + 0.5).clamp(0, 1)
+
+
+def _primitive_display_colors(primitive: BasePrimitive) -> torch.Tensor | None:
+    """Return baked per-primitive RGB in [0, 1] where possible."""
+    sh_coeffs = getattr(primitive, "sh_coeffs", None)
+    if isinstance(sh_coeffs, torch.Tensor):
+        colors = _colors_from_sh(sh_coeffs, _primitive_reference_points(primitive))
+        if colors is not None:
+            return colors
+
+    colors = primitive.get_colors()
+    if colors is None:
+        return None
+    return colors.float().clamp(0, 1)
 
 
 def _opacity_colormap(opacity: torch.Tensor) -> torch.Tensor:
@@ -214,6 +356,117 @@ def write_mesh_ply(
     PlyData(els, text=True).write(str(path))
 
 
+def _quantized_material_names(
+    face_rgb: np.ndarray,
+    *,
+    levels: int = 8,
+) -> tuple[list[str], dict[str, tuple[float, float, float]]]:
+    levels = max(2, int(levels))
+    rgb01 = face_rgb.astype(np.float32) / 255.0
+    quantized = np.rint(rgb01 * (levels - 1)).astype(np.int32).clip(0, levels - 1)
+
+    names: list[str] = []
+    materials: dict[str, tuple[float, float, float]] = {}
+    denom = float(levels - 1)
+    for q in quantized:
+        name = f"mat_{q[0]:02d}_{q[1]:02d}_{q[2]:02d}"
+        names.append(name)
+        if name not in materials:
+            materials[name] = (float(q[0] / denom), float(q[1] / denom), float(q[2] / denom))
+    return names, materials
+
+
+def write_mesh_obj(
+    path: str | Path,
+    vertices: np.ndarray,       # [V, 3] float32
+    faces: np.ndarray,          # [F, 3] int32
+    rgb: np.ndarray | None = None,
+    normals: np.ndarray | None = None,
+    *,
+    material_levels: int = 8,
+) -> str:
+    """Write a Unity/Blender-friendly OBJ with companion MTL.
+
+    OBJ is used as the broad-compatibility mesh format. The writer emits both
+    vertex-color extension values on ``v`` rows and quantized MTL materials per
+    face, so tools that ignore vertex colors still get visible baked color.
+    """
+    obj_path = Path(path)
+    obj_path.parent.mkdir(parents=True, exist_ok=True)
+    mtl_path = obj_path.with_suffix(".mtl")
+
+    vertices = np.asarray(vertices, dtype=np.float32)
+    faces = np.asarray(faces, dtype=np.int32)
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError(f"Expected vertices [V, 3], got {vertices.shape}")
+    if faces.ndim != 2 or faces.shape[1] != 3:
+        raise ValueError(f"Expected triangular faces [F, 3], got {faces.shape}")
+
+    rgb_u8 = None
+    if rgb is not None:
+        rgb_u8 = np.asarray(rgb, dtype=np.uint8)
+        if rgb_u8.shape != (vertices.shape[0], 3):
+            rgb_u8 = None
+
+    normals_f32 = None
+    if normals is not None:
+        normals_f32 = np.asarray(normals, dtype=np.float32)
+        if normals_f32.shape != (vertices.shape[0], 3):
+            normals_f32 = None
+
+    if rgb_u8 is not None and faces.shape[0] > 0:
+        face_rgb = np.rint(rgb_u8[faces].astype(np.float32).mean(axis=1)).astype(np.uint8)
+        face_materials, materials = _quantized_material_names(
+            face_rgb,
+            levels=material_levels,
+        )
+    else:
+        face_materials = ["mat_default"] * faces.shape[0]
+        materials = {"mat_default": (0.8, 0.8, 0.8)}
+
+    with mtl_path.open("w", encoding="utf-8") as f:
+        f.write("# TriBench material palette\n")
+        for name in sorted(materials):
+            r, g, b = materials[name]
+            f.write(f"newmtl {name}\n")
+            f.write(f"Kd {r:.6f} {g:.6f} {b:.6f}\n")
+            f.write(f"Ka {r * 0.2:.6f} {g * 0.2:.6f} {b * 0.2:.6f}\n")
+            f.write("Ks 0.000000 0.000000 0.000000\n")
+            f.write("d 1.000000\n")
+            f.write("illum 1\n\n")
+
+    with obj_path.open("w", encoding="utf-8") as f:
+        f.write("# TriBench CG mesh export\n")
+        f.write(f"mtllib {mtl_path.name}\n")
+        f.write("o tribench_geometry\n")
+        for idx, v in enumerate(vertices):
+            if rgb_u8 is not None:
+                c = rgb_u8[idx].astype(np.float32) / 255.0
+                f.write(
+                    f"v {v[0]:.9g} {v[1]:.9g} {v[2]:.9g} "
+                    f"{c[0]:.6f} {c[1]:.6f} {c[2]:.6f}\n"
+                )
+            else:
+                f.write(f"v {v[0]:.9g} {v[1]:.9g} {v[2]:.9g}\n")
+
+        if normals_f32 is not None:
+            for n in normals_f32:
+                f.write(f"vn {n[0]:.9g} {n[1]:.9g} {n[2]:.9g}\n")
+
+        active_material = None
+        for face, material in zip(faces, face_materials, strict=True):
+            if material != active_material:
+                f.write(f"usemtl {material}\n")
+                active_material = material
+            a, b, c = (int(face[0]) + 1, int(face[1]) + 1, int(face[2]) + 1)
+            if normals_f32 is not None:
+                f.write(f"f {a}//{a} {b}//{b} {c}//{c}\n")
+            else:
+                f.write(f"f {a} {b} {c}\n")
+
+    return str(mtl_path)
+
+
 def write_mesh_glb(
     path: str | Path,
     vertices: np.ndarray,       # [V, 3] float32
@@ -284,7 +537,8 @@ def _extract_indexed_mesh_from_primitive(
         elif faces_np.shape[1] != 3:
             return None  # Unknown face format
 
-        # Colors: try vertex colors first, then per-face colors
+        # Colors: try vertex colors first. Per-face colors are preserved by
+        # triangle-soup fallback where each face owns its vertices.
         colors = primitive.get_colors()
         rgb = None
         if colors is not None:
@@ -316,6 +570,7 @@ class GeometryExportConfig:
     color_mode: str = "dc"        # dc | opacity | white | rendered
     normal_mode: str = "none"     # none | primitive | estimated
     export_mesh: bool = False
+    export_obj: bool = True
     export_glb: bool = False
     voxel_downsample: bool = True
     voxel_size: float = 0.01
@@ -326,12 +581,14 @@ class GeometryExportResult:
     viewer_ply: str
     cg_ply: str
     mesh_ply: str | None = None
+    mesh_obj_path: str | None = None
     mesh_glb_path: str | None = None
     metadata_path: str | None = None
     attributes_path: str | None = None
     num_viewer_points: int = 0
     num_cg_points: int = 0
     has_mesh: bool = False
+    has_obj: bool = False
     has_glb: bool = False
 
 
@@ -353,12 +610,15 @@ class ViewerPointCloudExportResult:
 
 @dataclass
 class OriginalGeometryExportResult:
-    geometry_ply: str
+    geometry_ply: str | None = None
+    geometry_path: str | None = None
+    mesh_obj_path: str | None = None
     mesh_glb_path: str | None = None
     metadata_path: str | None = None
     attributes_path: str | None = None
     num_vertices: int = 0
     num_faces: int = 0
+    has_obj: bool = False
     has_glb: bool = False
 
 
@@ -393,7 +653,7 @@ def primitive_to_point_cloud(
     # --- Colors ---
     rgb = None
     if color_mode == "dc":
-        colors = primitive.get_colors()
+        colors = _primitive_display_colors(primitive)
         if colors is not None:
             # Per-triangle color → per-point via tri_ids
             colors = colors.to(device=verts.device)
@@ -444,6 +704,7 @@ def export_viewer_geometry(
     meta_path = out / "geometry_metadata.json"
     attr_path = out / "geometry_attributes.npz"
     mesh_path = out / "geometry_mesh.ply" if cfg.export_mesh else None
+    obj_path = out / "geometry_mesh.obj" if cfg.export_mesh and cfg.export_obj else None
 
     # --- Sample viewer point cloud ---
     v_xyz, v_rgb, v_nrm, v_tri = primitive_to_point_cloud(
@@ -486,6 +747,7 @@ def export_viewer_geometry(
 
     # --- Optional mesh ---
     has_mesh = False
+    has_obj = False
     has_glb = False
     glb_path = out / "geometry_mesh.glb" if cfg.export_glb else None
     if cfg.export_mesh:
@@ -495,6 +757,9 @@ def export_viewer_geometry(
                 m_verts, m_faces, m_rgb, m_nrm = mesh_data
                 write_mesh_ply(mesh_path, m_verts, m_faces, m_rgb, m_nrm)
                 has_mesh = True
+                if obj_path is not None:
+                    write_mesh_obj(obj_path, m_verts, m_faces, m_rgb, m_nrm)
+                    has_obj = True
                 # GLB export (best-effort)
                 if cfg.export_glb and glb_path is not None:
                     try:
@@ -518,12 +783,14 @@ def export_viewer_geometry(
             "viewer_points": "geometry_viewer_points.ply",
             "cg_points": "geometry_cg_points.ply",
             "mesh": "geometry_mesh.ply" if has_mesh else None,
+            "mesh_obj": "geometry_mesh.obj" if has_obj else None,
             "mesh_glb": "geometry_mesh.glb" if has_glb else None,
         },
         "num_viewer_points": int(v_xyz.shape[0]),
         "num_cg_points": int(c_xyz.shape[0]),
         "num_primitives": int(primitive.num_primitives),
         "has_mesh": has_mesh,
+        "has_obj": has_obj,
         "has_glb": has_glb,
         "color_mode": cfg.color_mode,
         "normal_mode": cfg.normal_mode,
@@ -564,12 +831,14 @@ def export_viewer_geometry(
         viewer_ply=str(viewer_path),
         cg_ply=str(cg_path),
         mesh_ply=str(mesh_path) if has_mesh else None,
+        mesh_obj_path=str(obj_path) if has_obj else None,
         mesh_glb_path=str(glb_path) if has_glb else None,
         metadata_path=str(meta_path),
         attributes_path=str(attr_path),
         num_viewer_points=int(v_xyz.shape[0]),
         num_cg_points=int(c_xyz.shape[0]),
         has_mesh=has_mesh,
+        has_obj=has_obj,
         has_glb=has_glb,
     )
 
@@ -658,13 +927,19 @@ def export_original_geometry(
     method_name: str = "unknown",
     checkpoint_path: str | None = None,
     filename: str = "geometry_original.ply",
+    export_obj: bool = False,
     export_glb: bool = False,
 ) -> OriginalGeometryExportResult:
-    """Export the primitive's original topology as a CG-readable PLY.
+    """Export the primitive's original topology as a CG-readable mesh.
 
     Unlike ``export_viewer_geometry()``, this does not sample, downsample, or
     target a fixed number of points. Triangle-soup primitives are written as
     triangle-soup meshes; indexed primitives keep their shared vertex topology.
+
+    The primary format is inferred from ``filename``:
+      * ``.obj`` writes OBJ + MTL, recommended for Unity's built-in importer.
+      * ``.ply`` writes a standard mesh PLY for research/point-cloud tooling.
+      * ``.glb`` writes binary glTF when ``trimesh`` is available.
     """
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -675,13 +950,54 @@ def export_original_geometry(
 
     verts, faces, rgb, normals = mesh_data
     geometry_path = out / filename
-    glb_path = out / "geometry_original.glb" if export_glb else None
+    suffix = geometry_path.suffix.lower()
+    if suffix == "":
+        geometry_path = geometry_path.with_suffix(".obj")
+        suffix = ".obj"
+    geometry_path.parent.mkdir(parents=True, exist_ok=True)
+
+    extra_obj_path = (
+        out / "geometry_original.obj"
+        if export_obj and suffix != ".obj"
+        else None
+    )
+    glb_path = (
+        out / "geometry_original.glb"
+        if export_glb and suffix != ".glb"
+        else None
+    )
     meta_path = out / "geometry_metadata.json"
     attr_path = out / "geometry_attributes.npz"
 
-    write_mesh_ply(geometry_path, verts, faces, rgb, normals)
-
+    geometry_ply: str | None = None
+    mesh_obj_path: str | None = None
+    has_obj = False
     has_glb = False
+
+    if suffix == ".ply":
+        write_mesh_ply(geometry_path, verts, faces, rgb, normals)
+        geometry_ply = str(geometry_path)
+    elif suffix == ".obj":
+        write_mesh_obj(geometry_path, verts, faces, rgb, normals)
+        mesh_obj_path = str(geometry_path)
+        has_obj = True
+    elif suffix == ".glb":
+        try:
+            write_mesh_glb(geometry_path, verts, faces, rgb, normals)
+            has_glb = True
+        except Exception as exc:
+            raise RuntimeError(f"Could not write GLB geometry: {exc}") from exc
+    else:
+        raise ValueError(
+            f"Unsupported mesh extension '{suffix}'. Use .obj, .ply, or .glb; "
+            "FBX export requires Autodesk FBX SDK or another external converter."
+        )
+
+    if extra_obj_path is not None:
+        write_mesh_obj(extra_obj_path, verts, faces, rgb, normals)
+        mesh_obj_path = str(extra_obj_path)
+        has_obj = True
+
     if glb_path is not None:
         try:
             write_mesh_glb(glb_path, verts, faces, rgb, normals)
@@ -699,12 +1015,20 @@ def export_original_geometry(
         "up_axis": "+y",
         "scale": 1.0,
         "assets": {
-            "geometry": filename,
-            "mesh_glb": "geometry_original.glb" if has_glb else None,
+            "geometry": geometry_path.name,
+            "geometry_format": suffix.lstrip("."),
+            "mesh_ply": Path(geometry_ply).name if geometry_ply else None,
+            "mesh_obj": Path(mesh_obj_path).name if mesh_obj_path else None,
+            "mesh_glb": (
+                geometry_path.name
+                if suffix == ".glb" and has_glb
+                else "geometry_original.glb" if has_glb and glb_path is not None else None
+            ),
         },
         "num_vertices": int(verts.shape[0]),
         "num_faces": int(faces.shape[0]),
         "num_primitives": int(primitive.num_primitives),
+        "has_obj": has_obj,
         "has_glb": has_glb,
         "sampling": None,
         "downsampling": None,
@@ -739,12 +1063,15 @@ def export_original_geometry(
     np.savez(attr_path, **attrs)
 
     return OriginalGeometryExportResult(
-        geometry_ply=str(geometry_path),
-        mesh_glb_path=str(glb_path) if has_glb else None,
+        geometry_ply=geometry_ply,
+        geometry_path=str(geometry_path),
+        mesh_obj_path=mesh_obj_path,
+        mesh_glb_path=str(geometry_path if suffix == ".glb" else glb_path) if has_glb else None,
         metadata_path=str(meta_path),
         attributes_path=str(attr_path),
         num_vertices=int(verts.shape[0]),
         num_faces=int(faces.shape[0]),
+        has_obj=has_obj,
         has_glb=has_glb,
     )
 
@@ -769,7 +1096,7 @@ def _extract_mesh_from_primitive(
     faces = np.arange(N * 3, dtype=np.int32).reshape(N, 3)
 
     # Colors
-    colors = primitive.get_colors()
+    colors = _primitive_display_colors(primitive)
     rgb = None
     if colors is not None:
         # Repeat per-vertex

@@ -23,6 +23,7 @@ MIPNERF360_OUTDOOR_SCENES = ["bicycle", "flowers", "garden", "stump", "treehill"
 MIPNERF360_INDOOR_SCENES = ["room", "counter", "kitchen", "bonsai"]
 MIPNERF360_SCENES = MIPNERF360_OUTDOOR_SCENES + MIPNERF360_INDOOR_SCENES
 TANKS_AND_TEMPLES_SCENES = ["truck", "train"]
+NERF_SYNTHETIC_SCENES = ["chair", "drums", "ficus", "hotdog", "lego", "materials", "mic", "ship"]
 DTU_SCENES = [
     "scan24",
     "scan37",
@@ -44,6 +45,7 @@ DTU_SCENES = [
 DATASET_SCENES = {
     "mipnerf360": MIPNERF360_SCENES,
     "tandt": TANKS_AND_TEMPLES_SCENES,
+    "nerf_synthetic": NERF_SYNTHETIC_SCENES,
     "dtu": DTU_SCENES,
 }
 
@@ -120,6 +122,10 @@ def canonical_dataset(name: str) -> str:
         "tanks-and-temples": "tandt",
         "tat": "tandt",
         "tanks": "tandt",
+        "nerfsynthetic": "nerf_synthetic",
+        "nerf-synthetic": "nerf_synthetic",
+        "blender": "nerf_synthetic",
+        "synthetic": "nerf_synthetic",
     }
     return aliases.get(dataset, dataset)
 
@@ -221,6 +227,8 @@ def _infer_dataset_from_root(root: Any) -> str | None:
         return "tandt"
     if {"mipnerf360", "mipnerf-360", "360_v2"} & parts:
         return "mipnerf360"
+    if {"nerf_synthetic", "nerf-synthetic", "blender"} & parts:
+        return "nerf_synthetic"
     return None
 
 

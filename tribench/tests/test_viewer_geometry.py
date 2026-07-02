@@ -11,7 +11,6 @@ import torch
 
 from tribench.core.viewer_geometry import (
     GeometryExportConfig,
-    GeometryExportResult,
     _colors_from_dc,
     _extract_indexed_mesh_from_primitive,
     _extract_mesh_from_primitive,
@@ -23,6 +22,7 @@ from tribench.core.viewer_geometry import (
     export_viewer_point_cloud,
     export_viewer_geometry,
     primitive_to_point_cloud,
+    write_mesh_obj,
     write_mesh_ply,
     write_point_cloud_ply,
 )
@@ -217,6 +217,25 @@ class TestWriteMeshPLY:
         from plyfile import PlyData
         data = PlyData.read(str(path))
         assert "nx" in data["vertex"].data.dtype.names
+
+
+class TestWriteMeshOBJ:
+    def test_obj_and_mtl_with_vertex_colors(self, tmp_path):
+        verts = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32)
+        faces = np.array([[0, 1, 2]], dtype=np.int32)
+        rgb = np.array([[255, 0, 0], [0, 255, 0], [0, 0, 255]], dtype=np.uint8)
+        path = tmp_path / "mesh.obj"
+
+        mtl_path = write_mesh_obj(path, verts, faces, rgb)
+
+        obj_text = path.read_text()
+        mtl_text = Path(mtl_path).read_text()
+        assert "mtllib mesh.mtl" in obj_text
+        assert "usemtl mat_" in obj_text
+        assert "v 0" in obj_text
+        assert "f 1 2 3" in obj_text
+        assert "newmtl mat_" in mtl_text
+        assert "Kd " in mtl_text
 
 
 # ─── primitive_to_point_cloud tests ───────────────────────────────────────
@@ -440,6 +459,7 @@ class TestExportViewerGeometry:
         assert Path(result.viewer_ply).exists()
         assert Path(result.cg_ply).exists()
         assert Path(result.mesh_ply).exists()
+        assert Path(result.mesh_obj_path).exists()
         assert Path(result.metadata_path).exists()
         assert Path(result.attributes_path).exists()
 
@@ -515,6 +535,7 @@ class TestExportViewerGeometry:
         )
         assert not result.has_mesh
         assert result.mesh_ply is None
+        assert result.mesh_obj_path is None
 
     def test_voxel_downsample_reduces_points(self, simple_triangles, tmp_path):
         cfg = GeometryExportConfig(
@@ -569,3 +590,20 @@ class TestExportOriginalGeometry:
 
         assert result.num_vertices == indexed_mesh.num_vertices
         assert result.num_faces == indexed_mesh.num_primitives
+
+    def test_obj_export_is_primary_geometry_when_requested(self, simple_triangles, tmp_path):
+        result = export_original_geometry(
+            simple_triangles,
+            tmp_path,
+            filename="geometry_original.obj",
+        )
+
+        assert result.geometry_path.endswith(".obj")
+        assert result.geometry_ply is None
+        assert result.has_obj
+        assert Path(result.mesh_obj_path).exists()
+        assert Path(result.mesh_obj_path).with_suffix(".mtl").exists()
+        with open(result.metadata_path) as f:
+            meta = json.load(f)
+        assert meta["assets"]["geometry"] == "geometry_original.obj"
+        assert meta["assets"]["geometry_format"] == "obj"

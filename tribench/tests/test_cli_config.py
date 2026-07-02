@@ -219,6 +219,149 @@ def test_2dts_disables_native_training_eval_by_default():
     assert cfg.d2ts.native_overrides.trainer.eval_interval_iter == 0
 
 
+def test_nerf_synthetic_config_matrix_resolves_for_all_methods():
+    scenes = ["chair", "drums", "ficus", "hotdog", "lego", "materials", "mic", "ship"]
+    methods = ["triangle-splatting", "mesh-splatting", "diffsoup", "2dts"]
+
+    for method in methods:
+        for scene in scenes:
+            cfg = Config.fromfile(f"configs/{method}/nerf_synthetic/{scene}.yaml")
+
+            assert cfg.dataset.root == f"data/nerf_synthetic/{scene}"
+            assert cfg.dataset.type == "synthetic"
+            assert cfg.dataset.background == "white"
+            assert cfg.dataset.use_alpha is True
+            assert cfg.output.dir == f"outputs/{method}/nerf_synthetic/{scene}"
+            assert cfg.adapter.checkpoint.startswith(f"outputs/{method}/nerf_synthetic/{scene}/")
+
+            if method in {"triangle-splatting", "mesh-splatting"}:
+                assert cfg.trainer.white_background is True
+                assert cfg.adapter.render_params.bg_color == "white"
+            elif method == "diffsoup":
+                assert "random_init" not in cfg.trainer
+                assert "point_cloud_init" not in cfg.trainer
+                assert "point_cloud" not in cfg.trainer
+                assert cfg.trainer.mobilenerf_root == "data/mobilenerf_results"
+                assert cfg.trainer.downscale == 1
+                assert cfg.adapter.render_params.bg_color == "white"
+            elif method == "2dts":
+                assert cfg.d2ts.native_config == "configs/2dts/native/nerf_synthetic.yaml"
+                assert cfg.adapter.render_params.bg_color == "white"
+
+
+def test_triangle_and_mesh_splatting_nerf_synthetic_readers_prefer_points3d_ply():
+    import inspect
+
+    from tribench.vendor.mesh_splatting.scene.dataset_readers import (
+        readNerfSyntheticInfo as read_mesh_synthetic,
+    )
+    from tribench.vendor.triangle_splatting.scene.dataset_readers import (
+        readNerfSyntheticInfo as read_triangle_synthetic,
+    )
+
+    for reader in (read_triangle_synthetic, read_mesh_synthetic):
+        source = inspect.getsource(reader)
+        assert 'os.path.join(path, "points3d.ply")' in source
+        assert "if not os.path.exists(ply_path):" in source
+        assert "pcd = fetchPly(ply_path)" in source
+
+
+def test_triangle_and_mesh_splatting_nerf_synthetic_readers_compose_rgba_as_uint8(tmp_path: Path):
+    import json
+
+    import numpy as np
+    from PIL import Image
+
+    from tribench.vendor.mesh_splatting.scene.dataset_readers import (
+        readCamerasFromTransforms as read_mesh_cameras,
+    )
+    from tribench.vendor.triangle_splatting.scene.dataset_readers import (
+        readCamerasFromTransforms as read_triangle_cameras,
+    )
+
+    scene_dir = tmp_path / "scene"
+    image_dir = scene_dir / "train"
+    image_dir.mkdir(parents=True)
+    Image.fromarray(
+        np.array([[[255, 0, 0, 128]]], dtype=np.uint8),
+        mode="RGBA",
+    ).save(image_dir / "r_0.png")
+    (scene_dir / "transforms_train.json").write_text(
+        json.dumps(
+            {
+                "camera_angle_x": 0.7,
+                "frames": [
+                    {
+                        "file_path": "./train/r_0",
+                        "transform_matrix": np.eye(4).tolist(),
+                    }
+                ],
+            }
+        )
+    )
+
+    for read_cameras in (read_triangle_cameras, read_mesh_cameras):
+        cameras = read_cameras(str(scene_dir), "transforms_train.json", True)
+
+        assert cameras[0].image.mode == "RGB"
+        assert np.asarray(cameras[0].image).dtype == np.uint8
+
+
+def test_2dts_nerf_synthetic_native_config_uses_white_alpha_background():
+    from tribench.trainers.d2ts_native import _build_d2ts_native_config
+
+    cfg = Config.fromfile("configs/2dts/nerf_synthetic/lego.yaml")
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=Path(cfg.output.dir),
+        max_steps=cfg.trainer.max_steps,
+    )
+
+    assert native.dataset.type == "NerfSynthetic"
+    assert native.dataset.local_dir == "data/nerf_synthetic"
+    assert native.dataset.scene_id == "lego"
+    assert native.dataset.background == "random"
+    assert native.dataset.test_background == "white"
+    assert native.dataset.pcd_path == "points3d.ply"
+    assert native.dataset.dtu_use_alpha is True
+    assert native.model.random_init is None
+    assert native.model.optimizer.f_rest.v_init == 0.0002
+    assert native.model.optimizer.f_rest.v_final == 0.0002
+    assert native.model.model_update.densification.max_grow_ratio == 0.01
+    assert native.model.model_update.scale_pruning.radii_threshold == -1
+    assert native.model.model_update.scale_pruning.scale_threshold == 0.5
+    assert native.trainer.train_background is None
+    assert native.trainer.eval_background is None
+
+
+def test_2dts_nerf_synthetic_random_init_is_only_a_pointcloud_fallback(tmp_path: Path):
+    from tribench.trainers.d2ts_native import _build_d2ts_native_config
+
+    base_config = Path("configs/2dts/nerf_synthetic/lego.yaml").resolve()
+    config = tmp_path / "lego_no_pcd.yaml"
+    config.write_text(
+        f"_base_: {base_config}\n"
+        "d2ts:\n"
+        "  native_overrides:\n"
+        "    dataset:\n"
+        "      pcd_path: null\n"
+    )
+
+    cfg = Config.fromfile(config)
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=Path(cfg.output.dir),
+        max_steps=cfg.trainer.max_steps,
+    )
+
+    assert native.dataset.pcd_path is None
+    assert native.model.random_init.bbox_list == [[-1.5, -1.5, -1.5, 1.5, 1.5, 1.5]]
+    assert native.model.random_init.point_num_list == [100000]
+    assert native.model.random_init.normal_list == ["random"]
+
+
 
 def test_2dts_render_params_follow_native_dataset_configs():
     bicycle = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")

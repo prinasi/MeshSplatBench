@@ -8,6 +8,23 @@ import torch
 import torch.nn.functional as F
 
 
+_LPIPS_MODEL_CACHE: dict[tuple[str, str], Any] = {}
+
+
+def _lpips_model(net: str, device: torch.device | str):
+    import lpips as lpips_lib
+
+    resolved_device = torch.device(device)
+    key = (net, str(resolved_device))
+    model = _LPIPS_MODEL_CACHE.get(key)
+    if model is None:
+        model = lpips_lib.LPIPS(net=net, verbose=False).to(resolved_device)
+        if hasattr(model, "eval"):
+            model.eval()
+        _LPIPS_MODEL_CACHE[key] = model
+    return model
+
+
 def compute_psnr(pred: torch.Tensor, target: torch.Tensor) -> float:
     """Compute Peak Signal-to-Noise Ratio.
     
@@ -73,17 +90,15 @@ def compute_lpips(
     Returns:
         LPIPS value (lower is better).
     """
-    import lpips as lpips_lib
-
     if pred.dim() == 3:
         pred = pred.unsqueeze(0)
         target = target.unsqueeze(0)
 
     # lpips expects [B, C, H, W] in range [-1, 1]
-    pred_chw = pred.permute(0, 3, 1, 2).contiguous() * 2.0 - 1.0
-    target_chw = target.permute(0, 3, 1, 2).contiguous() * 2.0 - 1.0
+    pred_chw = pred.float().permute(0, 3, 1, 2).contiguous() * 2.0 - 1.0
+    target_chw = target.float().permute(0, 3, 1, 2).contiguous() * 2.0 - 1.0
 
-    loss_fn = lpips_lib.LPIPS(net=net, verbose=False).to(pred.device)
+    loss_fn = _lpips_model(net, pred.device)
     with torch.no_grad():
         result = loss_fn(pred_chw, target_chw).mean().item()
     return result
@@ -187,15 +202,13 @@ def compute_masked_lpips(
     Returns:
         LPIPS value (lower is better).
     """
-    import lpips as lpips_lib
-
     if mask.dim() == 2:
         mask = mask.unsqueeze(-1)
     pred_masked = (pred * mask).unsqueeze(0)
     target_masked = (target * mask).unsqueeze(0)
-    pred_chw = pred_masked.permute(0, 3, 1, 2).contiguous() * 2.0 - 1.0
-    target_chw = target_masked.permute(0, 3, 1, 2).contiguous() * 2.0 - 1.0
-    loss_fn = lpips_lib.LPIPS(net=net, verbose=False).to(pred.device)
+    pred_chw = pred_masked.float().permute(0, 3, 1, 2).contiguous() * 2.0 - 1.0
+    target_chw = target_masked.float().permute(0, 3, 1, 2).contiguous() * 2.0 - 1.0
+    loss_fn = _lpips_model(net, pred.device)
     with torch.no_grad():
         result = loss_fn(pred_chw, target_chw).mean().item()
     return result

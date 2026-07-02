@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import time
 from pathlib import Path
 from typing import Any, Mapping
 
 from tribench.core.config import Config, merge_dicts
+
+
+_DEFAULT_SYNTHETIC_RANDOM_INIT = {
+    "bbox_list": [[-1.5, -1.5, -1.5, 1.5, 1.5, 1.5]],
+    "point_num_list": [100000],
+    "normal_list": ["random"],
+}
 
 
 def run_d2ts_native_config(
@@ -87,9 +95,30 @@ def _build_d2ts_native_config(
     image_dir = dataset_cfg.get("image_dir")
     if image_dir is not None:
         native.dataset.image_dir = str(image_dir)
-    dtu_eval_mode = str(dataset_cfg.get("dtu_eval_mode", "full")).lower()
-    native.dataset.dtu_eval_mode = dtu_eval_mode
-    native.dataset.dtu_use_alpha = dtu_eval_mode == "foreground"
+    dataset_type = str(dataset_cfg.get("type", dataset_cfg.get("dataset_type", ""))).lower()
+    synthetic_dataset = dataset_type in {
+        "synthetic",
+        "blender",
+        "nerf_synthetic",
+        "nerf-synthetic",
+    }
+    if synthetic_dataset:
+        background = getattr(native.dataset, "background", None)
+        if background is None:
+            background = "random"
+        native.dataset.background = str(background)
+        test_background = getattr(native.dataset, "test_background", None)
+        if test_background is None:
+            test_background = "white"
+        native.dataset.test_background = str(test_background)
+        native.dataset.dtu_use_alpha = bool(dataset_cfg.get("use_alpha", True))
+        random_init = getattr(native.model, "random_init", None)
+        if getattr(native.dataset, "pcd_path", None) is None and not _has_complete_random_init(random_init):
+            native.model.random_init = dictToConfig(deepcopy(_DEFAULT_SYNTHETIC_RANDOM_INIT))
+    else:
+        dtu_eval_mode = str(dataset_cfg.get("dtu_eval_mode", "full")).lower()
+        native.dataset.dtu_eval_mode = dtu_eval_mode
+        native.dataset.dtu_use_alpha = dtu_eval_mode == "foreground"
 
     native.trainer.output_dir = str(output_dir.parent)
     native.trainer.iterations = int(max_steps)
@@ -121,6 +150,12 @@ def _build_d2ts_native_config(
             densification.target_point_num = int(target_point_num)
 
     return native
+
+
+def _has_complete_random_init(config: Any) -> bool:
+    if config is None:
+        return False
+    return all(getattr(config, name, None) for name in ("bbox_list", "point_num_list", "normal_list"))
 
 
 def _retarget_iteration_list(obj: Any, name: str, max_steps: int, *, force: bool = False) -> None:

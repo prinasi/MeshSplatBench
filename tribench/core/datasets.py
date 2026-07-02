@@ -127,6 +127,19 @@ def _load_alpha_mask(path: Path | None, size: tuple[int, int] | None = None) -> 
     return torch.from_numpy(arr[..., None].clip(0.0, 1.0)).contiguous()
 
 
+def _background_color(name: str | None) -> tuple[float, float, float] | None:
+    if name is None:
+        return None
+    key = str(name).lower()
+    if key in {"none", "transparent"}:
+        return None
+    if key == "white":
+        return (1.0, 1.0, 1.0)
+    if key == "black":
+        return (0.0, 0.0, 0.0)
+    raise ValueError("background must be 'white', 'black', or None")
+
+
 def _load_dtu_foreground_image(
     scene_root: Path,
     image_path: Path,
@@ -359,10 +372,14 @@ class NerfSyntheticDataset(DatasetBase):
         split: str = "train",
         resolution: int = 1,
         resolution_rounding: str = "round",
+        background: str | None = "white",
+        use_alpha: bool = True,
     ):
         super().__init__(dataset_path, split)
         self.resolution = resolution
         self.resolution_rounding = resolution_rounding
+        self.background = background
+        self.use_alpha = use_alpha
         self._samples = self._load_samples()
 
     def _load_samples(self) -> list[DatasetSample]:
@@ -376,6 +393,7 @@ class NerfSyntheticDataset(DatasetBase):
             raise FileNotFoundError(f"Cannot find {transform_path}")
 
         samples: list[DatasetSample] = []
+        bg_color = _background_color(self.background) if self.use_alpha else None
         for path in paths:
             meta = json.loads(path.read_text())
             camera_angle_x = float(meta["camera_angle_x"])
@@ -384,7 +402,7 @@ class NerfSyntheticDataset(DatasetBase):
                 if not file_path.suffix:
                     file_path = file_path.with_suffix(".png")
                 image_path = self.dataset_path / file_path
-                gt = _load_image(image_path)
+                gt = _load_image(image_path, bg_color=bg_color)
                 if gt is not None:
                     image_height, image_width = gt.shape[:2]
                 else:
@@ -397,7 +415,7 @@ class NerfSyntheticDataset(DatasetBase):
                     self.resolution_rounding,
                 )
                 if gt is not None and (gt.shape[1], gt.shape[0]) != (width, height):
-                    gt = _load_image(image_path, size=(width, height))
+                    gt = _load_image(image_path, size=(width, height), bg_color=bg_color)
                 fx = 0.5 * width / np.tan(0.5 * camera_angle_x)
                 fy = fx
                 K = np.array([[fx, 0, width / 2], [0, fy, height / 2], [0, 0, 1]], dtype=np.float32)
@@ -414,9 +432,24 @@ class NerfSyntheticDataset(DatasetBase):
                         "image_name": image_path.name,
                         "source_json": path.name,
                         "split": self.split,
+                        "eval_background_color": bg_color,
                     },
                 )
-                samples.append(DatasetSample(camera=camera, image=gt, name=image_path.stem, image_path=image_path))
+                mask = _load_alpha_mask(image_path, size=(width, height)) if self.use_alpha else None
+                samples.append(
+                    DatasetSample(
+                        camera=camera,
+                        image=gt,
+                        name=image_path.stem,
+                        image_path=image_path,
+                        mask=mask,
+                        metadata={
+                            "eval_background_color": bg_color,
+                            "source_json": path.name,
+                            "split": self.split,
+                        },
+                    )
+                )
         return samples
 
     def __len__(self) -> int:
@@ -560,8 +593,10 @@ def load_dataset(
     resolution: int = 1,
     resolution_rounding: str = "round",
     dtu_eval_mode: str = "full",
+    background: str | None = None,
+    use_alpha: bool = True,
 ) -> DatasetBase:
-    dtype = infer_dataset_type(dataset_path, dataset_type)
+    dtype = str(infer_dataset_type(dataset_path, dataset_type)).lower()
     if dtype in {"colmap", "mipnerf360", "tanks", "tanksandtemples", "tankstemple"}:
         return ColmapDataset(
             dataset_path,
@@ -571,12 +606,14 @@ def load_dataset(
             resolution=resolution,
             resolution_rounding=resolution_rounding,
         )
-    if dtype in {"blender", "nerf-synthetic", "nerf_synthetic"}:
+    if dtype in {"blender", "synthetic", "nerf-synthetic", "nerf_synthetic"}:
         return NerfSyntheticDataset(
             dataset_path,
             split=split,
             resolution=resolution,
             resolution_rounding=resolution_rounding,
+            background="white" if background is None else background,
+            use_alpha=use_alpha,
         )
     if dtype == "dtu":
         return DTUDataset(
@@ -596,6 +633,9 @@ _DATASET_REGISTRY: dict[str, type[DatasetBase]] = {
     "tanks": ColmapDataset,
     "dtu": DTUDataset,
     "blender": NerfSyntheticDataset,
+    "synthetic": NerfSyntheticDataset,
+    "nerf_synthetic": NerfSyntheticDataset,
+    "nerf-synthetic": NerfSyntheticDataset,
 }
 
 

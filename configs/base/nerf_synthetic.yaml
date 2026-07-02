@@ -1,0 +1,14 @@
+# @format
+
+_base_: _base_.yaml
+
+dataset:
+  name: nerf_synthetic
+  type: synthetic
+  root: data/nerf_synthetic
+  resolution: 1
+  background: white
+  use_alpha: true
+
+trainer:
+  white_background: true

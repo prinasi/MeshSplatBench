@@ -112,6 +112,56 @@ class TestSSIMLPIPS:
 
         assert inspect.signature(compute_lpips).parameters["net"].default == "vgg"
 
+    def test_lpips_model_is_cached_per_device(self, monkeypatch):
+        from tribench.core import metrics
+
+        class FakeLPIPS:
+            instances = 0
+
+            def __init__(self, net, verbose):
+                FakeLPIPS.instances += 1
+                self.net = net
+                self.verbose = verbose
+
+            def to(self, device):
+                self.device = torch.device(device)
+                return self
+
+            def eval(self):
+                return self
+
+            def __call__(self, pred, target):
+                return torch.zeros(pred.shape[0], 1, 1, 1, device=pred.device)
+
+        fake_lpips = ModuleType("lpips")
+        fake_lpips.LPIPS = FakeLPIPS
+        monkeypatch.setitem(sys.modules, "lpips", fake_lpips)
+        metrics._LPIPS_MODEL_CACHE.clear()
+
+        pred = torch.zeros(4, 4, 3)
+        target = torch.ones(4, 4, 3)
+
+        assert metrics.compute_lpips(pred, target) == 0.0
+        assert metrics.compute_lpips(pred, target) == 0.0
+        assert FakeLPIPS.instances == 1
+        metrics._LPIPS_MODEL_CACHE.clear()
+
+
+class TestEvalDeviceSelection:
+    def test_default_metrics_device_prefers_cuda(self, monkeypatch):
+        from tribench.cli import eval as eval_cli
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+        assert eval_cli._default_metrics_device() == "cuda"
+
+    def test_default_metrics_device_falls_back_to_cpu(self, monkeypatch):
+        from tribench.cli import eval as eval_cli
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+        assert eval_cli._default_metrics_device() == "cpu"
+
 
 class TestMetricPreprocessing:
     """Tests for image normalization before metric computation."""

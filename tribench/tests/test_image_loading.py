@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import numpy as np
 import torch
 from PIL import Image
 from types import SimpleNamespace
 
+from tribench.core.builder import build_dataset
 from tribench.core.datasets import (
     DTUDataset,
+    NerfSyntheticDataset,
     _load_image,
+    load_dataset,
 )
 from tribench.trainers.triangle_splatting_method import _pil_rgb_uint8
 from tribench.vendor.dtu_utils import load_dtu_pil_image
@@ -65,6 +69,99 @@ def test_load_image_composites_rgba_when_background_is_given(tmp_path):
     loaded = _load_image(path, bg_color=(1.0, 1.0, 1.0))
 
     assert torch.allclose(loaded[0, 0], torch.ones(3), atol=1 / 255)
+
+
+def test_nerf_synthetic_dataset_composites_rgba_to_white_by_default(tmp_path):
+    root = tmp_path / "lego"
+    (root / "train").mkdir(parents=True)
+    Image.new("RGBA", (1, 1), (20, 40, 80, 0)).save(root / "train" / "r_0.png")
+    (root / "transforms_train.json").write_text(
+        json.dumps(
+            {
+                "camera_angle_x": 0.6911112070083618,
+                "frames": [
+                    {
+                        "file_path": "train/r_0",
+                        "transform_matrix": np.eye(4, dtype=np.float32).tolist(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    dataset = load_dataset(root, dataset_type="nerf_synthetic", split="train")
+    sample = dataset.sample(0)
+
+    assert torch.allclose(sample.image[0, 0], torch.ones(3), atol=1 / 255)
+    assert sample.mask is not None
+    assert torch.allclose(sample.mask[0, 0], torch.zeros(1), atol=1 / 255)
+    assert sample.metadata["eval_background_color"] == (1.0, 1.0, 1.0)
+
+
+def test_nerf_synthetic_dataset_can_disable_alpha_compositing(tmp_path):
+    root = tmp_path / "lego"
+    (root / "train").mkdir(parents=True)
+    Image.new("RGBA", (1, 1), (20, 40, 80, 0)).save(root / "train" / "r_0.png")
+    (root / "transforms_train.json").write_text(
+        json.dumps(
+            {
+                "camera_angle_x": 0.6911112070083618,
+                "frames": [
+                    {
+                        "file_path": "train/r_0",
+                        "transform_matrix": np.eye(4, dtype=np.float32).tolist(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    dataset = load_dataset(
+        root,
+        dataset_type="nerf_synthetic",
+        split="train",
+        background=None,
+        use_alpha=False,
+    )
+    sample = dataset.sample(0)
+
+    assert torch.allclose(sample.image[0, 0], torch.tensor([20, 40, 80]) / 255.0, atol=1 / 255)
+    assert sample.mask is None
+
+
+def test_build_dataset_accepts_synthetic_alias(tmp_path):
+    root = tmp_path / "lego"
+    (root / "train").mkdir(parents=True)
+    Image.new("RGBA", (1, 1), (20, 40, 80, 255)).save(root / "train" / "r_0.png")
+    (root / "transforms_train.json").write_text(
+        json.dumps(
+            {
+                "camera_angle_x": 0.6911112070083618,
+                "frames": [
+                    {
+                        "file_path": "train/r_0",
+                        "transform_matrix": np.eye(4, dtype=np.float32).tolist(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    dataset = build_dataset(
+        {
+            "type": "synthetic",
+            "root": str(root),
+            "split": "train",
+            "background": "white",
+            "use_alpha": True,
+        }
+    )
+
+    assert isinstance(dataset, NerfSyntheticDataset)
+    assert len(dataset) == 1
 
 
 def test_dtu_dataset_full_mode_ignores_alpha_and_external_mask(tmp_path):

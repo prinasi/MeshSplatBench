@@ -73,6 +73,7 @@ MIPNERF360_INDOOR_SCENES=(room counter kitchen bonsai)
 MIPNERF360_SCENES=("${MIPNERF360_OUTDOOR_SCENES[@]}" "${MIPNERF360_INDOOR_SCENES[@]}")
 TANKS_AND_TEMPLES_SCENES=(truck train)
 DTU_SCENES=(scan24 scan37 scan40 scan55 scan63 scan65 scan69 scan83 scan97 scan105 scan106 scan110 scan114 scan118 scan122)
+NERF_SYNTHETIC_SCENES=(chair drums ficus hotdog lego materials mic ship)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -87,6 +88,7 @@ Examples:
   bash $0 triangle_splatting m360/room 0
   bash $0 triangle-splatting tandt/truck 0
   bash $0 triangle-splatting dtu/scan105 0
+  bash $0 triangle-splatting nerf_synthetic/lego 0
   bash $0 triangle-splatting mipnerf360/all 0
   bash $0 triangle-splatting all 0
 
@@ -181,6 +183,7 @@ normalize_dataset() {
     case "${name}" in
         mipnerf360|mipnerf-360|m360|360|nerf360) echo "mipnerf360" ;;
         tanksandtemples|tanks-and-temples|tandt|tat|tanks) echo "tandt" ;;
+        nerfsynthetic|nerf-synthetic|nerf_synthetic|blender|synthetic) echo "nerf_synthetic" ;;
         dtu) echo "dtu" ;;
         custom|path) echo "custom" ;;
         *) echo "${name}" ;;
@@ -191,6 +194,7 @@ dataset_label() {
     case "$(normalize_dataset "$1")" in
         mipnerf360) echo "mipnerf360" ;;
         tandt) echo "tandt" ;;
+        nerf_synthetic) echo "nerf_synthetic" ;;
         dtu) echo "dtu" ;;
         custom) echo "custom" ;;
         *) echo "$(normalize_dataset "$1")" ;;
@@ -221,6 +225,7 @@ is_mipnerf360() { contains_scene "$1" "${MIPNERF360_SCENES[@]}"; }
 is_mipnerf360_outdoor() { contains_scene "$1" "${MIPNERF360_OUTDOOR_SCENES[@]}"; }
 is_tanks_and_temples() { contains_scene "$1" "${TANKS_AND_TEMPLES_SCENES[@]}"; }
 is_dtu_scene() { contains_scene "$1" "${DTU_SCENES[@]}" || [[ "$1" =~ ^scan[0-9]+$ ]]; }
+is_nerf_synthetic() { contains_scene "$1" "${NERF_SYNTHETIC_SCENES[@]}"; }
 dtu_scan_id() { echo "${1#scan}"; }
 
 infer_dataset_for_scene() {
@@ -231,6 +236,8 @@ infer_dataset_for_scene() {
         echo "tandt"
     elif is_dtu_scene "${scene}"; then
         echo "dtu"
+    elif is_nerf_synthetic "${scene}"; then
+        echo "nerf_synthetic"
     else
         echo "custom"
     fi
@@ -514,11 +521,17 @@ expand_targets() {
             for scene in "${MIPNERF360_SCENES[@]}"; do EXPANDED_TARGETS+=("mipnerf360/${scene}"); done
             for scene in "${TANKS_AND_TEMPLES_SCENES[@]}"; do EXPANDED_TARGETS+=("tandt/${scene}"); done
             for scene in "${DTU_SCENES[@]}"; do EXPANDED_TARGETS+=("dtu/${scene}"); done
+            for scene in "${NERF_SYNTHETIC_SCENES[@]}"; do EXPANDED_TARGETS+=("nerf_synthetic/${scene}"); done
             continue
         fi
 
         if [[ "${target}" == "dtu" || "${target}" == "dtu/all" || "${target}" == "all_dtu" ]]; then
             for scene in "${DTU_SCENES[@]}"; do EXPANDED_TARGETS+=("dtu/${scene}"); done
+            continue
+        fi
+
+        if [[ "$(dataset_label "${target}")" == "nerf_synthetic" && "${target}" != */* ]]; then
+            for scene in "${NERF_SYNTHETIC_SCENES[@]}"; do EXPANDED_TARGETS+=("nerf_synthetic/${scene}"); done
             continue
         fi
 
@@ -528,6 +541,7 @@ expand_targets() {
                 mipnerf360) for scene in "${MIPNERF360_SCENES[@]}"; do EXPANDED_TARGETS+=("mipnerf360/${scene}"); done ;;
                 tandt) for scene in "${TANKS_AND_TEMPLES_SCENES[@]}"; do EXPANDED_TARGETS+=("tandt/${scene}"); done ;;
                 dtu) for scene in "${DTU_SCENES[@]}"; do EXPANDED_TARGETS+=("dtu/${scene}"); done ;;
+                nerf_synthetic) for scene in "${NERF_SYNTHETIC_SCENES[@]}"; do EXPANDED_TARGETS+=("nerf_synthetic/${scene}"); done ;;
                 *) echo "Cannot expand unknown dataset target: ${target}" >&2; exit 1 ;;
             esac
             continue

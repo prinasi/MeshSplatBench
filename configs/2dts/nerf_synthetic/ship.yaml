@@ -1,0 +1,15 @@
+# @format
+
+_base_:
+  - ../../base/nerf_synthetic.yaml
+  - ../../base/2dts.yaml
+
+experiment:
+  name: 2dts_nerf_synthetic_ship
+
+dataset:
+  scene: ship
+
+d2ts:
+  native_config: configs/2dts/native/nerf_synthetic.yaml
+  target_point_num: 1000000

@@ -148,7 +148,10 @@ def _run_synthetic_script(
     dataset_kind: str,
     dataset_cfg: dict[str, Any],
 ) -> None:
-    script_name = "03_random_init.py" if bool(trainer_cfg.get("random_init", False)) else "02_synthetic.py"
+    point_cloud_init = bool(trainer_cfg.get("point_cloud_init", False))
+    point_cloud_cfg = trainer_cfg.get("point_cloud", trainer_cfg.get("point_cloud_path"))
+    use_point_cloud = point_cloud_init or point_cloud_cfg is not None
+    script_name = "03_random_init.py" if bool(trainer_cfg.get("random_init", False)) or use_point_cloud else "02_synthetic.py"
     scene = str(dataset_cfg.get("scene") or Path(dataset_root).name)
     datasets_root = str(Path(dataset_root).expanduser().parent)
     downscale = _coerce_downscale(
@@ -179,6 +182,11 @@ def _run_synthetic_script(
             str(Path(trainer_cfg.get("mobilenerf_root", "./datasets/mobilenerf_results")).expanduser()),
         ])
     else:
+        if use_point_cloud:
+            point_cloud_path = Path(str(point_cloud_cfg or "points3d.ply")).expanduser()
+            if not point_cloud_path.is_absolute():
+                point_cloud_path = Path(dataset_root).expanduser() / point_cloud_path
+            argv.extend(["--point_cloud", str(point_cloud_path)])
         argv.extend(["--n_points", str(int(trainer_cfg.get("seed_points", 100_000)))])
     if dataset_kind == "shelly" or bool(trainer_cfg.get("no_png_suffix", False)):
         argv.append("--no_png_suffix")

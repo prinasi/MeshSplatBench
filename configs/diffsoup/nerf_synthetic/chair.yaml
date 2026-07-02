@@ -1,0 +1,19 @@
+# @format
+
+_base_:
+  - ../../base/nerf_synthetic.yaml
+  - ../../base/diffsoup.yaml
+
+experiment:
+  name: diffsoup_nerf_synthetic_chair
+
+dataset:
+  scene: chair
+
+trainer:
+  mobilenerf_root: data/mobilenerf_results
+  downscale: 1
+
+adapter:
+  render_params:
+    bg_color: white

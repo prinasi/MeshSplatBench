@@ -189,6 +189,25 @@ def build_keep_map(counts: torch.Tensor, thresh: float = 1) -> torch.Tensor:
     return torch.nonzero(mask, as_tuple=False).view(-1)
 
 
+def load_point_cloud_points(ply_path: Path) -> np.ndarray:
+    """Load XYZ vertices from a PLY point cloud."""
+    from plyfile import PlyData
+
+    ply = PlyData.read(str(ply_path))
+    vertices = ply["vertex"]
+    points = np.stack(
+        [
+            np.asarray(vertices["x"], dtype=np.float32),
+            np.asarray(vertices["y"], dtype=np.float32),
+            np.asarray(vertices["z"], dtype=np.float32),
+        ],
+        axis=1,
+    )
+    if points.ndim != 2 or points.shape[1] != 3 or points.shape[0] == 0:
+        raise ValueError(f"No XYZ points found in {ply_path}")
+    return np.ascontiguousarray(points, dtype=np.float32)
+
+
 # ── Main ─────────────────────────────────────────────────────────────
 
 def main():
@@ -204,7 +223,9 @@ def main():
     parser.add_argument("--steps", type=int, default=10_000)
     parser.add_argument("--target_prims", type=int, default=15_000)
     parser.add_argument("--n_points", type=int, default=100_000,
-                        help="Number of random seed points for initialisation")
+                        help="Number of seed points for initialisation; caps --point_cloud when set")
+    parser.add_argument("--point_cloud", type=str, default=None,
+                        help="Optional points3d.ply path for point-cloud initialisation")
     parser.add_argument("--out_dir", type=str, default=None,
                         help="Output directory (default: ./results/03_random_init/<scene>)")
     args = parser.parse_args()
@@ -218,18 +239,30 @@ def main():
 
     device = torch.device("cuda")
 
-    # ── Random soup initialisation ───────────────────────────────────
+    # ── Soup initialisation ──────────────────────────────────────────
 
-    bbox_scale = BBOX_SCALE.get(scene)
-    if bbox_scale is None or bbox_scale == 0.0:
-        print(f"[warn] BBOX_SCALE not set for '{scene}', using default 1.2")
-        bbox_scale = 1.2
+    if args.point_cloud is not None:
+        point_cloud_path = Path(args.point_cloud)
+        if not point_cloud_path.exists():
+            raise FileNotFoundError(f"Point cloud not found: {point_cloud_path}")
+        points_np = load_point_cloud_points(point_cloud_path)
+        if args.n_points > 0 and points_np.shape[0] > args.n_points:
+            keep = np.random.choice(points_np.shape[0], size=args.n_points, replace=False)
+            points_np = points_np[keep]
+        points = torch.from_numpy(points_np).to(device=device, dtype=torch.float32)
+        init_desc = f"point_cloud={point_cloud_path}"
+    else:
+        bbox_scale = BBOX_SCALE.get(scene)
+        if bbox_scale is None or bbox_scale == 0.0:
+            print(f"[warn] BBOX_SCALE not set for '{scene}', using default 1.2")
+            bbox_scale = 1.2
 
-    points = torch.rand(args.n_points, 3, device=device) * 2.0 - 1.0
-    points *= bbox_scale
+        points = torch.rand(args.n_points, 3, device=device) * 2.0 - 1.0
+        points *= bbox_scale
+        init_desc = f"bbox_scale={bbox_scale}"
     verts, faces = ds.triangle_soup_from_points(points, scale=0.01)
     print(f"[init] {verts.shape[0]:,} verts, {faces.shape[0]:,} faces "
-          f"(bbox_scale={bbox_scale})")
+          f"({init_desc})")
 
     # ── Load train cameras ───────────────────────────────────────────
 
