@@ -649,6 +649,9 @@ warn_diffsoup_metric_mismatch() {
     local metrics_file native_metrics
     metrics_file="$(metrics_output_file "${config_file}" "${model_path}")"
     native_metrics="${model_path}/ckpt/test_views/metrics.txt"
+    if [[ ! -f "${native_metrics}" && -f "${model_path}/ckpt/metrics.txt" ]]; then
+        native_metrics="${model_path}/ckpt/metrics.txt"
+    fi
     [[ -f "${metrics_file}" && -f "${native_metrics}" ]] || return 0
 
     "${PYTHON_BIN}" - "${metrics_file}" "${native_metrics}" "${DATASET}" "${SCENE}" <<'PY'
@@ -680,7 +683,8 @@ if abs(delta) >= 0.3:
         f"[{dataset}/{scene}] WARNING: DiffSoup current metrics PSNR={float(current):.4f} "
         f"differs from native post-train PSNR={native:.4f} by {delta:+.4f} dB. "
         "The checkpoint/metrics pair is likely stale or was rerun without retraining; "
-        "use --training --nvs_metrics --retrain to rebuild it."
+        "use --rendering --nvs_metrics --rerun_existing to rebuild renders and metrics, "
+        "or add --training --retrain if the checkpoint itself should be rebuilt."
     )
 PY
 }

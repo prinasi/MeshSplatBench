@@ -212,6 +212,21 @@ class TestDiffSoupAdapter:
         adapter._checkpoint = {}
         assert torch.equal(adapter._background_color(torch.device("cpu")), torch.ones(3))
 
+    def test_output_vertical_flip_only_for_synthetic_checkpoints(self):
+        adapter = DiffSoupAdapter()
+
+        adapter._checkpoint = {}
+        assert adapter._output_needs_vertical_flip()
+
+        adapter._checkpoint = {"dataset_type": "synthetic"}
+        assert adapter._output_needs_vertical_flip()
+
+        adapter._checkpoint = {"dataset_type": "colmap", "flip_z": True}
+        assert not adapter._output_needs_vertical_flip()
+
+        adapter._checkpoint = {"dataset_type": "dtu", "flip_z": True}
+        assert not adapter._output_needs_vertical_flip()
+
     def test_near_plane_uses_native_test_split(self, dummy_camera_batch):
         adapter = DiffSoupAdapter()
         adapter._checkpoint = {"dataset_type": "colmap", "flip_z": True}

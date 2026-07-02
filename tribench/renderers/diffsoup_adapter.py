@@ -226,12 +226,19 @@ class DiffSoupAdapter(RendererAdapter):
                     + background_color.view(1, 1, 1, 3) * (1.0 - mask)
                 )
 
+        output_y_flipped = self._output_needs_vertical_flip()
         alpha = visible.to(color.dtype) if (return_aux or use_background) else None
         depth = (
             torch.where(visible, raster[..., 2], torch.zeros_like(raster[..., 2]))
             if return_aux
             else None
         )
+        if output_y_flipped:
+            color = torch.flip(color, dims=(-3,))
+            if alpha is not None:
+                alpha = torch.flip(alpha, dims=(-2,))
+            if depth is not None:
+                depth = torch.flip(depth, dims=(-2,))
 
         if color.shape[0] == 1:
             rgb_out = color[0].contiguous()
@@ -251,6 +258,7 @@ class DiffSoupAdapter(RendererAdapter):
                 "level": self._level,
                 "feature_dim": self._feature_dim,
                 "stochastic": stochastic,
+                "output_y_flipped": output_y_flipped,
             },
         )
 
@@ -478,6 +486,16 @@ class DiffSoupAdapter(RendererAdapter):
                 white_background = dataset_type == "dtu" or "flip_z" not in ckpt
             color = [1.0, 1.0, 1.0] if white_background else [0.0, 0.0, 0.0]
         return torch.tensor(color, dtype=torch.float32, device=device)
+
+    def _output_needs_vertical_flip(self) -> bool:
+        """Return true when native DiffSoup output uses bottom-left image origin."""
+        ckpt = self._checkpoint or {}
+        dataset_type = str(ckpt.get("dataset_type", "")).replace("_", "-").lower()
+        if dataset_type in {"synthetic", "nerf-synthetic", "blender", "shelly"}:
+            return True
+        if dataset_type:
+            return False
+        return "flip_z" not in ckpt
 
     def _build_mvp(self, cameras: CameraBatch, *, device: torch.device) -> torch.Tensor:
         ckpt = self._checkpoint or {}

@@ -514,6 +514,7 @@ def main():
         "Rmax": Rmax,
         "feat_dim": feat_dim,
         "H": H, "W": W,
+        "dataset_type": "shelly" if args.no_png_suffix else "synthetic",
         "steps": steps,
         "losses": losses,
         "seed": SEED,
