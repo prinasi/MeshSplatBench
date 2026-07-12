@@ -12,7 +12,7 @@ from tribench.cli.eval import (
     _infer_pred_mesh,
     _mesh_export_config,
 )
-from tribench.cli.train import _triangle_splatting_native_argv
+from tribench.cli.train import _mesh_splatting_native_argv, _triangle_splatting_native_argv
 from tribench.cli.main import app
 from tribench.cli.render import _default_viewer_pointcloud_paths, _mesh_export_kwargs
 from tribench.core.config import Config
@@ -154,6 +154,31 @@ def test_triangle_splatting_native_argv_maps_dtu_config():
     assert "--foreground_training" not in argv
 
 
+def test_triangle_splatting_native_argv_maps_max_primitives_to_max_shapes():
+    argv = _triangle_splatting_native_argv(
+        trainer_cfg={"max_primitives": 15_000},
+        dataset_root="data/scene",
+        output_dir=Path("outputs/scene"),
+        max_steps=30_000,
+        quiet=True,
+    )
+
+    assert argv[argv.index("--max_shapes") + 1] == "15000"
+    assert argv[argv.index("--max_primitives") + 1] == "15000"
+
+
+def test_mesh_splatting_native_argv_passes_max_primitives():
+    argv = _mesh_splatting_native_argv(
+        trainer_cfg={"max_primitives": 15_000},
+        dataset_root="data/scene",
+        output_dir=Path("outputs/scene"),
+        max_steps=30_000,
+        quiet=True,
+    )
+
+    assert argv[argv.index("--max_primitives") + 1] == "15000"
+
+
 def test_2dts_config_resolves_native_training_paths():
     cfg = Config.fromfile("configs/2dts/dtu/scan24.yaml")
 
@@ -182,6 +207,31 @@ def test_2dts_dtu_foreground_keeps_native_full_image_mask_defaults():
     assert native.dataset.dtu_use_alpha is True
     assert native.trainer.train_alpha_mask is False
     assert native.trainer.eval_alpha_mask is False
+
+
+def test_2dts_native_config_sets_hard_primitive_cap(tmp_path: Path):
+    from tribench.trainers.d2ts_native import _build_d2ts_native_config
+
+    base_config = Path("configs/2dts/mipnerf360/garden.yaml").resolve()
+    config = tmp_path / "garden_cap.yaml"
+    config.write_text(
+        f"_base_: {base_config}\n"
+        "trainer:\n"
+        "  max_primitives: 15000\n"
+        "d2ts:\n"
+        "  target_point_num: 1000000\n"
+    )
+
+    cfg = Config.fromfile(config)
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=Path(cfg.output.dir),
+        max_steps=cfg.trainer.max_steps,
+    )
+
+    assert native.model.model_update.max_primitives == 15_000
+    assert native.model.model_update.densification.target_point_num == 15_000
 
 
 def test_2dts_dtu_full_disables_native_alpha_loading(tmp_path: Path):

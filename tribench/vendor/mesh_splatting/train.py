@@ -258,6 +258,12 @@ def training(
     prune_size = opt.prune_size
     start_upsampling = opt.start_upsampling
     splitt_large_triangles = opt.splitt_large_triangles
+    max_primitives_value = getattr(opt, "max_primitives", -1)
+    max_primitives = (
+        int(max_primitives_value)
+        if max_primitives_value and int(max_primitives_value) > 0
+        else None
+    )
     triangles.size_probs_zero = opt.size_probs_zero
     triangles.size_probs_zero_image_space = opt.size_probs_zero_image_space
 
@@ -280,6 +286,8 @@ def training(
             with torch.no_grad():
                 torch.cuda.empty_cache()
                 triangles.run_restricted_delaunay()
+                if max_primitives is not None:
+                    triangles.enforce_max_primitives(max_primitives)
                 torch.cuda.empty_cache()
             need_delaunay = False
 
@@ -469,11 +477,23 @@ def training(
                 )
 
                 if needs_densification:
+                    current_primitives = int(triangles._triangle_indices.shape[0])
+                    max_split_candidates = None
+                    if max_primitives is not None:
+                        primitive_budget = max_primitives - current_primitives
+                        max_split_candidates = max(0, primitive_budget // 3)
+                    if max_primitives is not None and max_split_candidates <= 0:
+                        needs_densification = False
+
+                if needs_densification:
                     triangles.add_new_gs(
                         iteration,
                         cap_max=opt.max_points,
                         splitt_large_triangles=splitt_large_triangles,
+                        max_split_candidates=max_split_candidates,
                     )
+                    if max_primitives is not None:
+                        triangles.enforce_max_primitives(max_primitives)
 
                 if iteration > opt.start_opacity_floor:
                     start_iter = opt.start_opacity_floor
@@ -535,6 +555,8 @@ def training(
 
             vertex_mask = used_vertex_mask
             triangles._prune_vertices(vertex_mask)
+            if max_primitives is not None:
+                triangles.enforce_max_primitives(max_primitives)
 
             scene.save(last_iteration)
     print("Training is done")

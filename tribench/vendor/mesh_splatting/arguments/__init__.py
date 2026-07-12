@@ -91,6 +91,7 @@ class OptimizationParams(ParamGroup):
         self.foreground_training = False
         self.feature_lr = 0.0016
         self.max_points = 4_000_000
+        self.max_primitives = -1
         self.set_weight = 0.28
         self.weight_lr = 0.03
         self.lambda_weight = 1.9e-06

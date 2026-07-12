@@ -210,6 +210,7 @@ class MeshSplattingTrainingMethod(TrainingMethod):
             random_background=False,
             feature_lr=0.0016,
             max_points=4_000_000,
+            max_primitives=None,
             set_weight=0.28,
             weight_lr=0.03,
             lambda_weight=1.9e-06,
@@ -260,6 +261,12 @@ class MeshSplattingTrainingMethod(TrainingMethod):
                 iteration_mesh=12_000,
             )
         opt_defaults.update(self.extra_args)
+        max_primitives = opt_defaults.get("max_primitives")
+        if max_primitives is not None:
+            cap = int(max_primitives)
+            if cap <= 0:
+                raise ValueError(f"max_primitives must be positive, got {cap!r}")
+            opt_defaults["max_primitives"] = cap
         opt_defaults["iterations"] = self.max_steps
         self._opt = SimpleNamespace(**opt_defaults)
 
@@ -313,6 +320,8 @@ class MeshSplattingTrainingMethod(TrainingMethod):
         if self._need_delaunay:
             with torch.no_grad():
                 self._model.run_restricted_delaunay()
+                if self._opt.max_primitives is not None:
+                    self._model.enforce_max_primitives(self._opt.max_primitives)
             self._need_delaunay = False
 
         if iteration == opt.start_upsampling:
@@ -546,11 +555,18 @@ class MeshSplattingTrainingMethod(TrainingMethod):
 
                 self._prune_unused_vertices()
 
+                current_primitives = int(self._model._triangle_indices.shape[0])
+                max_split_candidates = None
+                if opt.max_primitives is not None:
+                    primitive_budget = int(opt.max_primitives) - current_primitives
+                    max_split_candidates = max(0, primitive_budget // 3)
+
                 needs_densification = (
                     step < opt.densify_until_iter
                     and step % opt.densification_interval == 0
                     and step > opt.densify_from_iter
                     and self._model.vertices.shape[0] < opt.max_points
+                    and (opt.max_primitives is None or max_split_candidates > 0)
                     and self._model.importance_score.numel() > 0
                     and torch.sum(self._model.importance_score) > 0
                 )
@@ -559,7 +575,10 @@ class MeshSplattingTrainingMethod(TrainingMethod):
                         step,
                         cap_max=opt.max_points,
                         splitt_large_triangles=opt.splitt_large_triangles,
+                        max_split_candidates=max_split_candidates,
                     )
+                    if opt.max_primitives is not None:
+                        self._model.enforce_max_primitives(opt.max_primitives)
                     update_type.append("densify")
 
                 if step > opt.start_opacity_floor:
@@ -601,6 +620,7 @@ class MeshSplattingTrainingMethod(TrainingMethod):
             "delta": after - before,
             "vertices": int(self._model.vertices.shape[0]),
             "max_points": int(opt.max_points),
+            "max_primitives": None if opt.max_primitives is None else int(opt.max_primitives),
         }
 
     def _final_cleanup(self) -> None:

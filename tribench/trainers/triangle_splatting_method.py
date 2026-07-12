@@ -219,6 +219,13 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
             outdoor=False,
         )
         opt_defaults.update(self.extra_args)
+        max_primitives = opt_defaults.get("max_primitives")
+        if max_primitives is not None:
+            cap = int(max_primitives)
+            if cap <= 0:
+                raise ValueError(f"max_primitives must be positive, got {cap!r}")
+            opt_defaults["max_primitives"] = cap
+            opt_defaults["max_shapes"] = min(int(opt_defaults.get("max_shapes", cap)), cap)
         self._opt = SimpleNamespace(**opt_defaults)
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -253,6 +260,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         # -- Background color ---------------------------------------------
         bg_val = 1.0 if self.white_background else 0.0
         self._bg_color = torch.tensor([bg_val] * 3, dtype=torch.float32, device="cuda")
+        self._enforce_primitive_cap()
 
     # ------------------------------------------------------------------
     # TrainingMethod hooks
@@ -390,9 +398,27 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
 
     def optimizer_step(self) -> None:
         self._ensure_initialized()
+        self._enforce_primitive_cap()
         if self._step < self.max_steps:
             self._optimizer.step()
         self._optimizer.zero_grad(set_to_none=True)
+
+    def _primitive_cap(self) -> int | None:
+        cap = getattr(self._opt, "max_primitives", None)
+        if cap is None:
+            cap = getattr(self._opt, "max_shapes", None)
+        if cap is None:
+            return None
+        cap = int(cap)
+        return cap if cap > 0 else None
+
+    def _enforce_primitive_cap(self) -> int:
+        cap = self._primitive_cap()
+        if cap is None or self._model is None or not hasattr(self._model, "enforce_max_primitives"):
+            return 0
+        removed = int(self._model.enforce_max_primitives(cap))
+        self._optimizer = self._model.optimizer
+        return removed
 
     def _build_dead_mask(
         self,
@@ -458,6 +484,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
                     oddGroup=odd_group,
                     dead_mask=dead_mask,
                 )
+                self._enforce_primitive_cap()
                 self._removed_them = True
                 self._new_round = False
                 update_type = "densify"
@@ -469,6 +496,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
                 )
 
                 self._model.remove_final_points(dead_mask)
+                self._enforce_primitive_cap()
                 self._removed_them = True
                 self._new_round = False
                 update_type = "prune"
@@ -495,6 +523,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
     def on_epoch_end(self, epoch: int) -> None:
         """Save checkpoint at the given training step."""
         self._ensure_initialized()
+        self._enforce_primitive_cap()
         ckpt_dir = self.output_dir / "point_cloud" / f"iteration_{epoch}"
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         # TriangleModel.save() expects a directory path and creates
@@ -536,6 +565,7 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
         self._model.triangle_area = torch.zeros(count, dtype=torch.float, device="cuda")
         self._model.image_size = torch.zeros(count, dtype=torch.float, device="cuda")
         self._model.importance_score = torch.zeros(count, dtype=torch.float, device="cuda")
+        self._enforce_primitive_cap()
         self._optimizer = self._model.optimizer
         self._viewpoint_stack = self._train_cameras.copy()
         self.set_step(step)

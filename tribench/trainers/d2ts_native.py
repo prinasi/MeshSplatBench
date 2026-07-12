@@ -144,6 +144,14 @@ def _build_d2ts_native_config(
     # losses explicitly through d2ts.native_overrides.trainer.*_alpha_mask.
 
     target_point_num = d2ts_cfg.get("target_point_num")
+    max_primitives = (tri_cfg.get("trainer", {}) or {}).get("max_primitives")
+    if max_primitives is not None:
+        cap = int(max_primitives)
+        if cap <= 0:
+            raise ValueError(f"trainer.max_primitives must be positive, got {cap!r}")
+        target_point_num = cap if target_point_num is None else min(int(target_point_num), cap)
+        if getattr(native.model, "model_update", None) is not None:
+            native.model.model_update.max_primitives = cap
     if target_point_num is not None:
         densification = getattr(native.model.model_update, "densification", None)
         if densification is not None:

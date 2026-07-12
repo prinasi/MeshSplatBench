@@ -456,6 +456,13 @@ def _triangle_splatting_native_argv(
     max_steps: int,
     quiet: bool,
 ) -> list[str]:
+    max_primitives = trainer_cfg.get("max_primitives")
+    if max_primitives is not None:
+        cap = int(max_primitives)
+        existing = trainer_cfg.get("max_shapes")
+        trainer_cfg = dict(trainer_cfg)
+        trainer_cfg["max_shapes"] = cap if existing is None else min(int(existing), cap)
+
     argv = [
         "-s",
         str(Path(dataset_root).expanduser()),
@@ -506,6 +513,7 @@ def _triangle_splatting_native_argv(
         "importance_threshold",
         "lr_triangles_points_init",
         "lambda_size",
+        "max_primitives",
         "max_shapes",
         "opacity_dead",
         "opacity_lr",
@@ -520,7 +528,7 @@ def _triangle_splatting_native_argv(
         "densify_from_iter",
     }
     for key in sorted(passthrough):
-        if key in trainer_cfg:
+        if key in trainer_cfg and trainer_cfg[key] is not None:
             argv.extend([f"--{key}", str(trainer_cfg[key])])
     if bool(trainer_cfg.get("random_background", False)):
         argv.append("--random_background")
@@ -591,6 +599,7 @@ def _mesh_splatting_native_argv(
         "lr_triangles_points_init",
         "max_diff_threshold",
         "max_points",
+        "max_primitives",
         "position_lr_delay_mult",
         "position_lr_max_steps",
         "prune_size",
@@ -611,7 +620,7 @@ def _mesh_splatting_native_argv(
         "weight_lr",
     }
     for key in sorted(passthrough):
-        if key in trainer_cfg:
+        if key in trainer_cfg and trainer_cfg[key] is not None:
             argv.extend([f"--{key}", str(trainer_cfg[key])])
     if bool(trainer_cfg.get("random_background", False)):
         argv.append("--random_background")

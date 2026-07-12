@@ -772,11 +772,18 @@ class TriangleModel:
             sampled_idxs = alive_indices[sampled_idxs]
         return sampled_idxs        
 
-    def add_new_gs(self, iteration, cap_max, splitt_large_triangles):
+    def add_new_gs(self, iteration, cap_max, splitt_large_triangles, max_split_candidates=None):
+        if max_split_candidates is not None:
+            max_split_candidates = int(max_split_candidates)
+            if max_split_candidates <= 0:
+                return 0
 
         current_num_points = self.vertices.shape[0]
         target_num = min(cap_max, int(self.add_percentage * current_num_points))
         num_gs = max(0, target_num - current_num_points)
+        if max_split_candidates is not None:
+            num_gs = min(num_gs, max_split_candidates)
+            splitt_large_triangles = min(splitt_large_triangles, max_split_candidates)
 
         if num_gs <= 0:
             return 0
@@ -798,6 +805,15 @@ class TriangleModel:
 
         # 3) combine and deduplicate
         add_idx = torch.unique(torch.cat([rand_idx, top_idx.to(rand_idx.device)]), sorted=False)
+        if max_split_candidates is not None and add_idx.numel() > max_split_candidates:
+            scores = torch.nan_to_num(probs[add_idx], nan=0.0, posinf=0.0, neginf=0.0)
+            if areas.numel() == probs.numel() and areas.numel() > 0:
+                area_scores = torch.nan_to_num(areas[add_idx], nan=0.0, posinf=0.0, neginf=0.0)
+                scores = scores + area_scores / (area_scores.max() + torch.finfo(area_scores.dtype).eps)
+            keep = torch.topk(scores, k=max_split_candidates, largest=True, sorted=False).indices
+            add_idx = add_idx[keep]
+        if add_idx.numel() == 0:
+            return 0
 
         (new_vertices, new_vertex_weight, new_features_dc, new_features_rest, new_triangles) = self._update_params_fast(add_idx, iteration)
 
@@ -810,6 +826,43 @@ class TriangleModel:
         )
         mask[add_idx] = False
         self.prune_triangles(mask)
+
+    def enforce_max_primitives(self, max_primitives):
+        if max_primitives is None:
+            return 0
+        max_primitives = int(max_primitives)
+        if max_primitives <= 0:
+            raise ValueError(f"max_primitives must be positive, got {max_primitives!r}")
+        current = int(self._triangle_indices.shape[0])
+        if current <= max_primitives:
+            return 0
+
+        scores = None
+        if (
+            isinstance(self.importance_score, torch.Tensor)
+            and self.importance_score.numel() == current
+            and torch.isfinite(self.importance_score).any()
+            and torch.nan_to_num(self.importance_score).abs().sum() > 0
+        ):
+            scores = self.importance_score.detach().reshape(-1).float()
+        else:
+            scores = self.triangle_areas().detach().reshape(-1).float()
+        scores = torch.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
+
+        keep_idx = torch.topk(scores, k=max_primitives, largest=True, sorted=False).indices
+        keep_mask = torch.zeros(current, dtype=torch.bool, device=self._triangle_indices.device)
+        keep_mask[keep_idx] = True
+        self.prune_triangles(keep_mask)
+
+        used_vertex_mask = torch.zeros(
+            self.vertices.shape[0],
+            dtype=torch.bool,
+            device=self.vertices.device,
+        )
+        if self._triangle_indices.numel() > 0:
+            used_vertex_mask[self._triangle_indices.flatten().long()] = True
+        self._prune_vertices(used_vertex_mask)
+        return current - int(self._triangle_indices.shape[0])
 
 
 

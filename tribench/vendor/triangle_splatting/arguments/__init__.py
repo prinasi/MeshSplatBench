@@ -109,6 +109,7 @@ class OptimizationParams(ParamGroup):
         self.start_lr_sigma = 0
         self.max_noise_factor = 1.5
         self.max_shapes = 3_000_000
+        self.max_primitives = -1
         self.add_shape = 1.3
         self.p = 1.6
         super().__init__(parser, "Optimization Parameters")

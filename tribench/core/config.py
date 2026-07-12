@@ -142,6 +142,7 @@ def finalize_config(config: Mapping[str, Any]) -> dict[str, Any]:
     - Dataset roots split into ``dataset.root`` plus ``dataset.scene``.
     """
     resolved = _apply_scene_triangle_caps(_to_plain_dict(config))
+    resolved = _apply_max_primitive_limit(resolved)
     resolved = _apply_dtu_defaults(resolved)
     resolved = _format_config_templates(resolved)
     resolved = _resolve_dataset_scene(resolved)
@@ -209,6 +210,43 @@ def _apply_scene_triangle_caps(config: dict[str, Any]) -> dict[str, Any]:
     trainer_cfg = dict(config.get("trainer", {}) or {})
     trainer_cfg.setdefault("max_shapes", cap)
     config["trainer"] = trainer_cfg
+    return config
+
+
+def _apply_max_primitive_limit(config: dict[str, Any]) -> dict[str, Any]:
+    trainer_cfg = config.get("trainer", {})
+    if not isinstance(trainer_cfg, Mapping):
+        return config
+
+    trainer = dict(trainer_cfg)
+    cap_value = trainer.get("max_primitives")
+    if cap_value is None:
+        return config
+
+    try:
+        cap = int(cap_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"trainer.max_primitives must be an integer, got {cap_value!r}") from exc
+    if cap <= 0:
+        raise ValueError(f"trainer.max_primitives must be positive, got {cap!r}")
+
+    trainer["max_primitives"] = cap
+    method_type = str(trainer.get("type", trainer.get("name", ""))).lower().replace("_", "-")
+
+    if method_type == "triangle-splatting":
+        existing = trainer.get("max_shapes")
+        trainer["max_shapes"] = cap if existing is None else min(int(existing), cap)
+    elif method_type == "2dts":
+        d2ts = dict(config.get("d2ts", {}) or {})
+        existing = d2ts.get("target_point_num")
+        d2ts["target_point_num"] = cap if existing is None else min(int(existing), cap)
+        config["d2ts"] = d2ts
+    elif method_type == "diffsoup":
+        for key in ("n_points", "target_prims"):
+            existing = trainer.get(key)
+            trainer[key] = cap if existing is None else min(int(existing), cap)
+
+    config["trainer"] = trainer
     return config
 
 

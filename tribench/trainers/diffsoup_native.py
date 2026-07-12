@@ -122,12 +122,13 @@ def _run_mip360_script(
         white_background = False
     dtu_eval_mode = str(dataset_cfg.get("dtu_eval_mode", trainer_cfg.get("dtu_eval_mode", "full"))).lower()
     foreground_training = bool(trainer_cfg.get("foreground_training", False))
+    target_prims = _primitive_target(trainer_cfg, "n_points", "target_prims")
     with _reference_import_context(examples_dir):
         module.main(
             scene_root=str(Path(dataset_root).expanduser()),
             batch_size=int(trainer_cfg.get("batch_size", 4)),
             steps=max_steps,
-            n_points=int(trainer_cfg.get("n_points", trainer_cfg.get("target_prims", 15_000))),
+            n_points=target_prims,
             downscale=downscale,
             flip_z=bool(trainer_cfg.get("flip_z", True)),
             dataset_type=dataset_kind,
@@ -170,7 +171,7 @@ def _run_synthetic_script(
         "--batch_size",
         str(int(trainer_cfg.get("batch_size", 4))),
         "--target_prims",
-        str(int(trainer_cfg.get("target_prims", trainer_cfg.get("n_points", 15_000)))),
+        str(_primitive_target(trainer_cfg, "target_prims", "n_points")),
         "--downscale",
         str(downscale),
         "--out_dir",
@@ -304,6 +305,16 @@ def _coerce_downscale(value: Any, *, default: int, allowed: set[int]) -> int:
     if downscale not in allowed:
         downscale = default
     return downscale
+
+
+def _primitive_target(trainer_cfg: dict[str, Any], primary: str, fallback: str) -> int:
+    value = trainer_cfg.get("max_primitives")
+    if value is None:
+        value = trainer_cfg.get(primary, trainer_cfg.get(fallback, 15_000))
+    target = int(value)
+    if target <= 0:
+        raise ValueError(f"Primitive target must be positive, got {target!r}")
+    return target
 
 
 def _checkpoint_steps(path: Path) -> int:

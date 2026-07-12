@@ -223,6 +223,40 @@ def test_scene_triangle_caps_do_not_override_explicit_max_shapes(tmp_path: Path)
     assert cfg["trainer"]["max_shapes"] == 10
 
 
+def test_max_primitives_caps_triangle_max_shapes(tmp_path: Path):
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "dataset:\n"
+        "  scene: bicycle\n"
+        "triangle_caps:\n"
+        "  bicycle: 6400000\n"
+        "trainer:\n"
+        "  type: triangle-splatting\n"
+        "  max_primitives: 15000\n"
+    )
+
+    cfg = load_config(config)
+
+    assert cfg["trainer"]["max_primitives"] == 15_000
+    assert cfg["trainer"]["max_shapes"] == 15_000
+
+
+def test_max_primitives_caps_2dts_target_point_num(tmp_path: Path):
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "trainer:\n"
+        "  type: 2dts\n"
+        "  max_primitives: 15000\n"
+        "d2ts:\n"
+        "  target_point_num: 1000000\n"
+    )
+
+    cfg = load_config(config)
+
+    assert cfg["trainer"]["max_primitives"] == 15_000
+    assert cfg["d2ts"]["target_point_num"] == 15_000
+
+
 def test_diffsoup_config_resolves_final_params_checkpoint():
     cfg = load_config(Path("configs/diffsoup/mipnerf360/room.yaml"))
 
@@ -277,6 +311,66 @@ def test_triangle_splatting_scene_configs_apply_full_eval_caps():
     for scene_path, cap in expected.items():
         cfg = load_config(config_dir / f"{scene_path}.yaml")
         assert cfg["trainer"]["max_shapes"] == cap
+
+
+def test_texture_ablation_configs_resolve_to_15k():
+    config_dir = Path(__file__).resolve().parents[2] / "configs" / "texture_abl_cfgs"
+    scene_configs = sorted(
+        path
+        for path in config_dir.glob("*/*/*.yaml")
+        if "/native/" not in path.as_posix()
+    )
+    native_configs = sorted((config_dir / "2dts" / "native").glob("*.yaml"))
+
+    assert len(scene_configs) == 102
+    assert len(native_configs) == 4
+
+    for path in scene_configs:
+        cfg = Config.fromfile(path)
+        method = path.relative_to(config_dir).parts[0]
+        assert cfg.trainer.max_primitives == 15_000
+        assert cfg.output.dir.startswith(f"outputs/texture_abl/{method}/")
+        assert cfg.adapter.checkpoint.startswith(f"outputs/texture_abl/{method}/")
+        assert cfg.output.metrics_file.startswith(f"{cfg.output.dir}/")
+        assert cfg.output.stats_file.startswith(f"{cfg.output.dir}/")
+        assert cfg.render.video.output_dir.startswith(f"{cfg.output.dir}/")
+        assert cfg.profile.output.startswith(f"{cfg.output.dir}/")
+        assert cfg.inspect.output.startswith(f"{cfg.output.dir}/")
+        assert not cfg.output.dir.startswith(f"outputs/{method}/")
+        if method == "triangle-splatting":
+            assert cfg.trainer.max_shapes == 15_000
+        if method == "2dts":
+            assert cfg.d2ts.target_point_num == 15_000
+            assert str(cfg.d2ts.native_config).startswith(
+                "configs/texture_abl_cfgs/2dts/native/"
+            )
+
+    for path in native_configs:
+        assert "target_point_num: 15000" in path.read_text(encoding="utf-8")
+
+
+def test_texture_ablation_dtu_full_override_retargets_outputs(tmp_path: Path):
+    base_config = (
+        Path(__file__).resolve().parents[2]
+        / "configs"
+        / "texture_abl_cfgs"
+        / "2dts"
+        / "dtu"
+        / "scan24.yaml"
+    )
+    config = tmp_path / "scan24_full.yaml"
+    config.write_text(
+        f"_base_: {base_config}\n"
+        "dataset:\n"
+        "  dtu_eval_mode: full\n"
+    )
+
+    cfg = Config.fromfile(config)
+
+    assert cfg.dataset.dtu_eval_mode == "full"
+    assert cfg.output.dir == "outputs/texture_abl/2dts/dtu-full/scan24"
+    assert cfg.adapter.checkpoint == "outputs/texture_abl/2dts/dtu-full/scan24/ckpt"
+    assert cfg.mesh.output == "outputs/texture_abl/2dts/dtu-full/scan24/mesh/30000_pcd.ply"
 
 
 def test_build_from_cfg_with_params():

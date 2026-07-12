@@ -1,0 +1,26 @@
+# @format
+
+_base_: ../../../2dts/mipnerf360/bonsai.yaml
+
+trainer:
+  max_primitives: 15000
+adapter:
+  checkpoint: outputs/texture_abl/{method}/{dataset}/{scene}/ckpt
+output:
+  dir: outputs/texture_abl/{method}/{dataset}/{scene}
+  metrics_file: outputs/texture_abl/{method}/{dataset}/{scene}/metrics.json
+  mesh_metrics_file: outputs/texture_abl/{method}/{dataset}/{scene}/mesh_metrics.json
+  mesh_file: outputs/texture_abl/{method}/{dataset}/{scene}/mesh/mesh.ply
+  stats_file: outputs/texture_abl/{method}/{dataset}/{scene}/stats.json
+  report_file: outputs/texture_abl/{method}/{dataset}/{scene}/report.md
+mesh:
+  output: outputs/texture_abl/{method}/{dataset}/{scene}/mesh/mesh.ply
+render:
+  video:
+    output_dir: outputs/texture_abl/{method}/{dataset}/{scene}/video
+profile:
+  output: outputs/texture_abl/{method}/{dataset}/{scene}/profile.json
+inspect:
+  output: outputs/texture_abl/{method}/{dataset}/{scene}/stats.json
+d2ts:
+  native_config: configs/texture_abl_cfgs/2dts/native/mipnerf360.yaml

@@ -264,6 +264,53 @@ class VanillaTSModel(BaseModel):
         self.contrib_denom = self.contrib_denom[~prune_mask]
         self._prune_points_update_states(~prune_mask)
 
+    def _primitive_cap(self) -> int | None:
+        model_update = self.config.model_update
+        cap = getattr(model_update, "max_primitives", None) if model_update is not None else None
+        if cap is None:
+            return None
+        cap = int(cap)
+        return cap if cap > 0 else None
+
+    def _primitive_scores(self) -> torch.Tensor:
+        current = int(self._vertex.shape[0])
+        for value in (self.contrib_max, self.contrib_sum):
+            if (
+                isinstance(value, torch.Tensor)
+                and value.numel() == current
+                and torch.isfinite(value).any()
+                and torch.nan_to_num(value).abs().sum() > 0
+            ):
+                return torch.nan_to_num(value.detach().reshape(-1).float(), nan=0.0, posinf=0.0, neginf=0.0)
+
+        opacity = self.get_opacity.detach().reshape(-1).float()
+        opacity = torch.nan_to_num(opacity, nan=0.0, posinf=0.0, neginf=0.0)
+        if opacity.numel() == current and opacity.numel() > 0 and (opacity.max() - opacity.min()) > 1e-8:
+            return opacity
+
+        area = self.get_area.detach().reshape(-1).float()
+        return torch.nan_to_num(area, nan=0.0, posinf=0.0, neginf=0.0)
+
+    def enforce_max_primitives(self, max_primitives: int | None = None) -> int:
+        if max_primitives is None:
+            max_primitives = self._primitive_cap()
+        if max_primitives is None:
+            return 0
+        max_primitives = int(max_primitives)
+        if max_primitives <= 0:
+            raise ValueError(f"max_primitives must be positive, got {max_primitives!r}")
+
+        current = int(self._vertex.shape[0])
+        if current <= max_primitives:
+            return 0
+
+        scores = self._primitive_scores()
+        keep_idx = torch.topk(scores, k=max_primitives, largest=True, sorted=False).indices
+        keep_mask = torch.zeros(current, dtype=torch.bool, device=self._vertex.device)
+        keep_mask[keep_idx] = True
+        self._prune_points(~keep_mask)
+        return current - int(self._vertex.shape[0])
+
     def _grow_points_update_states(self, tensors_dict: dict[str, torch.Tensor]):
         # update optimizer and parameter after runing _grow_points
         for group in self.optimizer.param_groups:
@@ -752,6 +799,9 @@ class VanillaTSModel(BaseModel):
         self._contribution_pruning(iteration)
         self._densification(iteration, render_pkg)
         self._opacity_reset(iteration)
+        removed = self.enforce_max_primitives()
+        if removed > 0:
+            self.logger.info(f"[ITER {iteration}, primitive cap] Pruning {removed} points, max_primitives: {self._primitive_cap()}")
 
         self.state_update(iteration)
 
@@ -906,6 +956,7 @@ class VanillaTSModel(BaseModel):
             return xyz, color, normal, pixels
 
     def savePLY(self, ply_path: str, bbox_filtering: bool = True):
+        self.enforce_max_primitives()
         self.logger.info(f"Saving triangles to {ply_path}")
         triangle_model = self.toRawTriangle(bbox_filtering)
         triangle_model.savePLY(ply_path, save_extra=True)
@@ -956,9 +1007,11 @@ class VanillaTSModel(BaseModel):
         self._f_rest = nn.Parameter(features[..., 1:, :].contiguous(), requires_grad=True)
 
         self._training_setup()
+        self.enforce_max_primitives()
         return self
 
     def saveGLB(self, glb_path: str, bbox_filtering: bool = True, process: bool = False):
+        self.enforce_max_primitives()
         self.logger.info(f"Saving triangles to {glb_path}")
         triangle_model = self.toRawTriangle(bbox_filtering)
         triangle_model.saveGLB(glb_path, save_back=not self.back_culling, process=process)
@@ -969,6 +1022,7 @@ class VanillaTSModel(BaseModel):
         return self.fromRawTriangle(triangle_model)
 
     def save_ckpt(self, ckpt_path: str):
+        self.enforce_max_primitives()
         self.logger.info(f"Saving checkpoint to {ckpt_path}")
         Path(ckpt_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -984,6 +1038,7 @@ class VanillaTSModel(BaseModel):
 
         self._training_setup()
         self.optimizer.load_state_dict(optimizer_state_dict)
+        self.enforce_max_primitives()
         return self
 
     def _sample_points(
@@ -1145,3 +1200,4 @@ class VanillaTSModel(BaseModel):
         self._f_rest = nn.Parameter(features[..., 1:, :].contiguous(), requires_grad=True)
 
         self._training_setup()
+        self.enforce_max_primitives()

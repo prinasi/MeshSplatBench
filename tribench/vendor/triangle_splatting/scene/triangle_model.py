@@ -379,6 +379,43 @@ class TriangleModel:
     def get_number_of_points(self):
         return self._number_of_points
 
+    def _refresh_triangle_topology_buffers(self):
+        count = int(self._triangles_points.shape[0])
+        device = self._triangles_points.device
+        points_per_triangle = int(self._triangles_points.shape[1]) if self._triangles_points.ndim >= 2 else 0
+        self._num_points_per_triangle = torch.full(
+            (count,), points_per_triangle, dtype=torch.int, device=device
+        )
+        self._cumsum_of_points_per_triangle = torch.cumsum(
+            torch.nn.functional.pad(self._num_points_per_triangle, (1, 0), value=0),
+            0,
+            dtype=torch.int,
+        )[:-1]
+        self._number_of_points = count
+
+    def _prune_auxiliary_buffers(self, keep_mask):
+        for name in (
+            "denom",
+            "max_radii2D",
+            "max_density_factor",
+            "max_scaling",
+            "triangle_area",
+            "image_size",
+            "importance_score",
+        ):
+            value = getattr(self, name, None)
+            if isinstance(value, torch.Tensor) and value.shape[0] == keep_mask.shape[0]:
+                setattr(self, name, value[keep_mask])
+
+    def triangle_areas(self):
+        tri = self._triangles_points
+        if tri.numel() == 0:
+            return torch.empty((0,), dtype=tri.dtype, device=tri.device)
+        ab = tri[:, 1] - tri[:, 0]
+        ac = tri[:, 2] - tri[:, 0]
+        areas = 0.5 * torch.linalg.norm(torch.cross(ab, ac, dim=1), dim=1)
+        return torch.nan_to_num(areas, nan=0.0, posinf=0.0, neginf=0.0)
+
     def oneupSHdegree(self):
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
@@ -718,16 +755,46 @@ class TriangleModel:
         self._sigma = optimizable_tensors["sigma"]
         self._mask = optimizable_tensors["mask"]
 
-        num_points_per_triangle = []
-        for i in range(self._triangles_points.size(0)):
-            num_points_per_triangle.append(self._triangles_points[i].shape[0])
-        tensor_num_points_per_triangle = torch.tensor(num_points_per_triangle, dtype=torch.int, device='cuda:0')
-        cumsum_of_points_per_triangle = torch.cumsum(torch.nn.functional.pad(tensor_num_points_per_triangle, (1,0), value=0), 0, dtype=torch.int)[:-1]
-        number_of_points = self._triangles_points.shape[0]
+        self._prune_auxiliary_buffers(valid_points_mask)
+        self._refresh_triangle_topology_buffers()
 
-        self._num_points_per_triangle = tensor_num_points_per_triangle
-        self._cumsum_of_points_per_triangle = cumsum_of_points_per_triangle
-        self._number_of_points = number_of_points
+    def enforce_max_primitives(self, max_primitives):
+        if max_primitives is None:
+            return 0
+        max_primitives = int(max_primitives)
+        if max_primitives <= 0:
+            raise ValueError(f"max_primitives must be positive, got {max_primitives!r}")
+
+        current = int(self._triangles_points.shape[0])
+        if current <= max_primitives:
+            return 0
+
+        scores = None
+        if (
+            isinstance(self.importance_score, torch.Tensor)
+            and self.importance_score.numel() == current
+            and torch.isfinite(self.importance_score).any()
+            and torch.nan_to_num(self.importance_score).abs().sum() > 0
+        ):
+            scores = self.importance_score.detach().reshape(-1).float()
+        elif self._opacity.numel() == current:
+            opacity = torch.nan_to_num(
+                self.get_opacity.detach().reshape(-1).float(),
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+            scores = opacity if opacity.numel() > 0 and (opacity.max() - opacity.min()) > 1e-8 else None
+        if scores is None:
+            scores = self.triangle_areas().detach().reshape(-1).float()
+        scores = torch.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
+
+        keep_idx = torch.topk(scores, k=max_primitives, largest=True, sorted=False).indices
+        keep_mask = torch.zeros(current, dtype=torch.bool, device=self._triangles_points.device)
+        keep_mask[keep_idx] = True
+        self.prune_points(~keep_mask)
+        self.reset_training_statistics()
+        return current - int(self._triangles_points.shape[0])
 
     def add_new_gs(self, cap_max, oddGroup=True, dead_mask=None):
         current_num_points = self._opacity.shape[0]

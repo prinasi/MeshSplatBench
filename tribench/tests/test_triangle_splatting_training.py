@@ -93,6 +93,43 @@ def test_triangle_model_reset_training_statistics_initializes_tensor_buffers():
     assert torch.equal(model.importance_score, torch.zeros(7))
 
 
+def test_triangle_model_enforce_max_primitives_prunes_optimizer_state():
+    model = TriangleModel.__new__(TriangleModel)
+    model._triangles_points = torch.nn.Parameter(torch.arange(36, dtype=torch.float32).view(4, 3, 3))
+    model._features_dc = torch.nn.Parameter(torch.zeros(4, 1, 3))
+    model._features_rest = torch.nn.Parameter(torch.zeros(4, 1, 3))
+    model._opacity = torch.nn.Parameter(torch.zeros(4, 1))
+    model._sigma = torch.nn.Parameter(torch.zeros(4, 1))
+    model._mask = torch.nn.Parameter(torch.ones(4, 1))
+    model.triangle_area = torch.ones(4)
+    model.image_size = torch.zeros(4)
+    model.importance_score = torch.tensor([0.0, 10.0, 1.0, 5.0])
+    model.max_scaling = torch.zeros(4)
+    model.max_radii2D = torch.zeros(4)
+    model.max_density_factor = torch.zeros(4)
+    model.denom = torch.zeros(4, 1)
+    model.opacity_activation = torch.sigmoid
+    model.optimizer = torch.optim.Adam(
+        [
+            {"params": [model._features_dc], "lr": 0.0, "name": "f_dc"},
+            {"params": [model._features_rest], "lr": 0.0, "name": "f_rest"},
+            {"params": [model._opacity], "lr": 0.0, "name": "opacity"},
+            {"params": [model._triangles_points], "lr": 0.0, "name": "triangles_points"},
+            {"params": [model._sigma], "lr": 0.0, "name": "sigma"},
+            {"params": [model._mask], "lr": 0.0, "name": "mask"},
+        ],
+        lr=0.0,
+    )
+
+    removed = model.enforce_max_primitives(2)
+
+    assert removed == 2
+    assert model.get_triangles_points.shape[0] == 2
+    assert torch.equal(model.get_triangles_points[:, 0, 0], torch.tensor([9.0, 27.0]))
+    assert model.get_num_points_per_triangle.tolist() == [3, 3]
+    assert model.get_number_of_points == 2
+
+
 def test_training_method_dataset_args_include_dtu_eval_mode(tmp_path):
     method = TriangleSplattingTrainingMethod(
         dataset=tmp_path / "scan24",

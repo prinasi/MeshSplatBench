@@ -233,6 +233,15 @@ def training(
     new_round = False
     removed_them = False
     loss_fn = l2_loss if triangles.large and outdoor else l1_loss
+    max_primitives_value = getattr(opt, "max_primitives", -1)
+    max_primitives = (
+        int(max_primitives_value)
+        if max_primitives_value and int(max_primitives_value) > 0
+        else int(opt.max_shapes) if getattr(opt, "max_shapes", None) else None
+    )
+    if max_primitives is not None:
+        opt.max_shapes = min(int(opt.max_shapes), max_primitives)
+        triangles.enforce_max_primitives(max_primitives)
 
     for iteration in range(first_iter, opt.iterations + 1):
         iter_start.record()
@@ -356,6 +365,8 @@ def training(
                 removed_them = True
                 new_round = False
                 triangles.add_new_gs(cap_max=opt.max_shapes, oddGroup=odd_group, dead_mask=dead_mask)
+                if max_primitives is not None:
+                    triangles.enforce_max_primitives(max_primitives)
 
             if iteration > opt.densify_until_iter and iteration % opt.densification_interval == 0:
                 if number_of_views < 250 or not new_round:
@@ -369,13 +380,20 @@ def training(
                 if not new_round:
                     dead_mask = torch.logical_or(dead_mask, (triangles.triangle_area < 2).squeeze())
                 triangles.remove_final_points(dead_mask)
+                if max_primitives is not None:
+                    triangles.enforce_max_primitives(max_primitives)
                 removed_them = True
                 new_round = False
 
             if iteration < opt.iterations:
+                if max_primitives is not None:
+                    triangles.enforce_max_primitives(max_primitives)
                 triangles.optimizer.step()
                 triangles.optimizer.zero_grad(set_to_none=True)
 
+    if max_primitives is not None:
+        with torch.no_grad():
+            triangles.enforce_max_primitives(max_primitives)
     print("Training is done")
 
 
