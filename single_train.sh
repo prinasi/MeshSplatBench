@@ -16,7 +16,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-CONFIG_ROOT="configs/texture_abl_cfgs"
+CONFIG_ROOT="configs"
 LOG_ROOT=""
 LOG_DIR=""
 METHOD=""

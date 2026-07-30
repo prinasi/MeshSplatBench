@@ -41,6 +41,7 @@ def profile(
     - Rendering FPS
     """
     profile_cfg: dict = {}
+    dataset_cfg: dict = {}
     if config is not None:
         from tribench.core.config import Config
 
@@ -74,6 +75,8 @@ def profile(
         raise typer.BadParameter("Use --scene/--dataset, or set dataset.root in --config.")
     if checkpoint is None:
         raise typer.BadParameter("Use --checkpoint, or set adapter.checkpoint in --config.")
+    if repeats <= 0:
+        raise typer.BadParameter("--repeats must be positive.")
 
     from tribench.core.registry import get_adapter
 
@@ -97,21 +100,46 @@ def profile(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
 
+    if config is not None:
+        from tribench.core.builder import build_dataset
+
+        resolved_dataset_cfg = dict(dataset_cfg)
+        resolved_dataset_cfg["root"] = dataset
+        resolved_dataset_cfg["split"] = split
+        profile_dataset = build_dataset(resolved_dataset_cfg)
+    else:
+        from tribench.core.datasets import load_dataset
+
+        profile_dataset = load_dataset(dataset, split=split)
+    if len(profile_dataset) == 0:
+        raise typer.BadParameter(f"Dataset split {split!r} contains no cameras.")
+    camera = profile_dataset.sample(0).camera.to(adapter.device)
+
+    from tribench.core.profiler import measure_peak_memory, profile_forward
+
+    forward = profile_forward(adapter, camera, repeats=repeats)
+    memory = measure_peak_memory(lambda: adapter.render(camera, mode="eval"))
     result = {
         "method": method,
         "checkpoint": checkpoint,
         "dataset": dataset,
         "split": split,
         "repeats": repeats,
-        "status": "adapter_loaded",
+        "status": "complete",
+        "device": str(adapter.device),
+        "camera_name": profile_dataset.sample(0).name,
+        "forward": forward,
+        "memory": memory,
     }
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, indent=2))
 
-    typer.echo(f"Profile metadata saved to {output_path}")
-    typer.echo("\nNote: Profiling requires a loaded model and CUDA device.")
-    typer.echo("This command will be fully functional once adapters are implemented.")
+    typer.echo(f"Profile saved to {output_path}")
+    typer.echo(
+        f"Forward: mean={forward['mean_ms']:.3f} ms, "
+        f"p50={forward['p50_ms']:.3f} ms, p95={forward['p95_ms']:.3f} ms"
+    )
 
 
 def _scene_name(scene: str | None) -> str | None:

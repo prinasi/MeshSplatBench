@@ -20,7 +20,7 @@ TriBench provides a single, consistent evaluation framework for comparing differ
 | 2D Triangle Splatting (2DTS) | `D2TSAdapter`              | Initial config/train/render/eval support |
 | Triangle Splatting           | `TriangleSplattingAdapter` | Config/train/render/eval support         |
 | MeshSplatting                | `MeshSplattingAdapter`     | Config/train/render/eval support         |
-| DiffSoup                     | `DiffSoupAdapter`          | Planned                                  |
+| DiffSoup                     | `DiffSoupAdapter`          | Config/train/render/eval/export support; Unity image parity pending |
 
 ## Installation
 
@@ -53,7 +53,199 @@ bash single_train.sh mesh-splatting dtu/all 0
 bash single_train.sh 2dts mipnerf360/all 0
 bash single_train.sh 2dts tandt/all 0
 bash single_train.sh 2dts dtu/all 0
+
+# Export feature-preserving Unity-native assets from completed runs
+bash single_export_unity.sh triangle-splatting mipnerf360/all 0
+bash single_export_unity.sh mesh-splatting mipnerf360/garden 0
+
+# Export missing Unity assets, capture Unity frames, profile FPS/memory, and format report tables
+bash single_unity_eval.sh 2dts mipnerf360/bicycle 0 --unity "$UNITY" --unity-project "$PROJECT"
 ```
+
+## Unity-native Evaluation
+
+TriBench can export method-preserving Unity `.triasset` packages, render Unity
+test-view images for PSNR/SSIM/LPIPS, and profile GPU FPS/memory through a
+Linux standalone Development Player. The workflow is designed for completed
+config-driven runs under `outputs/{method}/{dataset}/{scene}`.
+
+### What must be committed
+
+Commit the source code and documentation needed to reproduce the Unity
+benchmark:
+
+```text
+single_export_unity.sh
+single_unity_eval.sh
+tribench/unity_assets.py
+tribench/cli/export_unity.py
+tools/export_unity_triasset.py
+tools/validate_unity_triasset_cpu.py
+tools/create_unity_triasset_package.py
+tools/patch_legacy_unity_vulkan.py
+tools/run_unity_triasset_eval.py
+tools/build_unity_profile_player.py
+tools/run_unity_triasset_player_profile.py
+tools/evaluate_deployment_images.py
+tools/format_unity_metrics_report.py
+tools/aggregate_unity_triasset_eval.py
+tools/aggregate_unity_deployment_profile.py
+tools/evaluate_unity_triasset_outputs.py
+tools/unity_triasset_renderer/
+tribench/tests/test_unity_assets*.py
+tribench/tests/test_unity_deployment_cpu.py
+docs/unity_native_assets.md
+```
+
+Do not commit generated data: `outputs/`, `.triasset/` packages, captured Unity
+PNGs, runtime profile JSON/logs, generated Unity Player builds, Unity `Library/`
+or `Temp/`, local datasets, or report CSV/JSON/Markdown files. These are
+covered by `.gitignore`.
+
+### Unity project setup
+
+Install Unity with Linux standalone build support. Then create or update a
+Unity project from the repository templates:
+
+```bash
+python3 tools/create_unity_triasset_package.py --unity-project "$PROJECT"
+python3 tools/patch_legacy_unity_vulkan.py --unity-project "$PROJECT"
+```
+
+Set the usual paths:
+
+```bash
+export UNITY=/path/to/Unity/Editor/Unity
+export PROJECT=/path/to/TriBenchUnity
+```
+
+`single_unity_eval.sh` applies the Vulkan compatibility patch automatically on
+Linux. It also builds or reuses a Linux standalone Development Player at:
+
+```text
+outputs/unity_player/linux/TriBenchProfilePlayer.x86_64
+```
+
+### Export Unity assets only
+
+```bash
+./single_export_unity.sh 2dts mipnerf360/all cpu
+./single_export_unity.sh triangle-splatting mipnerf360/garden cpu
+```
+
+Each scene writes:
+
+```text
+outputs/{method}/{dataset}/{scene}/unity_native/{method}.triasset/
+```
+
+Existing valid packages are skipped; use `--force` to re-export.
+
+### Method-aware Unity benchmark
+
+```bash
+./single_unity_eval.sh 2dts mipnerf360/all 0 \
+  --unity "$UNITY" \
+  --unity-project "$PROJECT"
+```
+
+For all methods:
+
+```bash
+for method in 2dts triangle-splatting mesh-splatting diffsoup; do
+  ./single_unity_eval.sh "$method" mipnerf360/all 0 \
+    --unity "$UNITY" \
+    --unity-project "$PROJECT"
+done
+```
+
+The default condition is `method-aware`; outputs are written under each scene's
+`unity_method_aware/` directory and summarized in:
+
+```text
+outputs/unity_reports/{method}/unity_method_aware/unity_metrics_report.csv
+outputs/unity_reports/{method}/unity_method_aware/unity_metrics_report.json
+outputs/unity_reports/{method}/unity_method_aware/unity_metrics_report.md
+```
+
+The terminal summary reports:
+
+```text
+PSNR | SSIM | LPIPS | GPU FPS | GPU P50 ms | GPU P95 ms | Render MiB | Asset MiB
+```
+
+`GPU FPS` is computed as `1000 / GPU P50 ms`. CPU/engine FPS is deliberately
+not used for paper tables.
+
+### General-purpose Unity renderer
+
+Use `--general-purpose` and a separate output name:
+
+```bash
+for method in 2dts triangle-splatting mesh-splatting diffsoup; do
+  ./single_unity_eval.sh "$method" mipnerf360/all 0 \
+    --unity "$UNITY" \
+    --unity-project "$PROJECT" \
+    --general-purpose \
+    --output-name unity_general_purpose
+done
+```
+
+Methods whose exported manifest does not declare a comparable general-purpose
+appearance are rejected instead of producing misleading numbers.
+
+### Runtime profile details
+
+By default, GPU speed is measured with the standalone Player:
+
+```text
+--profile-runtime player
+--profile-runs 3
+--profile-views 3
+--profile-warmup 60
+--profile-frames 180
+--gpu-timing-min-fraction 0.5
+```
+
+This means each scene profiles three independent Player runs, three held-out
+views per run, and 180 timed frames per view after warmup. Unity's
+`FrameTimingManager` may not return GPU timing on every frame, so
+`--gpu-timing-min-fraction` controls the minimum valid GPU sample coverage. A
+profile with no valid GPU timing fails rather than falling back to CPU time.
+
+For fast smoke tests:
+
+```bash
+./single_unity_eval.sh diffsoup mipnerf360/bicycle 0 \
+  --unity "$UNITY" \
+  --unity-project "$PROJECT" \
+  --profile-runs 1 \
+  --profile-views 1 \
+  --profile-warmup 20 \
+  --profile-frames 60 \
+  --fps-warmup 3 \
+  --fps-frames 12
+```
+
+If quality images and metrics already exist and only GPU profiles need to be
+rebuilt:
+
+```bash
+./single_unity_eval.sh diffsoup mipnerf360/all 0 \
+  --unity "$UNITY" \
+  --unity-project "$PROJECT" \
+  --skip-capture \
+  --skip-metrics \
+  --force-profile
+```
+
+### Resolution and dataset rules
+
+The wrapper reads each scene config. For Mip-NeRF 360, `image_dir: images` plus
+`resolution: 4` resolves to `images_4`; `resolution: 2` resolves to `images_2`.
+This keeps Unity quality/profile resolution aligned with native evaluation.
+The Unity camera replay currently requires COLMAP `sparse/0/cameras.bin` and
+`sparse/0/images.bin`.
 
 ## Config Inheritance
 

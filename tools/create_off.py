@@ -413,8 +413,20 @@ def _load_mesh_splatting(path: Path, *, color_mode: str, camera_center: torch.Te
     vertex_weight = state.get("vertex_weight")
     opacity = None
     if vertex_weight is not None:
-        vertex_opacity = torch.sigmoid(_as_cpu_tensor(vertex_weight, dtype=torch.float32).reshape(-1))
-        opacity = vertex_opacity[faces.long()].mean(dim=1)
+        # Reuse the native-package legacy recovery so the generic preview and
+        # method-specific export do not interpret the same checkpoint with
+        # different opacity floors.
+        from tribench.unity_assets import _mesh_splatting_opacity_floor
+
+        opacity_floor, _ = _mesh_splatting_opacity_floor(state, path, override=None)
+        vertex_opacity = opacity_floor + (1.0 - opacity_floor) * torch.sigmoid(
+            _as_cpu_tensor(vertex_weight, dtype=torch.float32).reshape(-1)
+        )
+        # Native MeshSplatting assigns one constant opacity to a triangle: the
+        # minimum of its three activated vertex weights.  The generic opaque
+        # mesh path still writes alpha=255, but opacity visualisation and
+        # metadata must not silently use a different reduction.
+        opacity = vertex_opacity[faces.long()].amin(dim=1)
 
     vertex_rgb, color_source = _choose_rgb(
         color_mode=color_mode,

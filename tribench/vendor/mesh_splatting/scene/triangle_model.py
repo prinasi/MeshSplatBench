@@ -27,6 +27,7 @@ from tribench.vendor.mesh_splatting.utils.system_utils import mkdir_p
 from tribench.vendor.mesh_splatting.utils.sh_utils import RGB2SH
 from tribench.vendor.mesh_splatting.utils.graphics_utils import BasicPointCloud
 import math
+from pathlib import Path
 from tribench.vendor._cmod.simple_knn._C import distCUDA2
 import math
 try:
@@ -179,6 +180,7 @@ class TriangleModel:
         point_cloud_state_dict["triangles_points"] = self.vertices
         point_cloud_state_dict["_triangle_indices"] = self._triangle_indices
         point_cloud_state_dict["vertex_weight"] = self.vertex_weight
+        point_cloud_state_dict["opacity_floor"] = self.opacity_floor
         point_cloud_state_dict["sigma"] = self._sigma
         point_cloud_state_dict["active_sh_degree"] = self.active_sh_degree
         point_cloud_state_dict["features_dc"] = self._features_dc
@@ -329,7 +331,15 @@ class TriangleModel:
 
         ################################################################
 
-        self.opacity_floor = 0.999
+        # Restore the exact training-time activation.  Older checkpoints did
+        # not serialize it, so use the same iteration-based recovery as the
+        # Unity exporter instead of a second hard-coded approximation.
+        from tribench.unity_assets import _mesh_splatting_opacity_floor
+
+        checkpoint_path = Path(path) / "point_cloud_state_dict.pt"
+        self.opacity_floor, _ = _mesh_splatting_opacity_floor(
+            state, checkpoint_path, override=None
+        )
         self._triangle_indices = self._triangle_indices.to(torch.int32)
 
         param_groups = [

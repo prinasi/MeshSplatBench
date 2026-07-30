@@ -9,7 +9,7 @@ experiment:
 
 dataset:
   scene: counter
-  image_dir: images_4
+  image_dir: images_2
   resolution: 1
 
 trainer:

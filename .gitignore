@@ -34,6 +34,28 @@ env/
 outputs/
 runs/
 
+# Unity / deployment benchmark generated artifacts
+*.triasset/
+unity_metrics_report.csv
+unity_metrics_report.json
+unity_metrics_report.md
+
+# Unity project/build caches. Keep source templates under tools/ committed;
+# ignore generated projects, local player builds, and editor metadata.
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+*.csproj
+*.sln
+*.unityproj
+*.pidb
+*.booproj
+
 # Data directory
 data/
 
