@@ -9,6 +9,7 @@ cd "${REPO_ROOT}"
 
 CONFIG_ROOT="configs"
 ASSET_SUBDIR="unity_native"
+EXPORT_TOPOLOGY="indexed"
 METHOD=""
 GPU_ID=""
 UNITY_BIN="${UNITY:-}"
@@ -26,6 +27,8 @@ SKIP_PLAYER_BUILD=0
 DATASETS_ROOT_OVERRIDE="${DATASETS:-}"
 OUTPUT_NAME="unity_method_aware"
 CONDITION="method-aware"
+TOPOLOGY="indexed"
+INDEXED_MESH_METHOD_AWARE=0
 REPORT_DIR=""
 NATIVE_RENDER_SUBDIR="renders/test/renders"
 NATIVE_SHAPE_POLICY="crop"
@@ -89,9 +92,13 @@ Options:
   --datasets-root PATH     Override all dataset roots with PATH/<scene>
   --config-root PATH       Config root (default: ${CONFIG_ROOT})
   --asset-subdir NAME      Per-run asset directory (default: ${ASSET_SUBDIR})
+  --export-topology T      MeshSplatting export layout: indexed/mesh or soup/materialized-soup (default: ${EXPORT_TOPOLOGY})
   --output-name NAME       Unity output folder under each scene output.dir
   --method-aware           Use method-aware Unity renderer (default)
   --general-purpose        Use ordinary Unity Mesh baseline
+  --topology T             Mesh layout for Unity renderer: indexed/mesh or soup (default: ${TOPOLOGY})
+  --indexed-mesh-method-aware
+                           With --general-purpose mesh-splatting, use Unity indexed MeshRenderer plus method-aware SH shader
   --profile-runs N         Independent profile runs per scene (default: ${PROFILE_RUNS})
   --profile-views N        Views per profile run (default: ${PROFILE_VIEWS})
   --profile-warmup N       Warmup frames per profiled view (default: ${PROFILE_WARMUP})
@@ -404,11 +411,14 @@ while [[ "$#" -gt 0 ]]; do
         --unity-project|--unity_project|--project) require_value "$@"; UNITY_PROJECT_DIR="$2"; shift 2 ;;
         --datasets-root|--datasets_root) require_value "$@"; DATASETS_ROOT_OVERRIDE="$2"; shift 2 ;;
         --config-root|--config_root) require_value "$@"; CONFIG_ROOT="$2"; shift 2 ;;
-        --asset-subdir|--asset_subdir) require_value "$@"; ASSET_SUBDIR="$2"; shift 2 ;;
+        --asset-subdir|--asset_subdir|--output-subdir|--output_subdir) require_value "$@"; ASSET_SUBDIR="$2"; shift 2 ;;
+        --export-topology|--export_topology) require_value "$@"; EXPORT_TOPOLOGY="$2"; shift 2 ;;
         --output-name|--output_name) require_value "$@"; OUTPUT_NAME="$2"; shift 2 ;;
         --method) require_value "$@"; METHOD="$2"; shift 2 ;;
         --method-aware|--method_aware|--method-specific|--method_specific) CONDITION="method-aware"; shift ;;
         --general-purpose|--general_purpose|--standard-mesh|--standard_mesh) CONDITION="general-purpose"; shift ;;
+        --topology|--mesh-topology|--mesh_topology) require_value "$@"; TOPOLOGY="$2"; shift 2 ;;
+        --indexed-mesh-method-aware|--indexed_mesh_method_aware) INDEXED_MESH_METHOD_AWARE=1; shift ;;
         --profile-runs|--profile_runs) require_value "$@"; PROFILE_RUNS="$2"; shift 2 ;;
         --profile-views|--profile_views) require_value "$@"; PROFILE_VIEWS="$2"; shift 2 ;;
         --profile-warmup|--profile_warmup) require_value "$@"; PROFILE_WARMUP="$2"; shift 2 ;;
@@ -467,6 +477,24 @@ fi
 METHOD_ID="$(canonical_method "${METHOD}")"
 GPU_ID="$(lower "${GPU_ID}")"
 PROFILE_RUNTIME="$(lower "${PROFILE_RUNTIME}")"
+EXPORT_TOPOLOGY="$(lower "${EXPORT_TOPOLOGY}")"
+EXPORT_TOPOLOGY="${EXPORT_TOPOLOGY//_/-}"
+case "${EXPORT_TOPOLOGY}" in
+    indexed|mesh|indexed-mesh) EXPORT_TOPOLOGY="indexed" ;;
+    soup|materialized-soup|triangle-soup|deindexed|deindexed-soup) EXPORT_TOPOLOGY="soup" ;;
+    *) echo "--export-topology must be indexed/mesh or soup/materialized-soup: ${EXPORT_TOPOLOGY}" >&2; exit 1 ;;
+esac
+if [[ "${EXPORT_TOPOLOGY}" != "indexed" && "${METHOD_ID}" != "mesh-splatting" ]]; then
+    echo "--export-topology ${EXPORT_TOPOLOGY} is only supported for mesh-splatting" >&2
+    exit 1
+fi
+TOPOLOGY="$(lower "${TOPOLOGY}")"
+TOPOLOGY="${TOPOLOGY//_/-}"
+case "${TOPOLOGY}" in
+    indexed|mesh) TOPOLOGY="indexed" ;;
+    soup|deindexed|deindexed-soup|triangle-soup) TOPOLOGY="soup" ;;
+    *) echo "--topology must be indexed/mesh or soup: ${TOPOLOGY}" >&2; exit 1 ;;
+esac
 if [[ "${GPU_ID}" != "cpu" && ! "${GPU_ID}" =~ ^[0-9]+$ ]]; then
     echo "Invalid gpu_id: ${GPU_ID}. Expected a non-negative integer or 'cpu'." >&2
     exit 1
@@ -529,6 +557,7 @@ if [[ "${SKIP_EXPORT}" -eq 0 ]]; then
     EXPORT_CMD=("bash" "${REPO_ROOT}/single_export_unity.sh" "${METHOD_ID}")
     EXPORT_CMD+=("${EXPANDED_TARGETS[@]}" "${GPU_ID}")
     EXPORT_CMD+=(--config-root "${CONFIG_ROOT}" --output-subdir "${ASSET_SUBDIR}" --python "${PYTHON_BIN}")
+    EXPORT_CMD+=(--export-topology "${EXPORT_TOPOLOGY}")
     [[ "${FORCE_EXPORT}" -eq 1 ]] && EXPORT_CMD+=(--force)
     [[ "${CONTINUE_ON_ERROR}" -eq 1 ]] && EXPORT_CMD+=(--continue-on-error)
     [[ "${DRY_RUN}" -eq 1 ]] && EXPORT_CMD+=(--dry-run)
@@ -553,10 +582,42 @@ if [[ "${PROFILE_RUNTIME}" == "player" ]]; then
 fi
 if [[ "${SKIP_PROFILE}" -eq 0 && "${PROFILE_RUNTIME}" == "player" ]]; then
     REQUIRE_GPU_TIMING=1
+    REQUIRES_CURRENT_PLAYER_BUILD=0
+    PLAYER_REBUILD_REASON=""
+    PLAYER_REBUILD_SOURCES=()
+    if [[ "${METHOD_ID}" == "mesh-splatting" && "${TOPOLOGY}" == "soup" && "${SKIP_PLAYER_BUILD}" -eq 0 ]]; then
+        REQUIRES_CURRENT_PLAYER_BUILD=1
+        PLAYER_REBUILD_REASON="MeshSplatting shader-level soup topology"
+        PLAYER_REBUILD_SOURCES+=("${UNITY_PROJECT_DIR}/Assets/TriBench/Scripts/MethodSpecificSplatRenderer.cs")
+    fi
+    if [[ "${METHOD_ID}" == "mesh-splatting" && "${INDEXED_MESH_METHOD_AWARE}" -eq 1 && "${SKIP_PLAYER_BUILD}" -eq 0 ]]; then
+        REQUIRES_CURRENT_PLAYER_BUILD=1
+        PLAYER_REBUILD_REASON="MeshSplatting indexed MeshRenderer path"
+        PLAYER_REBUILD_SOURCES+=(
+            "${UNITY_PROJECT_DIR}/Assets/TriBench/Scripts/StandardMeshTriAssetRenderer.cs"
+            "${UNITY_PROJECT_DIR}/Assets/TriBench/Shaders/MeshSplatIndexedMesh.shader"
+            "${UNITY_PROJECT_DIR}/Assets/TriBench/Resources/MeshSplatIndexedMesh.shader"
+        )
+    fi
     if [[ -n "${UNITY_PLAYER_BIN}" ]]; then
         UNITY_PLAYER_BIN="$(abs_path "${UNITY_PLAYER_BIN}")"
     else
         UNITY_PLAYER_BIN="$(abs_path "${UNITY_PLAYER_OUTPUT}")"
+    fi
+    if [[ "${SKIP_PLAYER_BUILD}" -eq 0 && "${REQUIRES_CURRENT_PLAYER_BUILD}" -eq 1 && "${FORCE_PLAYER_BUILD}" -eq 0 && -x "${UNITY_PLAYER_BIN}" ]]; then
+        PLAYER_BUILD_STALE=0
+        for source_path in "${PLAYER_REBUILD_SOURCES[@]}"; do
+            if [[ -e "${source_path}" && "${source_path}" -nt "${UNITY_PLAYER_BIN}" ]]; then
+                PLAYER_BUILD_STALE=1
+                break
+            fi
+        done
+        if [[ "${PLAYER_BUILD_STALE}" -eq 1 ]]; then
+            echo "[unity-player-build] ${PLAYER_REBUILD_REASON} source is newer than the Player; forcing rebuild."
+            FORCE_PLAYER_BUILD=1
+        else
+            echo "[unity-player-build] Existing standalone Player is current for ${PLAYER_REBUILD_REASON}; rebuild not forced."
+        fi
     fi
     if [[ "${SKIP_PLAYER_BUILD}" -eq 0 ]]; then
         if [[ "${FORCE_PLAYER_BUILD}" -eq 1 || ! -x "${UNITY_PLAYER_BIN}" ]]; then
@@ -654,8 +715,10 @@ for target in "${EXPANDED_TARGETS[@]}"; do
                 --test-only
                 --fps-warmup "${FPS_WARMUP}"
                 --fps-frames "${FPS_FRAMES}"
+                --topology "${TOPOLOGY}"
                 --log-name "unity_editor.log"
                 "${CONDITION_ARG}")
+            [[ "${INDEXED_MESH_METHOD_AWARE}" -eq 1 ]] && CAPTURE_CMD+=(--indexed-mesh-method-aware)
             if ! run_command "${LABEL}:capture" "${CAPTURE_CMD[@]}"; then
                 if handle_failure "${LABEL}" "Unity capture failed"; then continue; fi
                 break
@@ -683,10 +746,12 @@ for target in "${EXPANDED_TARGETS[@]}"; do
                         --profile-views "${PROFILE_VIEWS}"
                         --profile-warmup "${PROFILE_WARMUP}"
                         --profile-frames "${PROFILE_FRAMES}"
+                        --topology "${TOPOLOGY}"
                         --log-name "unity_player_profile_run_$(printf '%02d' "${run}").log"
                         --require-gpu-timing
                         --gpu-timing-min-fraction "${GPU_TIMING_MIN_FRACTION}"
                         "${CONDITION_ARG}")
+                    [[ "${INDEXED_MESH_METHOD_AWARE}" -eq 1 ]] && PROFILE_CMD+=(--indexed-mesh-method-aware)
                     [[ -n "${UNITY_DISPLAY}" ]] && PROFILE_CMD+=(--display "${UNITY_DISPLAY}")
                     [[ "${PLAYER_BATCHMODE}" -eq 1 ]] && PROFILE_CMD+=(--batchmode)
                     [[ "${SHOW_PLAYER_OUTPUT}" -eq 1 ]] && PROFILE_CMD+=(--show-console-output)
@@ -706,8 +771,10 @@ for target in "${EXPANDED_TARGETS[@]}"; do
                         --profile-views "${PROFILE_VIEWS}"
                         --profile-warmup "${PROFILE_WARMUP}"
                         --profile-frames "${PROFILE_FRAMES}"
+                        --topology "${TOPOLOGY}"
                         --log-name "unity_profile_run_$(printf '%02d' "${run}").log"
                         "${CONDITION_ARG}")
+                    [[ "${INDEXED_MESH_METHOD_AWARE}" -eq 1 ]] && PROFILE_CMD+=(--indexed-mesh-method-aware)
                 fi
                 if ! run_command "${LABEL}:profile-${run}" "${PROFILE_CMD[@]}"; then
                     if handle_failure "${LABEL}" "Unity profile run ${run} failed"; then continue 2; fi

@@ -103,6 +103,17 @@ def main() -> int:
     parser.add_argument("--method", default="triangle-splatting", help="Triasset method name and Unity batch renderer selector.")
     parser.add_argument("--asset-subdir", default="unity_native")
     parser.add_argument(
+        "--topology",
+        choices=("indexed", "mesh", "soup"),
+        default="indexed",
+        help="Unity mesh layout intervention. 'mesh' is an alias for indexed; 'soup' de-indexes shared vertices at load time.",
+    )
+    parser.add_argument(
+        "--indexed-mesh-method-aware",
+        action="store_true",
+        help="For mesh-splatting + --general-purpose, use a true Unity indexed MeshRenderer with method-aware SH appearance.",
+    )
+    parser.add_argument(
         "--reference-image-dir",
         help="Dataset image directory used for capture resolution and ground truth. Defaults to MipNeRF360 convention.",
     )
@@ -129,6 +140,8 @@ def main() -> int:
     args.unity_project = args.unity_project.resolve()
     args.outputs_root = args.outputs_root.resolve()
     args.datasets_root = args.datasets_root.resolve()
+    if args.topology == "mesh":
+        args.topology = "indexed"
     for name in ("fps_warmup", "fps_frames", "profile_run", "profile_views", "profile_warmup", "profile_frames"):
         if getattr(args, name) <= 0:
             parser.error(f"--{name.replace('_', '-')} must be positive")
@@ -149,6 +162,7 @@ def main() -> int:
         manifest_path = triasset / "manifest.json"
         manifest = json.loads(manifest_path.read_text())
         rendering = manifest["rendering"]
+        topology_label = str(rendering.get("export_topology") or args.topology)
         general = rendering.get("general_purpose", {})
         if args.general_purpose and not general.get("supported", False):
             raise RuntimeError(
@@ -172,6 +186,9 @@ def main() -> int:
             "export_contract_revision": manifest.get("export_contract_revision"),
             "method": args.method,
             "renderer_condition": "general-purpose" if args.general_purpose else "method-aware",
+            "indexed_mesh_method_aware": args.indexed_mesh_method_aware,
+            "mesh_topology_layout": topology_label,
+            "runtime_topology_layout": args.topology,
             "method_aware_status": rendering.get("unity_method_aware_status"),
             "cuda_equivalent": False,
             "requires_per_camera_depth_sort": rendering.get("unity_method_aware_requires_per_camera_depth_sort", False),
@@ -203,6 +220,7 @@ def main() -> int:
             "-method", args.method, "-triasset", str(triasset), "-dataset", str(dataset), "-output", str(output),
             "-triasset-width", str(width), "-triasset-height", str(height),
             "-fps-warmup", str(args.fps_warmup), "-fps-frames", str(args.fps_frames),
+            "-topology", args.topology,
             "-logFile", str(log_path),
         ]
         if args.test_only:
@@ -218,6 +236,8 @@ def main() -> int:
         command.extend(("-background-color", str(rendering.get("background_color", "black"))))
         if args.general_purpose:
             command.extend(("-standard-mesh", "1"))
+        if args.indexed_mesh_method_aware:
+            command.extend(("-indexed-mesh-method-aware", "1"))
         if args.method_aware:
             command.extend(("-method-specific", "1"))
         print(f"[TriBench] Unity scene={scene}, reference={image_dir.name}, resolution={width}x{height}", flush=True)

@@ -18,6 +18,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--mesh-opacity-floor", type=float)
+    parser.add_argument(
+        "--export-topology",
+        default="indexed",
+        help="MeshSplatting export layout: indexed/mesh or soup/materialized-soup.",
+    )
     parser.add_argument("--background-color", choices=("black", "white"))
     gamma = parser.add_mutually_exclusive_group()
     gamma.add_argument(
@@ -35,6 +40,7 @@ def main() -> int:
         args.output,
         overwrite=args.force,
         mesh_opacity_floor=args.mesh_opacity_floor,
+        export_topology=args.export_topology,
         d2ts_gamma_rescale=args.d2ts_gamma_rescale,
         background_color=args.background_color,
     )

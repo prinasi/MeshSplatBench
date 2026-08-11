@@ -17,6 +17,11 @@ def export_unity(
     output: Path = typer.Option(..., "--output", "-o", help="Output .triasset directory."),
     force: bool = typer.Option(False, "--force", help="Replace an existing output package."),
     mesh_opacity_floor: float | None = typer.Option(None, "--mesh-opacity-floor", help="Override MeshSplatting opacity floor for a legacy checkpoint."),
+    export_topology: str = typer.Option(
+        "indexed",
+        "--export-topology",
+        help="MeshSplatting export layout: indexed/mesh or soup/materialized-soup.",
+    ),
     d2ts_gamma_rescale: bool | None = typer.Option(
         None,
         "--d2ts-gamma-rescale/--no-d2ts-gamma-rescale",
@@ -44,6 +49,7 @@ def export_unity(
             output,
             overwrite=force,
             mesh_opacity_floor=mesh_opacity_floor,
+            export_topology=export_topology,
             d2ts_gamma_rescale=d2ts_gamma_rescale,
             background_color=background_color,
         )

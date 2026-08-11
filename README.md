@@ -60,6 +60,9 @@ bash single_export_unity.sh mesh-splatting mipnerf360/garden 0
 
 # Export missing Unity assets, capture Unity frames, profile FPS/memory, and format report tables
 bash single_unity_eval.sh 2dts mipnerf360/bicycle 0 --unity "$UNITY" --unity-project "$PROJECT"
+
+# MeshSplatting topology ablation: shared mesh, shader-level soup, materialized soup
+bash single_mesh_topology_unity_eval.sh mipnerf360/all 0 --unity "$UNITY" --unity-project "$PROJECT"
 ```
 
 ## Unity-native Evaluation
@@ -77,6 +80,7 @@ benchmark:
 ```text
 single_export_unity.sh
 single_unity_eval.sh
+single_mesh_topology_unity_eval.sh
 tribench/unity_assets.py
 tribench/cli/export_unity.py
 tools/export_unity_triasset.py
@@ -193,6 +197,71 @@ done
 
 Methods whose exported manifest does not declare a comparable general-purpose
 appearance are rejected instead of producing misleading numbers.
+
+### MeshSplatting topology ablation
+
+To isolate the value of MeshSplatting's shared-vertex topology, use:
+
+```bash
+./single_mesh_topology_unity_eval.sh mipnerf360/all 0 \
+  --unity "$UNITY" \
+  --unity-project "$PROJECT"
+```
+
+This runs `mesh-splatting` with three deployment layouts:
+
+- `mesh`: preserves the exported indexed mesh and renders it through a real
+  Unity `MeshFilter`/`MeshRenderer` with `Mesh.SetIndices`.  For
+  MeshSplatting, `single_mesh_topology_unity_eval.sh` enables
+  `--indexed-mesh-method-aware`, so the Unity indexed mesh path still evaluates
+  the learned SH appearance instead of falling back to the older DC-only
+  vertex-color baseline.
+- `shader-soup`: loads the same indexed `.triasset`, but uses the procedural
+  shader path as a corner-level triangle-soup intervention without duplicating
+  buffers.
+- `materialized-soup`: exports a separate `.triasset` with per-triangle
+  duplicated positions/SH/opacity attributes and sequential soup indices. This
+  is intended for asset-memory, load-feasibility, and CG compatibility evidence.
+
+Reports are written under:
+
+```text
+outputs/unity_reports/mesh-splatting/unity_mesh_topology/{indexed_mesh,shader_soup,materialized_soup}/
+```
+
+The lower-level wrapper also accepts `--topology indexed|soup` directly when a
+single shader-level condition is needed:
+
+```bash
+./single_unity_eval.sh mesh-splatting mipnerf360/bicycle 0 \
+  --unity "$UNITY" \
+  --unity-project "$PROJECT" \
+  --topology soup \
+  --output-name unity_method_aware_soup
+```
+
+For a single true Unity indexed MeshRenderer run, use:
+
+```bash
+./single_unity_eval.sh mesh-splatting mipnerf360/bicycle 0 \
+  --unity "$UNITY" \
+  --unity-project "$PROJECT" \
+  --general-purpose \
+  --topology indexed \
+  --indexed-mesh-method-aware \
+  --output-name unity_indexed_mesh_method_aware
+```
+
+For true exported soup assets, use a separate asset subdirectory:
+
+```bash
+./single_unity_eval.sh mesh-splatting mipnerf360/bicycle 0 \
+  --unity "$UNITY" \
+  --unity-project "$PROJECT" \
+  --asset-subdir unity_native_materialized_soup \
+  --export-topology soup \
+  --output-name unity_method_aware_materialized_soup
+```
 
 ### Runtime profile details
 

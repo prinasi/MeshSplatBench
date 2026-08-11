@@ -95,6 +95,35 @@ class MeshOpacityTests(unittest.TestCase):
             self.assertEqual(validation["status"], "ok")
             self.assertEqual(validation["mesh_opacity"]["faces_checked"], 1)
 
+    def test_export_topology_soup_materializes_per_corner_buffers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkpoint = root / "point_cloud_state_dict.pt"
+            state = {
+                "triangles_points": torch.arange(12, dtype=torch.float32).reshape(4, 3),
+                "_triangle_indices": torch.tensor([[0, 1, 2], [0, 2, 3]]),
+                "vertex_weight": torch.zeros(4, 1),
+                "opacity_floor": 0.0,
+                "sigma": -9.0,
+                "active_sh_degree": 0,
+                "features_dc": torch.zeros(4, 1, 3),
+                "features_rest": torch.zeros(4, 15, 3),
+            }
+            torch.save(state, checkpoint)
+
+            package = export_triasset(
+                "mesh-splatting", checkpoint, root / "scene", export_topology="soup"
+            )
+            manifest = json.loads(package.manifest_path.read_text())
+
+            self.assertEqual(manifest["rendering"]["primitive_topology"], "triangle-soup")
+            self.assertEqual(manifest["rendering"]["export_topology"], "materialized-soup")
+            self.assertEqual(manifest["rendering"]["source_vertex_count"], 4)
+            self.assertEqual(manifest["rendering"]["exported_vertex_count"], 6)
+            self.assertEqual(manifest["buffers"]["positions"]["shape"], [6, 3])
+            self.assertEqual(manifest["buffers"]["vertex_weight_logits"]["shape"], [6, 1])
+            self.assertEqual(manifest["buffers"]["sh_rest"]["shape"], [6, 15, 3])
+
     def test_generic_preview_uses_the_same_minimum_reduction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkpoint = Path(tmp) / "point_cloud_state_dict.pt"
@@ -347,7 +376,7 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
             renderer_text = renderer.read_text()
             self.assertIn("if (!material.SetPass(0))", renderer_text)
             self.assertIn("CommandBuffer triBenchDrawCommands", renderer_text)
-            self.assertIn("AddCommandBuffer(CameraEvent.BeforeImageEffects", renderer_text)
+            self.assertIn("AddCommandBuffer(CameraEvent.AfterForwardAlpha", renderer_text)
             self.assertIn('SetBuffer("_Sigma", sigma != null ? sigma : opacity)', renderer_text)
             self.assertIn("public override void PrepareCamera(Camera camera)", renderer_text)
             self.assertNotIn("if (!InstallTriBenchCameraDraw()) yield break", renderer_text)

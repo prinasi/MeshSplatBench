@@ -14,6 +14,7 @@ cd "${REPO_ROOT}"
 
 CONFIG_ROOT="configs"
 OUTPUT_SUBDIR="unity_native"
+EXPORT_TOPOLOGY="indexed"
 METHOD=""
 GPU_ID=""
 if [[ -n "${PYTHON_BIN:-}" ]]; then
@@ -58,6 +59,7 @@ Examples:
 Options:
   --config-root PATH       Config root (default: ${CONFIG_ROOT})
   --output-subdir NAME     Per-run asset directory (default: ${OUTPUT_SUBDIR})
+  --export-topology T      MeshSplatting export layout: indexed/mesh or soup/materialized-soup (default: ${EXPORT_TOPOLOGY})
   --method NAME            Method when using the target-first form
   --force                  Replace an existing .triasset package
   --continue-on-error      Export later scenes after an individual failure
@@ -196,6 +198,26 @@ print(value)
 PY
 }
 
+asset_export_topology_matches() {
+    local package="$1" expected="$2"
+    "${PYTHON_BIN}" - "${package}" "${expected}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = Path(sys.argv[1]) / "manifest.json"
+expected = sys.argv[2]
+try:
+    rendering = json.loads(manifest.read_text()).get("rendering", {})
+except Exception:
+    raise SystemExit(1)
+actual = rendering.get("export_topology", "indexed")
+if expected == "soup":
+    raise SystemExit(0 if actual == "materialized-soup" else 1)
+raise SystemExit(0 if actual in ("indexed", None) else 1)
+PY
+}
+
 if [[ "$#" -lt 1 || "${1}" == "-h" || "${1}" == "--help" ]]; then usage; exit 0; fi
 
 POSITIONAL=()
@@ -203,6 +225,7 @@ while [[ "$#" -gt 0 ]]; do
     case "$1" in
         --config-root|--config_root) require_value "$@"; CONFIG_ROOT="$2"; shift 2 ;;
         --output-subdir|--output_subdir) require_value "$@"; OUTPUT_SUBDIR="$2"; shift 2 ;;
+        --export-topology|--export_topology) require_value "$@"; EXPORT_TOPOLOGY="$2"; shift 2 ;;
         --method) require_value "$@"; METHOD="$2"; shift 2 ;;
         --force) FORCE=1; shift ;;
         --continue-on-error) CONTINUE_ON_ERROR=1; shift ;;
@@ -226,6 +249,17 @@ else
 fi
 METHOD_ID="$(canonical_method "${METHOD}")"
 GPU_ID="$(lower "${GPU_ID}")"
+EXPORT_TOPOLOGY="$(lower "${EXPORT_TOPOLOGY}")"
+EXPORT_TOPOLOGY="${EXPORT_TOPOLOGY//_/-}"
+case "${EXPORT_TOPOLOGY}" in
+    indexed|mesh|indexed-mesh) EXPORT_TOPOLOGY="indexed" ;;
+    soup|materialized-soup|triangle-soup|deindexed|deindexed-soup) EXPORT_TOPOLOGY="soup" ;;
+    *) echo "--export-topology must be indexed/mesh or soup/materialized-soup: ${EXPORT_TOPOLOGY}" >&2; exit 1 ;;
+esac
+if [[ "${EXPORT_TOPOLOGY}" != "indexed" && "${METHOD_ID}" != "mesh-splatting" ]]; then
+    echo "--export-topology ${EXPORT_TOPOLOGY} is only supported for mesh-splatting" >&2
+    exit 1
+fi
 if [[ "${GPU_ID}" != "cpu" && ! "${GPU_ID}" =~ ^[0-9]+$ ]]; then
     echo "Invalid gpu_id: ${GPU_ID}. Expected a non-negative integer or 'cpu'." >&2
     exit 1
@@ -259,12 +293,12 @@ for target in "${EXPANDED_TARGETS[@]}"; do
     REPLACE_INCOMPLETE=0
     if [[ -f "${PACKAGE}/manifest.json" && "${FORCE}" -eq 0 ]]; then
         VALIDATOR="${REPO_ROOT}/tools/validate_unity_triasset_cpu.py"
-        if "${PYTHON_BIN}" "${VALIDATOR}" "${PACKAGE}" --max-faces 10000 >/dev/null; then
+        if "${PYTHON_BIN}" "${VALIDATOR}" "${PACKAGE}" --max-faces 10000 >/dev/null && asset_export_topology_matches "${PACKAGE}" "${EXPORT_TOPOLOGY}"; then
             echo "[${DATASET}/${SCENE}] Valid Unity asset exists; skipping: ${PACKAGE}"
             SKIPPED=$((SKIPPED + 1))
             continue
         fi
-        echo "[${DATASET}/${SCENE}] Re-exporting stale Unity asset: ${PACKAGE}"
+        echo "[${DATASET}/${SCENE}] Re-exporting stale or topology-mismatched Unity asset: ${PACKAGE}"
         REPLACE_INCOMPLETE=1
     fi
     if [[ -e "${PACKAGE}" && ! -f "${PACKAGE}/manifest.json" ]]; then
@@ -285,6 +319,7 @@ for target in "${EXPANDED_TARGETS[@]}"; do
         CMD+=("${TB_EXPORT_ARGS[@]}")
     fi
     CMD+=(--method "${METHOD_ID}" --checkpoint "${CHECKPOINT}" --output "${OUTPUT}")
+    CMD+=(--export-topology "${EXPORT_TOPOLOGY}")
     [[ -n "${BACKGROUND_COLOR}" ]] && CMD+=(--background-color "${BACKGROUND_COLOR}")
     [[ "${FORCE}" -eq 1 || "${REPLACE_INCOMPLETE}" -eq 1 ]] && CMD+=(--force)
     if [[ "${GPU_ID}" == "cpu" ]]; then
@@ -298,7 +333,13 @@ for target in "${EXPANDED_TARGETS[@]}"; do
     printf '[%s/%s] Command:' "${DATASET}" "${SCENE}"; printf ' %q' "${CMD[@]}"; printf '\n'
     [[ "${DRY_RUN}" -eq 1 ]] && continue
     mkdir -p "${MODEL_PATH}/logs"
-    if ! CUDA_VISIBLE_DEVICES="${CUDA_DEVICE_VALUE}" "${CMD[@]}" 2>&1 | tee "${MODEL_PATH}/logs/unity_export_${METHOD_ID}.log"; then
+    LOG_EXPORT_SUBDIR="${OUTPUT_SUBDIR//[^A-Za-z0-9_.-]/_}"
+    if [[ "${EXPORT_TOPOLOGY}" == "indexed" ]]; then
+        EXPORT_LOG="${MODEL_PATH}/logs/unity_export_${METHOD_ID}_${LOG_EXPORT_SUBDIR}.log"
+    else
+        EXPORT_LOG="${MODEL_PATH}/logs/unity_export_${METHOD_ID}_${LOG_EXPORT_SUBDIR}_${EXPORT_TOPOLOGY}.log"
+    fi
+    if ! CUDA_VISIBLE_DEVICES="${CUDA_DEVICE_VALUE}" "${CMD[@]}" 2>&1 | tee "${EXPORT_LOG}"; then
         echo "[${DATASET}/${SCENE}] Unity asset export failed" >&2
         FAILED=1
         [[ "${CONTINUE_ON_ERROR}" -eq 1 ]] && continue || break

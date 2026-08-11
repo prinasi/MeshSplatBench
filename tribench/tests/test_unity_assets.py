@@ -126,6 +126,37 @@ def test_mesh_splatting_export_keeps_indexed_topology(tmp_path: Path):
     assert torch.all(triangle_opacity < 1.0)
 
 
+def test_mesh_splatting_export_can_materialize_triangle_soup(tmp_path: Path):
+    checkpoint = tmp_path / "point_cloud_state_dict.pt"
+    _save_mesh_splatting_checkpoint(checkpoint)
+
+    package = export_triasset(
+        "mesh_splatting",
+        checkpoint,
+        tmp_path / "mesh_soup.triasset",
+        export_topology="soup",
+    )
+    manifest = json.loads(package.manifest_path.read_text())
+
+    assert manifest["rendering"]["primitive_topology"] == "triangle-soup"
+    assert manifest["rendering"]["export_topology"] == "materialized-soup"
+    assert manifest["rendering"]["source_vertex_count"] == 4
+    assert manifest["rendering"]["exported_vertex_count"] == 6
+    assert manifest["rendering"]["topology_vertex_expansion"] == 1.5
+    assert manifest["buffers"]["positions"]["shape"] == [6, 3]
+    assert manifest["buffers"]["indices"]["shape"] == [2, 3]
+    assert manifest["buffers"]["vertex_weight_logits"]["shape"] == [6, 1]
+    assert manifest["buffers"]["sh_dc"]["shape"] == [6, 1, 3]
+    assert manifest["buffers"]["sh_rest"]["shape"] == [6, 3, 3]
+
+    indices = torch.from_file(
+        str(package.path / manifest["buffers"]["indices"]["file"]),
+        dtype=torch.int32,
+        size=6,
+    ).reshape(2, 3)
+    torch.testing.assert_close(indices, torch.tensor([[0, 1, 2], [3, 4, 5]], dtype=torch.int32))
+
+
 def test_d2ts_export_keeps_vertex_sh_and_gamma(tmp_path: Path):
     checkpoint = tmp_path / "model.ckpt"
     _save_d2ts_checkpoint(checkpoint)
@@ -177,7 +208,7 @@ def test_export_unity_cli_writes_feature_preserving_package(tmp_path: Path):
 
     assert result.exit_code == 0, result.output
     assert (tmp_path / "cli_asset.triasset" / "manifest.json").is_file()
-    assert "buffers: 7" in result.output
+    assert "buffers: 6" in result.output
 
 
 def test_unity_bootstrap_installs_compute_and_method_renderers(tmp_path: Path):
