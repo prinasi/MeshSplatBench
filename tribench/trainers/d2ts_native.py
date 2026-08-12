@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -15,6 +16,8 @@ _DEFAULT_SYNTHETIC_RANDOM_INIT = {
     "point_num_list": [100000],
     "normal_list": ["random"],
 }
+_CHECKPOINT_RE = re.compile(r"^(\d+)\.ckpt$")
+_POINT_CLOUD_RE = re.compile(r"^(\d+)\.ply$")
 
 
 def run_d2ts_native_config(
@@ -36,14 +39,35 @@ def run_d2ts_native_config(
         quiet=quiet,
     )
 
+    start_step = 0
+    if getattr(native.trainer, "start_checkpoint", None) is not None:
+        start_step = int(native.trainer.start_checkpoint)
+        print(f"Loaded checkpoint: {output_dir / 'ckpt' / f'{start_step}.ckpt'}")
+    elif getattr(native.trainer, "start_pointcloud", None) is not None:
+        start_step = int(native.trainer.start_pointcloud)
+        print(f"Loaded checkpoint: {output_dir / 'ckpt' / 'point_cloud' / f'{start_step}.ply'}")
+
+    if start_step >= max_steps:
+        return {
+            "total_steps": int(max_steps),
+            "start_step": start_step,
+            "trained_steps": 0,
+            "total_time_s": 0.0,
+            "avg_step_time_ms": 0.0,
+            "final_losses": {},
+        }
+
     start = time.time()
     trainer = VanillaTSTrainer(native, exp_name=output_dir.name, device=None, log_file=not quiet)
     trainer.train()
     total_time = time.time() - start
+    trained_steps = max(int(max_steps) - start_step, 0)
     return {
         "total_steps": int(max_steps),
+        "start_step": start_step,
+        "trained_steps": trained_steps,
         "total_time_s": total_time,
-        "avg_step_time_ms": total_time * 1000.0 / max(int(max_steps), 1),
+        "avg_step_time_ms": total_time * 1000.0 / max(trained_steps, 1),
         "final_losses": {},
     }
 
@@ -157,6 +181,18 @@ def _build_d2ts_native_config(
         if densification is not None:
             densification.target_point_num = int(target_point_num)
 
+    resume = _find_latest_d2ts_checkpoint(output_dir)
+    if resume is not None:
+        resume_kind, resume_step = resume
+        if resume_step >= max_steps:
+            return native
+        if resume_kind == "checkpoint":
+            native.trainer.start_checkpoint = int(resume_step)
+            native.trainer.start_pointcloud = None
+        else:
+            native.trainer.start_pointcloud = int(resume_step)
+            native.trainer.start_checkpoint = None
+
     return native
 
 
@@ -170,3 +206,33 @@ def _retarget_iteration_list(obj: Any, name: str, max_steps: int, *, force: bool
     value = getattr(obj, name, None)
     if force or value is not None:
         setattr(obj, name, [int(max_steps)])
+
+
+def _find_latest_d2ts_checkpoint(output_dir: str | Path) -> tuple[str, int] | None:
+    ckpt_root = Path(output_dir).expanduser() / "ckpt"
+    candidates: list[tuple[int, str]] = []
+
+    checkpoint_dir = ckpt_root
+    if checkpoint_dir.is_dir():
+        for path in checkpoint_dir.iterdir():
+            if not path.is_file():
+                continue
+            match = _CHECKPOINT_RE.match(path.name)
+            if match is None:
+                continue
+            candidates.append((int(match.group(1)), "checkpoint"))
+
+    point_cloud_dir = ckpt_root / "point_cloud"
+    if point_cloud_dir.is_dir():
+        for path in point_cloud_dir.iterdir():
+            if not path.is_file():
+                continue
+            match = _POINT_CLOUD_RE.match(path.name)
+            if match is None:
+                continue
+            candidates.append((int(match.group(1)), "pointcloud"))
+
+    if not candidates:
+        return None
+    step, kind = max(candidates, key=lambda item: item[0])
+    return kind, step

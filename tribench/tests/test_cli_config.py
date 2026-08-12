@@ -235,6 +235,57 @@ def test_2dts_native_config_sets_hard_primitive_cap(tmp_path: Path):
     assert native.model.model_update.densification.target_point_num == 15_000
 
 
+
+def test_2dts_native_config_auto_resumes_from_latest_checkpoint(tmp_path: Path):
+    from tribench.trainers.d2ts_native import _build_d2ts_native_config
+
+    base_config = Path("configs/opaque_2dts_mipnerf360/2dts/mipnerf360/bicycle.yaml").resolve()
+    config = tmp_path / "bicycle_resume.yaml"
+    config.write_text(f"_base_: {base_config}\n")
+
+    ckpt_dir = tmp_path / "outputs" / "opaque_2dts_mipnerf360" / "2dts" / "mipnerf360" / "bicycle" / "ckpt"
+    (ckpt_dir / "point_cloud").mkdir(parents=True)
+    (ckpt_dir / "point_cloud" / "1500.ply").write_text("ply\n")
+    (ckpt_dir / "1200.ckpt").write_bytes(b"checkpoint")
+
+    cfg = Config.fromfile(config)
+    run_output_dir = tmp_path / "outputs" / "opaque_2dts_mipnerf360" / "2dts" / "mipnerf360" / "bicycle"
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=run_output_dir,
+        max_steps=2000,
+    )
+
+    assert native.trainer.start_checkpoint is None
+    assert native.trainer.start_pointcloud == 1500
+
+
+
+def test_2dts_native_config_skips_resume_when_checkpoint_reaches_max_steps(tmp_path: Path):
+    from tribench.trainers.d2ts_native import _build_d2ts_native_config
+
+    base_config = Path("configs/opaque_2dts_mipnerf360/2dts/mipnerf360/bicycle.yaml").resolve()
+    config = tmp_path / "bicycle_done.yaml"
+    config.write_text(f"_base_: {base_config}\n")
+
+    ckpt_dir = tmp_path / "outputs" / "opaque_2dts_mipnerf360" / "2dts" / "mipnerf360" / "bicycle" / "ckpt"
+    ckpt_dir.mkdir(parents=True)
+    (ckpt_dir / "3000.ckpt").write_bytes(b"checkpoint")
+
+    cfg = Config.fromfile(config)
+    run_output_dir = tmp_path / "outputs" / "opaque_2dts_mipnerf360" / "2dts" / "mipnerf360" / "bicycle"
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=run_output_dir,
+        max_steps=3000,
+    )
+
+    assert native.trainer.start_checkpoint is None
+    assert native.trainer.start_pointcloud is None
+
+
 def test_2dts_dtu_full_disables_native_alpha_loading(tmp_path: Path):
     from tribench.trainers.d2ts_native import _build_d2ts_native_config
 
