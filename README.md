@@ -43,6 +43,11 @@ tribench profile --config configs/triangle-splatting/mipnerf360/bicycle.yaml
 # Config values can still be overridden from the CLI
 tribench render video --config configs/triangle-splatting/mipnerf360/bicycle.yaml --output-dir outputs/demo-video
 
+# Structured training configs also honor --max-steps, and 2DTS automatically
+# resumes from local checkpoints when the latest step is still below the target.
+tribench train --config configs/opaque_2dts_mipnerf360/2dts/mipnerf360/bicycle.yaml --max-steps 30 --quiet
+tribench train --config configs/opaque_2dts_mipnerf360/2dts/mipnerf360/bicycle.yaml --max-steps 31 --quiet
+
 # Train complete datasets with the scene pipeline helper
 bash single_train.sh triangle-splatting mipnerf360/all 0
 bash single_train.sh triangle-splatting tandt/all 0
