@@ -1,0 +1,31 @@
+# @format
+
+adapter:
+  checkpoint: outputs/opaque_2dts_mipnerf360/{method}/{dataset}/{scene}/ckpt
+  render_params:
+    ste_threshold: 0.3
+    sort_level: 2
+
+output:
+  dir: outputs/opaque_2dts_mipnerf360/{method}/{dataset}/{scene}
+  metrics_file: outputs/opaque_2dts_mipnerf360/{method}/{dataset}/{scene}/metrics.json
+  mesh_metrics_file: outputs/opaque_2dts_mipnerf360/{method}/{dataset}/{scene}/mesh_metrics.json
+  mesh_file: outputs/opaque_2dts_mipnerf360/{method}/{dataset}/{scene}/mesh/mesh.ply
+  stats_file: outputs/opaque_2dts_mipnerf360/{method}/{dataset}/{scene}/stats.json
+  report_file: outputs/opaque_2dts_mipnerf360/{method}/{dataset}/{scene}/report.md
+
+mesh:
+  output: outputs/opaque_2dts_mipnerf360/{method}/{dataset}/{scene}/mesh/mesh.ply
+
+render:
+  video:
+    output_dir: outputs/opaque_2dts_mipnerf360/{method}/{dataset}/{scene}/video
+
+profile:
+  output: outputs/opaque_2dts_mipnerf360/{method}/{dataset}/{scene}/profile.json
+
+inspect:
+  output: outputs/opaque_2dts_mipnerf360/{method}/{dataset}/{scene}/stats.json
+
+d2ts:
+  native_config: configs/opaque_2dts_mipnerf360/2dts/native/mipnerf360.yaml

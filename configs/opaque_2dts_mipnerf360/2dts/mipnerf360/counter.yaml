@@ -1,0 +1,5 @@
+# @format
+
+_base_:
+  - ../../../2dts/mipnerf360/counter.yaml
+  - ../../base/2dts-mipnerf360-opaque.yaml
