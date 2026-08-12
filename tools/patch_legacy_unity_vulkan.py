@@ -450,24 +450,181 @@ def _patch_renderer_base(source: str) -> str:
 
 
 def _patch_method_specific_camera_state(source: str) -> str:
-    marker = "public override void PrepareCamera(Camera camera)"
-    if marker in source:
-        install_guard = '''            if (triBenchDrawCommands == null)
-            {
-                TargetCamera = camera;
-                if (!InstallTriBenchCameraDraw()) { enabled = false; return; }
-            }
+    field_anchor = "        string status = \"Waiting to load method-specific renderer\";\n"
+    field_fallback_anchor = "        int primitiveCount; bool ready, rawCode; float opacityFloor; int mode, meshAblation;\n"
+    field_block = (
+        "        ComputeBuffer triangleOrderBuffer;\n"
+        "        bool usesSortedTriangleOrder;\n"
+        "        Vector3[] triangleCentroids;\n"
+        "        int[] triangleOrder;\n"
+        "        int[] sourceTriangleIndices;\n"
+        "        int[] sortedTriangleIndices;\n"
+        "        float[] triangleDepths;\n"
+        "        Vector3 lastSortCameraPosition = new Vector3(float.NaN, float.NaN, float.NaN);\n"
+        "        Vector3 lastSortCameraForward = new Vector3(float.NaN, float.NaN, float.NaN);\n"
+    )
+    field_tokens = (
+        "triangleOrderBuffer",
+        "usesSortedTriangleOrder",
+        "triangleCentroids",
+        "triangleOrder",
+        "sourceTriangleIndices",
+        "sortedTriangleIndices",
+        "triangleDepths",
+        "lastSortCameraPosition",
+        "lastSortCameraForward",
+    )
+    if not all(token in source for token in field_tokens):
+        if field_anchor in source:
+            source = source.replace(field_anchor, field_anchor + field_block, 1)
+        elif field_fallback_anchor in source:
+            source = source.replace(field_fallback_anchor, field_fallback_anchor + field_block, 1)
+        else:
+            raise ValueError("could not locate MethodSpecific field anchor")
+
+    shader_old = '''            string shaderName = mode == 1 && ablation == "full"
+                ? "TriBench/MeshSplatTerminalSolid"
+                : mode == 1 && ablation == "alpha-test-depth"
+                    ? "TriBench/MeshSplatAlphaTestDepth"
+                    : mode == 1 && ablation == "opaque-depth"
+                        ? "TriBench/MeshSplatOpaqueDepth"
+                        : "TriBench/MethodSpecificSplat";
+            SplatShader = SplatShader != null ? SplatShader : Shader.Find(shaderName);
 '''
-        anchor = "            if (camera == null || material == null) return;\n"
-        if install_guard not in source:
-            if anchor not in source:
-                raise ValueError("could not migrate MethodSpecific PrepareCamera")
-            source = source.replace(anchor, anchor + install_guard, 1)
-        return source
-    anchor = "        public override void SetOutputRawCodeValues(bool enabled) { rawCode = enabled; }"
-    if anchor not in source:
-        raise ValueError("could not locate MethodSpecific output-mode hook")
-    replacement = '''        public override void PrepareCamera(Camera camera)
+    shader_new = '''            string shaderName = mode == 1 && ablation == "full"
+                ? "TriBench/MeshSplatTerminalSolid"
+                : mode == 1 && ablation == "alpha-test-depth"
+                    ? "TriBench/MeshSplatAlphaTestDepth"
+                    : mode == 1 && ablation == "opaque-depth"
+                        ? "TriBench/MeshSplatOpaqueDepth"
+                        : "TriBench/MethodSpecificSplat";
+            usesSortedTriangleOrder = shaderName == "TriBench/MethodSpecificSplat";
+            SplatShader = SplatShader != null ? SplatShader : Shader.Find(shaderName);
+'''
+    if shader_new not in source:
+        if shader_old not in source:
+            raise ValueError("could not locate MethodSpecific shader selection")
+        source = source.replace(shader_old, shader_new, 1)
+
+    source_indices_anchor = '''            int[] sourceIndices = ReadInt(Path.Combine(b, "indices.bin"));
+            if (sourceIndices.Length != primitiveCount * 3) { Fail("indices.bin does not match primitive_count."); yield break; }
+'''
+    source_positions_block = '''            float[] sourcePositions = ReadFloat(Path.Combine(b, "positions.bin"));
+            if (sourcePositions.Length % 3 != 0) { Fail("positions.bin is not float3 data."); yield break; }
+            InitializeTriangleOrder(sourcePositions, sourceIndices);
+'''
+    if "InitializeTriangleOrder(sourcePositions, sourceIndices);" not in source:
+        if source_indices_anchor not in source:
+            raise ValueError("could not locate MethodSpecific positions/indices upload")
+        source = source.replace(source_indices_anchor, source_indices_anchor + source_positions_block, 1)
+
+    if 'positions = Upload(ReadFloat(Path.Combine(b, "positions.bin")));' in source:
+        source = source.replace(
+            'positions = Upload(ReadFloat(Path.Combine(b, "positions.bin")));',
+            'positions = Upload(sourcePositions);',
+            1,
+        )
+    elif 'positions = Upload(sourcePositions);' not in source:
+        raise ValueError("could not locate MethodSpecific positions upload")
+
+    if 'triangleOrderBuffer = Upload(sourceIndices);' not in source:
+        if 'indices = Upload(sourceIndices);' not in source:
+            raise ValueError("could not locate MethodSpecific index upload")
+        source = source.replace(
+            'indices = Upload(sourceIndices);',
+            'indices = Upload(sourceIndices);\n            triangleOrderBuffer = Upload(sourceIndices);',
+            1,
+        )
+
+    buffer_old = '            material.SetBuffer("_Positions", positions); material.SetBuffer("_Indices", indices);\n'
+    buffer_new = '            material.SetBuffer("_Positions", positions); material.SetBuffer("_Indices", usesSortedTriangleOrder ? triangleOrderBuffer : indices);\n'
+    if buffer_new not in source:
+        if buffer_old not in source:
+            raise ValueError("could not locate MethodSpecific material index buffer binding")
+        source = source.replace(buffer_old, buffer_new, 1)
+
+    ready_old = '            material.SetInt("_RawCode", 1);\n            ready = true; status = $"Method-specific {method} renderer ready ({primitiveCount:N0} primitives; {(deindexedSoup ? "shader-level triangle soup" : "indexed mesh")})";\n'
+    ready_new = '            material.SetInt("_RawCode", 1);\n            RefreshTriangleOrder(TargetCamera, force: true);\n            ready = true; status = $"Method-specific {method} renderer ready ({primitiveCount:N0} primitives; {(deindexedSoup ? "shader-level triangle soup" : "indexed mesh")})";\n'
+    if ready_new not in source:
+        if ready_old not in source:
+            raise ValueError("could not locate MethodSpecific ready state")
+        source = source.replace(ready_old, ready_new, 1)
+
+    helper_anchor = '        // TriBench explicit camera command-buffer patch. OnRenderObject is\n'
+    helper_block = '''        void InitializeTriangleOrder(float[] positionsData, int[] sourceIndices)
+        {
+            int count = Mathf.Min(primitiveCount, sourceIndices.Length / 3);
+            primitiveCount = count;
+            triangleCentroids = new Vector3[count];
+            triangleOrder = new int[count];
+            triangleDepths = new float[count];
+            sourceTriangleIndices = sourceIndices;
+            sortedTriangleIndices = new int[count * 3];
+            int vertexCount = positionsData.Length / 3;
+            for (int t = 0; t < count; ++t)
+            {
+                int ib = t * 3;
+                int ia = sourceIndices[ib];
+                int ibv = sourceIndices[ib + 1];
+                int ic = sourceIndices[ib + 2];
+                if ((uint)ia >= (uint)vertexCount || (uint)ibv >= (uint)vertexCount || (uint)ic >= (uint)vertexCount)
+                    throw new InvalidDataException("indices.bin references an invalid triangle vertex.");
+                int a = ia * 3;
+                int b = ibv * 3;
+                int c = ic * 3;
+                float cx = (positionsData[a] + positionsData[b] + positionsData[c]) / 3f;
+                float cy = (positionsData[a + 1] + positionsData[b + 1] + positionsData[c + 1]) / 3f;
+                float cz = (positionsData[a + 2] + positionsData[b + 2] + positionsData[c + 2]) / 3f;
+                triangleCentroids[t] = new Vector3(cx, cy, cz);
+                triangleOrder[t] = t;
+            }
+        }
+
+        void RefreshTriangleOrder(Camera camera, bool force = false)
+        {
+            if (!usesSortedTriangleOrder) return;
+            if (camera == null || triangleCentroids == null || triangleOrder == null || triangleDepths == null || triangleOrderBuffer == null) return;
+            Vector3 cam = camera.transform.position;
+            Vector3 forward = camera.transform.forward;
+            if (!force && cam == lastSortCameraPosition && forward == lastSortCameraForward) return;
+            for (int t = 0; t < triangleOrder.Length; ++t)
+            {
+                Vector3 center = triangleCentroids[t];
+                triangleDepths[t] = Vector3.Dot(center - cam, forward);
+                triangleOrder[t] = t * 3;
+            }
+            Array.Sort(triangleDepths, triangleOrder);
+            int write = 0;
+            for (int t = 0; t < triangleOrder.Length; ++t)
+            {
+                int source = triangleOrder[t];
+                sortedTriangleIndices[write++] = sourceTriangleIndices[source];
+                sortedTriangleIndices[write++] = sourceTriangleIndices[source + 1];
+                sortedTriangleIndices[write++] = sourceTriangleIndices[source + 2];
+            }
+            triangleOrderBuffer.SetData(sortedTriangleIndices);
+            lastSortCameraPosition = cam;
+            lastSortCameraForward = forward;
+        }
+
+'''
+    if helper_block not in source:
+        if helper_anchor not in source:
+            raise ValueError("could not locate MethodSpecific helper anchor")
+        source = source.replace(helper_anchor, helper_block + helper_anchor, 1)
+
+    render_anchor = "            if (!ready || Camera.current != TargetCamera || material == null) return;\n"
+    render_refresh = render_anchor + "            RefreshTriangleOrder(TargetCamera);\n"
+    if "RefreshTriangleOrder(TargetCamera);" not in source:
+        if render_anchor in source:
+            source = source.replace(render_anchor, render_refresh, 1)
+        else:
+            callback_anchor = "        void OnRenderObject()\n        {\n"
+            if callback_anchor not in source:
+                raise ValueError("could not locate MethodSpecific OnRenderObject anchor")
+            source = source.replace(callback_anchor, callback_anchor + "            RefreshTriangleOrder(TargetCamera);\n", 1)
+
+    old_prepare = '''        public override void PrepareCamera(Camera camera)
         {
             if (camera == null || material == null) return;
             if (triBenchDrawCommands == null)
@@ -484,12 +641,74 @@ def _patch_method_specific_camera_state(source: str) -> str:
                 material.SetInt("_UseSh", (meshAblation == 1 || meshAblation == 4) ? 0 : 1);
             }
         }
-        public override void SetOutputRawCodeValues(bool enabled)
+'''
+    new_prepare = '''        public override void PrepareCamera(Camera camera)
         {
-            rawCode = enabled;
-            if (material != null) material.SetInt("_RawCode", enabled ? 1 : 0);
-        }'''
-    return source.replace(anchor, replacement, 1)
+            if (camera == null || material == null) return;
+            if (TargetCamera != camera)
+            {
+                RemoveTriBenchCameraDraw();
+                TargetCamera = camera;
+            }
+            if (triBenchDrawCommands == null)
+            {
+                if (!InstallTriBenchCameraDraw()) { enabled = false; return; }
+            }
+            RefreshTriangleOrder(camera);
+            material.SetVector("_CameraWorldPos", camera.transform.position);
+            material.SetInt("_RawCode", rawCode ? 1 : 0);
+            material.SetFloat("_OpacityFloor", opacityFloor);
+            if (mode == 1)
+            {
+                material.SetInt("_MeshAblation", meshAblation);
+                material.SetInt("_UseSh", (meshAblation == 1 || meshAblation == 4) ? 0 : 1);
+            }
+        }
+'''
+    if new_prepare not in source:
+        if old_prepare in source:
+            source = source.replace(old_prepare, new_prepare, 1)
+        else:
+            callback_anchor = "        void OnRenderObject()\n"
+            if callback_anchor not in source:
+                raise ValueError("could not locate MethodSpecific PrepareCamera")
+            prepare_block = '''        public override void PrepareCamera(Camera camera)
+        {
+            if (camera == null || material == null) return;
+            if (TargetCamera != camera)
+            {
+                RemoveTriBenchCameraDraw();
+                TargetCamera = camera;
+            }
+            if (triBenchDrawCommands == null)
+            {
+                if (!InstallTriBenchCameraDraw()) { enabled = false; return; }
+            }
+            RefreshTriangleOrder(camera);
+            material.SetVector("_CameraWorldPos", camera.transform.position);
+            material.SetInt("_RawCode", rawCode ? 1 : 0);
+            material.SetFloat("_OpacityFloor", opacityFloor);
+            if (mode == 1)
+            {
+                material.SetInt("_MeshAblation", meshAblation);
+                material.SetInt("_UseSh", (meshAblation == 1 || meshAblation == 4) ? 0 : 1);
+            }
+        }
+'''
+            source = source.replace(callback_anchor, prepare_block + callback_anchor, 1)
+
+    destroy_old = '        void OnDestroy() { RemoveTriBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n'
+    destroy_new = '        void OnDestroy() { RemoveTriBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n'
+    if destroy_new not in source:
+        if destroy_old in source:
+            source = source.replace(destroy_old, destroy_new, 1)
+        else:
+            destroy_anchor = '        void OnDestroy()'
+            if destroy_anchor not in source:
+                raise ValueError("could not locate MethodSpecific OnDestroy")
+            source = source.replace(destroy_anchor, '        void OnDestroy() { RemoveTriBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n\n        // original OnDestroy replaced by TriBench sort patch\n        void OnDestroy_disabled', 1)
+
+    return source
 
 
 def _patch_generic_prepare_camera(source: str, name: str) -> str:

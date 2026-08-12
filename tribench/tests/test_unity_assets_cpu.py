@@ -346,17 +346,62 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
             )
             renderer = scripts / "MethodSpecificSplatRenderer.cs"
             renderer.write_text(
-                "using UnityEngine;\nclass R : TriAssetRenderer\n{\n"
-                "        Camera TargetCamera;\n        Material material;\n"
-                "        int primitiveCount; bool ready, rawCode; float opacityFloor; int mode, meshAblation;\n"
-                "        System.Collections.IEnumerator Start()\n        {\n"
+                "using System.Collections;\nusing System.IO;\nusing UnityEngine;\nclass R : TriAssetRenderer\n{\n"
+                "        Camera TargetCamera;\n        Shader SplatShader;\n        ComputeBuffer positions, indices, opacity, sigma, dc, rest;\n        Material material;\n"
+                "        int primitiveCount, mode, activeShDegree, meshAblation;\n        float gamma = 1f, opacityFloor;\n        bool ready, rawCode, deindexedSoup;\n        string status = \"Waiting to load method-specific renderer\";\n"
+                "        IEnumerator Start()\n        {\n"
+                "            string method = \"mesh-splatting\";\n            string b = \"buffers\";\n"
+                "            int[] sourceIndices = ReadInt(Path.Combine(b, \"indices.bin\"));\n"
+                "            if (sourceIndices.Length != primitiveCount * 3) { Fail(\"indices.bin does not match primitive_count.\"); yield break; }\n"
+                "            if (deindexedSoup && mode == 1)\n            {\n"
+                "                Debug.Log(\"[TriBench] MeshSplatting shader-level soup topology: retaining indexed buffers; procedural corners fetch via _Indices.\");\n            }\n"
+                "            positions = Upload(ReadFloat(Path.Combine(b, \"positions.bin\")));\n"
+                "            indices = Upload(sourceIndices);\n"
+                "            opacity = Upload(ReadFloat(Path.Combine(b, mode == 1 ? \"vertex_weight_logits.bin\" : \"opacity_logits.bin\")));\n"
+                "            dc = Upload(ReadFloat(Path.Combine(b, \"sh_dc.bin\")));\n"
+                "            rest = Upload(ReadFloat(Path.Combine(b, \"sh_rest.bin\")));\n"
+                "            if (mode == 1) sigma = Upload(ReadFloat(Path.Combine(b, \"sigma_logits.bin\")));\n"
+                "            string ablation = \"full\";\n"
+                "            string shaderName = mode == 1 && ablation == \"full\"\n"
+                "                ? \"TriBench/MeshSplatTerminalSolid\"\n"
+                "                : mode == 1 && ablation == \"alpha-test-depth\"\n"
+                "                    ? \"TriBench/MeshSplatAlphaTestDepth\"\n"
+                "                    : mode == 1 && ablation == \"opaque-depth\"\n"
+                "                        ? \"TriBench/MeshSplatOpaqueDepth\"\n"
+                "                        : \"TriBench/MethodSpecificSplat\";\n"
+                "            SplatShader = SplatShader != null ? SplatShader : Shader.Find(shaderName);\n"
+                "            material = new Material(SplatShader) { hideFlags = HideFlags.HideAndDontSave };\n"
+                "            material.SetBuffer(\"_Positions\", positions); material.SetBuffer(\"_Indices\", indices);\n"
+                "            material.SetBuffer(\"_Opacity\", opacity); material.SetBuffer(\"_ShDc\", dc); material.SetBuffer(\"_ShRest\", rest);\n"
                 "            if (sigma != null) material.SetBuffer(\"_Sigma\", sigma);\n"
-                "            ready = true;\n            yield break;\n        }\n"
-                "        void OnRenderObject()\n        {\n            material.SetPass(0);\n"
-                "            Graphics.DrawProceduralNow(a,b,c);\n        }\n"
+                "            material.SetInt(\"_RawCode\", 1);\n"
+                "            ready = true; status = $\"Method-specific {method} renderer ready ({primitiveCount:N0} primitives; {(deindexedSoup ? \"shader-level triangle soup\" : \"indexed mesh\")})\";\n"
+                "            yield break;\n        }\n"
+                "        public override void PrepareCamera(Camera camera)\n        {\n"
+                "            if (camera == null || material == null) return;\n"
+                "            if (triBenchDrawCommands == null)\n            {\n"
+                "                TargetCamera = camera;\n"
+                "                if (!InstallTriBenchCameraDraw()) { enabled = false; return; }\n"
+                "            }\n"
+                "            material.SetVector(\"_CameraWorldPos\", camera.transform.position);\n"
+                "            material.SetInt(\"_RawCode\", rawCode ? 1 : 0);\n"
+                "            material.SetFloat(\"_OpacityFloor\", opacityFloor);\n"
+                "            if (mode == 1)\n            {\n"
+                "                material.SetInt(\"_MeshAblation\", meshAblation);\n"
+                "                material.SetInt(\"_UseSh\", (meshAblation == 1 || meshAblation == 4) ? 0 : 1);\n"
+                "            }\n        }\n"
+                "        void OnRenderObject()\n        {\n"
+                "            if (!ready || Camera.current != TargetCamera || material == null) return;\n"
+                "            if (!material.SetPass(0)) { Debug.LogError(\"[TriBench] Shader pass is unsupported on \" + SystemInfo.graphicsDeviceType + \": \" + material.shader.name); enabled = false; return; }\n"
+                "            Graphics.DrawProceduralNow(MeshTopology.Triangles, primitiveCount * 3, 1);\n        }\n"
                 "        public override void SetOutputRawCodeValues(bool enabled) { rawCode = enabled; }\n"
+                "        bool InstallTriBenchCameraDraw() { return true; }\n"
+                "        void RemoveTriBenchCameraDraw() {}\n"
+                "        static int[] ReadInt(string p) { return null; }\n"
+                "        static float[] ReadFloat(string p) { return null; }\n"
+                "        static ComputeBuffer Upload(System.Array values) { return null; }\n"
                 "        void Fail(string message) {}\n"
-                "        void OnDestroy() { ready = false; }\n}\n"
+                "        void OnDestroy() { RemoveTriBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n}\n"
             )
 
             first = patch_unity_project(project)
@@ -383,6 +428,15 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
             self.assertIn("if (triBenchDrawCommands == null)", renderer_text)
             self.assertIn("if (Application.isBatchMode) return", renderer_text)
             self.assertIn("public virtual void PrepareCamera(Camera camera)", renderer_base.read_text())
+            self.assertIn("ComputeBuffer triangleOrderBuffer", renderer_text)
+            self.assertIn("usesSortedTriangleOrder", renderer_text)
+            self.assertIn("InitializeTriangleOrder(sourcePositions, sourceIndices)", renderer_text)
+            self.assertIn("RefreshTriangleOrder(TargetCamera, force: true)", renderer_text)
+            self.assertIn("RefreshTriangleOrder(camera)", renderer_text)
+            self.assertIn("RefreshTriangleOrder(TargetCamera)", renderer_text)
+            self.assertIn("triangleOrderBuffer.SetData(sortedTriangleIndices)", renderer_text)
+            self.assertIn("sourceTriangleIndices", renderer_text)
+            self.assertIn("sortedTriangleIndices", renderer_text)
 
             triangle = scripts / "TriangleSplattingTriAssetRenderer.cs"
             triangle.write_text(
