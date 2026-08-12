@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from typer.testing import CliRunner
 
@@ -267,6 +268,41 @@ def test_2dts_disables_native_training_eval_by_default():
     cfg = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")
 
     assert cfg.d2ts.native_overrides.trainer.eval_interval_iter == 0
+
+
+
+def test_structured_train_cli_max_steps_overrides_config(tmp_path: Path):
+    from tribench.cli.train import _train_from_structured_config
+
+    cfg = Config.fromfile("configs/opaque_2dts_mipnerf360/2dts/mipnerf360/bicycle.yaml")
+
+    captured = {}
+
+    def fake_run_d2ts_native_config(*, cfg, dataset_root, output_dir, max_steps, quiet):
+        captured["cfg"] = cfg
+        captured["dataset_root"] = dataset_root
+        captured["output_dir"] = output_dir
+        captured["max_steps"] = max_steps
+        captured["quiet"] = quiet
+        return {
+            "total_steps": int(max_steps),
+            "total_time_s": 0.0,
+            "avg_step_time_ms": 0.0,
+            "final_losses": {},
+        }
+
+    with patch("tribench.core.runtime_stats.run_with_training_stats", lambda fn, _: fn()):
+        with patch("tribench.cli.train.run_with_training_stats", lambda fn, _: fn()):
+            with patch("tribench.trainers.d2ts_native.run_d2ts_native_config", fake_run_d2ts_native_config):
+                summary = _train_from_structured_config(
+                    cfg,
+                    output_dir=tmp_path,
+                    quiet=True,
+                    max_steps_override=20,
+                )
+
+    assert summary["total_steps"] == 20
+    assert captured["max_steps"] == 20
 
 
 

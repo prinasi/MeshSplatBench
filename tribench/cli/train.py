@@ -109,7 +109,12 @@ def train(
     if config is not None:
         cfg = Config.fromfile(config)
         if "trainer" in cfg or "loop" in cfg or "dataset" in cfg:
-            summary = _train_from_structured_config(cfg, output_dir=output_dir, quiet=quiet)
+            summary = _train_from_structured_config(
+                cfg,
+                output_dir=output_dir,
+                quiet=quiet,
+                max_steps_override=max_steps,
+            )
             if not quiet:
                 typer.echo(
                     f"Training complete: {summary['total_steps']} steps "
@@ -234,6 +239,7 @@ def _train_from_structured_config(
     *,
     output_dir: Path,
     quiet: bool,
+    max_steps_override: int | None = None,
 ) -> dict:
     """Run training from a TriBench structured config."""
     if "trainer" not in cfg:
@@ -253,8 +259,9 @@ def _train_from_structured_config(
 
     trainer_cfg = Config(cfg.trainer).to_dict()
     loop_cfg = Config(cfg.get("loop", {})).to_dict()
-    max_steps = int(trainer_cfg.pop("max_steps", loop_cfg.get("max_steps", 30_000)))
-    loop_cfg.setdefault("max_steps", max_steps)
+    configured_max_steps = int(trainer_cfg.pop("max_steps", loop_cfg.get("max_steps", 30_000)))
+    max_steps = int(max_steps_override) if max_steps_override is not None else configured_max_steps
+    loop_cfg["max_steps"] = max_steps
 
     if "image_dir" in dataset_cfg and "images" not in trainer_cfg:
         trainer_cfg["images"] = dataset_cfg["image_dir"]
