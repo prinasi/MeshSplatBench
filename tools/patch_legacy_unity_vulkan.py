@@ -514,6 +514,167 @@ def _patch_generic_prepare_camera(source: str, name: str) -> str:
     return source.replace(callback, method + callback, 1)
 
 
+def _patch_triangle_splatting_camera_sort(source: str) -> str:
+    """Refresh legacy triangle-splatting order buffers for every replay camera."""
+    updated = source
+    field_anchor = "        float displayedFps;\n"
+    field_block = (
+        "        Vector3[] triangleCentroids;\n"
+        "        int[] triangleOrder;\n"
+        "        float[] triangleDepths;\n"
+        "        Vector3 lastSortCameraPosition = new Vector3(float.NaN, float.NaN, float.NaN);\n"
+        "        Vector3 lastSortCameraForward = new Vector3(float.NaN, float.NaN, float.NaN);\n"
+    )
+    if field_block not in updated:
+        if field_anchor not in updated:
+            raise ValueError("could not locate TriangleSplatting fps fields")
+        updated = updated.replace(field_anchor, field_anchor + field_block, 1)
+
+    old_start = '''            status = SortFrontToBack ? "Sorting 4,517,295 primitives front-to-back" : "Creating primitive order";
+            yield return null;
+            int[] order = BuildOrder(positions, indices);
+            orderBuffer = UploadRaw(order);
+            positions = null;
+            indices = null;
+            order = null;
+            GC.Collect();
+'''
+    new_start = '''            status = SortFrontToBack ? "Sorting 4,517,295 primitives front-to-back" : "Creating primitive order";
+            yield return null;
+            InitializeTriangleOrder(positions, indices);
+            RefreshTriangleOrder(TargetCamera, force: true);
+            positions = null;
+            indices = null;
+            GC.Collect();
+'''
+    if new_start not in updated:
+        if old_start not in updated:
+            raise ValueError("could not locate TriangleSplatting startup order build")
+        updated = updated.replace(old_start, new_start, 1)
+
+    old_order = '''        int[] BuildOrder(float[] positions, int[] indices)
+        {
+            int count = Mathf.Min(PrimitiveCount, indices.Length / 3);
+            PrimitiveCount = count;
+            int[] order = new int[count];
+            if (!SortFrontToBack)
+            {
+                for (int i = 0; i < count; ++i) order[i] = i;
+                return order;
+            }
+
+            float[] depths = new float[count];
+            Vector3 cam = TargetCamera.transform.position;
+            Vector3 forward = TargetCamera.transform.forward;
+            for (int t = 0; t < count; ++t)
+            {
+                int ib = t * 3;
+                int a = indices[ib] * 3;
+                int b = indices[ib + 1] * 3;
+                int c = indices[ib + 2] * 3;
+                float cx = (positions[a] + positions[b] + positions[c]) / 3f;
+                float cy = (positions[a + 1] + positions[b + 1] + positions[c + 1]) / 3f;
+                float cz = (positions[a + 2] + positions[b + 2] + positions[c + 2]) / 3f;
+                depths[t] = (cx - cam.x) * forward.x + (cy - cam.y) * forward.y + (cz - cam.z) * forward.z;
+                order[t] = t;
+            }
+            Array.Sort(depths, order);
+            return order;
+        }
+'''
+    new_order = '''        void InitializeTriangleOrder(float[] positions, int[] indices)
+        {
+            int count = Mathf.Min(PrimitiveCount, indices.Length / 3);
+            PrimitiveCount = count;
+            triangleCentroids = new Vector3[count];
+            triangleOrder = new int[count];
+            triangleDepths = new float[count];
+            for (int t = 0; t < count; ++t)
+            {
+                int ib = t * 3;
+                int a = indices[ib] * 3;
+                int b = indices[ib + 1] * 3;
+                int c = indices[ib + 2] * 3;
+                float cx = (positions[a] + positions[b] + positions[c]) / 3f;
+                float cy = (positions[a + 1] + positions[b + 1] + positions[c + 1]) / 3f;
+                float cz = (positions[a + 2] + positions[b + 2] + positions[c + 2]) / 3f;
+                triangleCentroids[t] = new Vector3(cx, cy, cz);
+                triangleOrder[t] = t;
+            }
+            orderBuffer = UploadRaw(triangleOrder);
+        }
+
+        void RefreshTriangleOrder(Camera camera, bool force = false)
+        {
+            if (camera == null || orderBuffer == null || triangleOrder == null || triangleCentroids == null) return;
+            Vector3 cam = camera.transform.position;
+            Vector3 forward = camera.transform.forward;
+            if (!force && cam == lastSortCameraPosition && forward == lastSortCameraForward) return;
+
+            if (!SortFrontToBack)
+            {
+                for (int i = 0; i < triangleOrder.Length; ++i) triangleOrder[i] = i;
+            }
+            else
+            {
+                for (int t = 0; t < triangleOrder.Length; ++t)
+                {
+                    Vector3 center = triangleCentroids[t];
+                    triangleDepths[t] = Vector3.Dot(center - cam, forward);
+                    triangleOrder[t] = t;
+                }
+                Array.Sort(triangleDepths, triangleOrder);
+            }
+            orderBuffer.SetData(triangleOrder);
+            lastSortCameraPosition = cam;
+            lastSortCameraForward = forward;
+        }
+'''
+    if new_order not in updated:
+        if old_order not in updated:
+            raise ValueError("could not locate TriangleSplatting BuildOrder")
+        updated = updated.replace(old_order, new_order, 1)
+
+    old_prepare = '''        public override void PrepareCamera(Camera camera)
+        {
+            if (camera == null || material == null) return;
+            if (triBenchDrawCommands == null)
+            {
+                TargetCamera = camera;
+                if (!InstallTriBenchCameraDraw()) enabled = false;
+            }
+        }
+'''
+    new_prepare = '''        public override void PrepareCamera(Camera camera)
+        {
+            if (camera == null || material == null) return;
+            if (TargetCamera != camera)
+            {
+                RemoveTriBenchCameraDraw();
+                TargetCamera = camera;
+            }
+            if (triBenchDrawCommands == null)
+            {
+                if (!InstallTriBenchCameraDraw()) { enabled = false; return; }
+            }
+            RefreshTriangleOrder(camera);
+        }
+'''
+    if new_prepare not in updated:
+        if old_prepare not in updated:
+            raise ValueError("could not locate TriangleSplatting PrepareCamera")
+        updated = updated.replace(old_prepare, new_prepare, 1)
+
+    render_anchor = "            if (!ready || Camera.current != TargetCamera || material == null) return;\n"
+    render_refresh = render_anchor + "            RefreshTriangleOrder(TargetCamera);\n"
+    if "RefreshTriangleOrder(TargetCamera);" not in updated:
+        if render_anchor not in updated:
+            raise ValueError("could not locate TriangleSplatting OnRenderObject")
+        updated = updated.replace(render_anchor, render_refresh, 1)
+
+    return updated
+
+
 def _patch_method_specific_vulkan_bindings(source: str) -> str:
     """Bind buffers that Vulkan requires even behind a runtime shader branch."""
     fixed = 'material.SetBuffer("_Sigma", sigma != null ? sigma : opacity);'
@@ -813,6 +974,9 @@ def patch_unity_project(project: Path) -> list[Path]:
             updated = _patch_method_specific_vulkan_bindings(updated)
             updated = _patch_method_specific_shader_level_soup(updated)
             updated = _patch_method_specific_camera_state(updated)
+        elif name == "TriangleSplattingTriAssetRenderer.cs":
+            updated = _patch_generic_prepare_camera(updated, path.stem)
+            updated = _patch_triangle_splatting_camera_sort(updated)
         elif name != "StandardMeshTriAssetRenderer.cs":
             updated = _patch_generic_prepare_camera(updated, path.stem)
         if _write_if_changed(path, original, updated):

@@ -384,6 +384,80 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
             self.assertIn("if (Application.isBatchMode) return", renderer_text)
             self.assertIn("public virtual void PrepareCamera(Camera camera)", renderer_base.read_text())
 
+            triangle = scripts / "TriangleSplattingTriAssetRenderer.cs"
+            triangle.write_text(
+                "using System;\nusing System.Collections;\nusing System.IO;\nusing System.Text.RegularExpressions;\nusing UnityEngine;\nusing UnityEngine.Rendering;\n"
+                "class TriangleSplattingTriAssetRenderer : TriAssetRenderer\n{\n"
+                "        Camera TargetCamera;\n        Shader SplatShader;\n        int PrimitiveCount = 4;\n        bool SortFrontToBack = true;\n        bool OutputRawCodeValues;\n"
+                "        ComputeBuffer positionsBuffer;\n        ComputeBuffer indicesBuffer;\n        ComputeBuffer opacityBuffer;\n        ComputeBuffer sigmaBuffer;\n        ComputeBuffer shDcBuffer;\n        ComputeBuffer shRestBuffer;\n        ComputeBuffer orderBuffer;\n"
+                "        Material material;\n        bool ready;\n        string status;\n        float fpsTimer;\n        int fpsFrames;\n        float displayedFps;\n"
+                "        IEnumerator Start()\n        {\n"
+                "            float[] positions = new float[12];\n"
+                "            int[] indices = new int[12];\n"
+                "            status = SortFrontToBack ? \"Sorting 4,517,295 primitives front-to-back\" : \"Creating primitive order\";\n"
+                "            yield return null;\n"
+                "            int[] order = BuildOrder(positions, indices);\n"
+                "            orderBuffer = UploadRaw(order);\n"
+                "            positions = null;\n"
+                "            indices = null;\n"
+                "            order = null;\n"
+                "            GC.Collect();\n"
+                "            yield break;\n        }\n"
+                "        int[] BuildOrder(float[] positions, int[] indices)\n        {\n"
+                "            int count = Mathf.Min(PrimitiveCount, indices.Length / 3);\n"
+                "            PrimitiveCount = count;\n"
+                "            int[] order = new int[count];\n"
+                "            if (!SortFrontToBack)\n            {\n"
+                "                for (int i = 0; i < count; ++i) order[i] = i;\n"
+                "                return order;\n            }\n\n"
+                "            float[] depths = new float[count];\n"
+                "            Vector3 cam = TargetCamera.transform.position;\n"
+                "            Vector3 forward = TargetCamera.transform.forward;\n"
+                "            for (int t = 0; t < count; ++t)\n            {\n"
+                "                int ib = t * 3;\n"
+                "                int a = indices[ib] * 3;\n"
+                "                int b = indices[ib + 1] * 3;\n"
+                "                int c = indices[ib + 2] * 3;\n"
+                "                float cx = (positions[a] + positions[b] + positions[c]) / 3f;\n"
+                "                float cy = (positions[a + 1] + positions[b + 1] + positions[c + 1]) / 3f;\n"
+                "                float cz = (positions[a + 2] + positions[b + 2] + positions[c + 2]) / 3f;\n"
+                "                depths[t] = (cx - cam.x) * forward.x + (cy - cam.y) * forward.y + (cz - cam.z) * forward.z;\n"
+                "                order[t] = t;\n            }\n"
+                "            Array.Sort(depths, order);\n"
+                "            return order;\n        }\n"
+                "        public override void PrepareCamera(Camera camera)\n        {\n"
+                "            if (camera == null || material == null) return;\n"
+                "            if (triBenchDrawCommands == null)\n            {\n"
+                "                TargetCamera = camera;\n"
+                "                if (!InstallTriBenchCameraDraw()) enabled = false;\n"
+                "            }\n"
+                "        }\n"
+                "        void OnRenderObject()\n        {\n"
+                "            if (triBenchDrawCommands != null) return;\n"
+                "            if (Application.isBatchMode) return;\n"
+                "            if (!ready || Camera.current != TargetCamera || material == null) return;\n"
+                "            if (!material.SetPass(0)) { Debug.LogError(\"[TriBench] Shader pass is unsupported on \" + SystemInfo.graphicsDeviceType + \": \" + material.shader.name); enabled = false; return; }\n"
+                "            Graphics.DrawProceduralNow(MeshTopology.Triangles, PrimitiveCount * 3, 1);\n        }\n"
+                "        public override void SetOutputRawCodeValues(bool enabled) { OutputRawCodeValues = enabled; }\n"
+                "        bool InstallTriBenchCameraDraw() { return true; }\n"
+                "        void RemoveTriBenchCameraDraw() {}\n"
+                "        static ComputeBuffer UploadRaw(Array data) { return null; }\n"
+                "        void Fail(string message) {}\n"
+                "        void OnDestroy() { ready = false; }\n}\n"
+            )
+
+            first = patch_unity_project(project)
+            self.assertTrue(first)
+            triangle_text = triangle.read_text()
+            self.assertIn("Vector3[] triangleCentroids", triangle_text)
+            self.assertIn("InitializeTriangleOrder(positions, indices)", triangle_text)
+            self.assertIn("RefreshTriangleOrder(TargetCamera, force: true)", triangle_text)
+            self.assertIn("void RefreshTriangleOrder(Camera camera, bool force = false)", triangle_text)
+            self.assertIn("orderBuffer.SetData(triangleOrder)", triangle_text)
+            self.assertIn("if (TargetCamera != camera)", triangle_text)
+            self.assertIn("RefreshTriangleOrder(camera)", triangle_text)
+            self.assertIn("RefreshTriangleOrder(TargetCamera)", triangle_text)
+
     def test_capture_validation_rejects_solid_frames(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
