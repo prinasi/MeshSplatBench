@@ -1071,6 +1071,54 @@ def _patch_capture(source: str) -> str:
     prepare = pose + "\n                Renderer.PrepareCamera(CaptureCamera);"
     if prepare not in updated:
         updated = updated.replace(pose, prepare)
+    old_timing = '''            FrameTiming[] timing = new FrameTiming[1];
+            for (int i = 0; i < ProfileTimedFrames; ++i)
+            {
+                FrameTimingManager.CaptureFrameTimings();
+                yield return null;
+                engine.Add(Time.unscaledDeltaTime * 1000.0f);
+                if (FrameTimingManager.GetLatestTimings(1, timing) > 0)
+                {
+                    if (timing[0].cpuFrameTime > 0.0) cpu.Add((float)timing[0].cpuFrameTime);
+                    if (timing[0].gpuFrameTime > 0.0) gpu.Add((float)timing[0].gpuFrameTime);
+                }
+                if (drawCalls.Valid && drawCalls.LastValue > 0) draws.Add(drawCalls.LastValue);
+            }
+'''
+    new_timing = '''            FrameTiming[] timing = new FrameTiming[8];
+            for (int i = 0; i < ProfileTimedFrames; ++i)
+            {
+                FrameTimingManager.CaptureFrameTimings();
+                yield return null;
+                engine.Add(Time.unscaledDeltaTime * 1000.0f);
+                // The GPU timestamp readback for a captured frame lands
+                // asynchronously.  Scan a window of recent captures and retry
+                // briefly until one of them has landed; this keeps the GPU
+                // sample set complete even when the GPU is saturated.
+                uint count = 0;
+                float gpuMs = 0.0f;
+                for (int attempt = 0; attempt < 16 && gpuMs <= 0.0f; ++attempt)
+                {
+                    count = FrameTimingManager.GetLatestTimings((uint)timing.Length, timing);
+                    for (int k = 0; k < count; ++k)
+                    {
+                        if (timing[k].gpuFrameTime > 0.0)
+                        {
+                            gpuMs = (float)timing[k].gpuFrameTime;
+                            break;
+                        }
+                    }
+                    if (gpuMs <= 0.0f && attempt < 15) System.Threading.Thread.Sleep(1);
+                }
+                if (gpuMs > 0.0) gpu.Add(gpuMs);
+                if (count > 0 && timing[0].cpuFrameTime > 0.0) cpu.Add((float)timing[0].cpuFrameTime);
+                if (drawCalls.Valid && drawCalls.LastValue > 0) draws.Add(drawCalls.LastValue);
+            }
+'''
+    if new_timing not in updated:
+        if old_timing not in updated:
+            raise ValueError("could not locate ProfileView FrameTiming sampling loop")
+        updated = updated.replace(old_timing, new_timing, 1)
     return updated
 
 
