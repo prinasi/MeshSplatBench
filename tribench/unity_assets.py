@@ -510,17 +510,24 @@ def _export_d2ts(
         raise ValueError(f"2dts _vertex must be [N,3,3], got {tuple(triangles.shape)}")
     count = int(triangles.shape[0])
     f_dc = _required_tensor(state, "_f_dc", "2dts")
+    f_rest = _required_tensor(state, "_f_rest", "2dts")
+    # Legacy 2DTS checkpoints never serialise active_sh_degree (the trainer
+    # only records it in its logs).  Derive the full degree from the stored
+    # coefficient count, mirroring D2TSAdapter.load_checkpoint so Unity
+    # renders the same SH bands as the native path.
+    coeff_dim = f_rest.shape[-2] + 1
+    max_sh_degree = int(math.sqrt(coeff_dim) - 1)
     writer.tensor("positions", triangles.reshape(-1, 3), "triangle-soup positions")
     writer.tensor("indices", torch.arange(count * 3, dtype=torch.int32).reshape(count, 3), "triangle indices")
     writer.tensor("opacity_logits", _required_tensor(state, "_opacity", "2dts"), "per-triangle opacity logits")
     writer.tensor("sh_dc", f_dc, "per-triangle or per-vertex SH DC")
-    writer.tensor("sh_rest", _required_tensor(state, "_f_rest", "2dts"), "per-triangle or per-vertex SH residual")
+    writer.tensor("sh_rest", f_rest, "per-triangle or per-vertex SH residual")
     return {
         "renderer": "2dts",
         "primitive_topology": "triangle-soup",
         "primitive_count": count,
         "opacity_activation": "sigmoid",
-        "active_sh_degree": int(state.get("active_sh_degree", 0)),
+        "active_sh_degree": int(state.get("active_sh_degree", max_sh_degree)),
         "gamma": gamma,
         "gamma_rescale": gamma_rescale,
         "gamma_rescale_source": gamma_rescale_source,

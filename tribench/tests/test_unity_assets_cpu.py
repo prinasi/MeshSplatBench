@@ -203,6 +203,25 @@ class D2TSRescaleTests(unittest.TestCase):
             self.assertEqual(rendering["gamma_rescale_source"], "export_override")
             self.assertEqual(rendering["gamma_vertex_rescale"], 1.0)
 
+    def test_legacy_2dts_checkpoint_defaults_to_full_sh_degree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkpoint = root / "model.ckpt"
+            # Native 2DTS checkpoints are a (state, optimizer, bbox, gamma)
+            # tuple and never serialise active_sh_degree; the exporter must
+            # derive it from the stored coefficient count like the native
+            # D2TSAdapter instead of defaulting to 0.
+            state = {
+                "_vertex": torch.arange(9, dtype=torch.float32).reshape(1, 3, 3),
+                "_opacity": torch.zeros(1, 1),
+                "_f_dc": torch.zeros(1, 1, 3),
+                "_f_rest": torch.zeros(1, 15, 3),
+            }
+            torch.save((state, {}, None, 1.0), checkpoint)
+            package = export_triasset("2dts", checkpoint, root / "scene")
+            rendering = json.loads(package.manifest_path.read_text())["rendering"]
+            self.assertEqual(rendering["active_sh_degree"], 3)
+
 
 class DeploymentContractTests(unittest.TestCase):
     def test_dependency_light_export_entrypoint_runs_without_typer(self) -> None:
