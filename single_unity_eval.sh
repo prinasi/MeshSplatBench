@@ -26,10 +26,12 @@ FORCE_PLAYER_BUILD=0
 SKIP_PLAYER_BUILD=0
 DATASETS_ROOT_OVERRIDE="${DATASETS:-}"
 OUTPUT_NAME="unity_method_aware"
+OUTPUT_NAME_EXPLICIT=0
 CONDITION="method-aware"
 TOPOLOGY="indexed"
 INDEXED_MESH_METHOD_AWARE=0
 REPORT_DIR=""
+REPORT_DIR_EXPLICIT=0
 NATIVE_RENDER_SUBDIR="renders/test/renders"
 NATIVE_SHAPE_POLICY="crop"
 REFERENCE_IMAGE_DIR_OVERRIDE=""
@@ -94,8 +96,10 @@ Options:
   --asset-subdir NAME      Per-run asset directory (default: ${ASSET_SUBDIR})
   --export-topology T      MeshSplatting export layout: indexed/mesh or soup/materialized-soup (default: ${EXPORT_TOPOLOGY})
   --output-name NAME       Unity output folder under each scene output.dir
+                           (default: unity_method_aware or unity_general_purpose by condition)
   --method-aware           Use method-aware Unity renderer (default)
   --general-purpose        Use ordinary Unity Mesh baseline
+                           (automatically switches output/report naming unless overridden)
   --topology T             Mesh layout for Unity renderer: indexed/mesh or soup (default: ${TOPOLOGY})
   --indexed-mesh-method-aware
                            With --general-purpose mesh-splatting, use Unity indexed MeshRenderer plus method-aware SH shader
@@ -413,7 +417,7 @@ while [[ "$#" -gt 0 ]]; do
         --config-root|--config_root) require_value "$@"; CONFIG_ROOT="$2"; shift 2 ;;
         --asset-subdir|--asset_subdir|--output-subdir|--output_subdir) require_value "$@"; ASSET_SUBDIR="$2"; shift 2 ;;
         --export-topology|--export_topology) require_value "$@"; EXPORT_TOPOLOGY="$2"; shift 2 ;;
-        --output-name|--output_name) require_value "$@"; OUTPUT_NAME="$2"; shift 2 ;;
+        --output-name|--output_name) require_value "$@"; OUTPUT_NAME="$2"; OUTPUT_NAME_EXPLICIT=1; shift 2 ;;
         --method) require_value "$@"; METHOD="$2"; shift 2 ;;
         --method-aware|--method_aware|--method-specific|--method_specific) CONDITION="method-aware"; shift ;;
         --general-purpose|--general_purpose|--standard-mesh|--standard_mesh) CONDITION="general-purpose"; shift ;;
@@ -441,7 +445,7 @@ while [[ "$#" -gt 0 ]]; do
         --native-render-subdir|--native_render_subdir) require_value "$@"; NATIVE_RENDER_SUBDIR="$2"; shift 2 ;;
         --native-shape-policy|--native_shape_policy) require_value "$@"; NATIVE_SHAPE_POLICY="$2"; shift 2 ;;
         --reference-image-dir|--reference_image_dir) require_value "$@"; REFERENCE_IMAGE_DIR_OVERRIDE="$2"; shift 2 ;;
-        --report-dir|--report_dir) require_value "$@"; REPORT_DIR="$2"; shift 2 ;;
+        --report-dir|--report_dir) require_value "$@"; REPORT_DIR="$2"; REPORT_DIR_EXPLICIT=1; shift 2 ;;
         --report-name|--report_name) require_value "$@"; REPORT_NAME="$2"; shift 2 ;;
         --skip-export|--skip_export) SKIP_EXPORT=1; shift ;;
         --skip-capture|--skip_capture) SKIP_CAPTURE=1; shift ;;
@@ -532,6 +536,10 @@ then
 fi
 expand_targets "${TARGETS[@]}"
 
+if [[ "${CONDITION}" == "general-purpose" && "${OUTPUT_NAME_EXPLICIT}" -eq 0 ]]; then
+    OUTPUT_NAME="unity_general_purpose"
+fi
+
 if [[ "${GPU_ID}" == "cpu" ]]; then
     CUDA_DEVICE_VALUE=""
     [[ -n "${LPIPS_DEVICE}" ]] || LPIPS_DEVICE="cpu"
@@ -541,6 +549,8 @@ else
 fi
 
 if [[ -z "${REPORT_DIR}" ]]; then
+    REPORT_DIR="outputs/unity_reports/${METHOD_ID}/${OUTPUT_NAME}"
+elif [[ "${CONDITION}" == "general-purpose" && "${REPORT_DIR_EXPLICIT}" -eq 0 && "${REPORT_DIR}" == "outputs/unity_reports/${METHOD_ID}/unity_method_aware" ]]; then
     REPORT_DIR="outputs/unity_reports/${METHOD_ID}/${OUTPUT_NAME}"
 fi
 
