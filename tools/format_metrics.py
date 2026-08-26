@@ -56,6 +56,7 @@ HEADERS = [
     "SSIM",
     "LPIPS",
     "FPS",
+    "Primitives",
     "Training Memory (MiB)",
     "Training Time (s)",
     "CD",
@@ -80,6 +81,7 @@ class MetricsRow:
     ssim: float | None = None
     lpips: float | None = None
     fps: float | None = None
+    primitives: int | None = None
     training_memory_mib: float | None = None
     training_time_s: float | None = None
     cd: float | None = None
@@ -93,6 +95,7 @@ class MetricsRow:
             _fmt_float(self.ssim, 4),
             _fmt_float(self.lpips, 4),
             _fmt_float(self.fps, 2),
+            _fmt_int(self.primitives),
             _fmt_float(self.training_memory_mib, 0),
             _fmt_float(self.training_time_s, 1),
             _fmt_float(self.cd, 4),
@@ -255,6 +258,7 @@ def read_row(target: MetricsTarget) -> MetricsRow:
         row.training_memory_mib = _number(data.get("training_peak_gpu_memory_mib")) or _number(
             training.get("peak_gpu_memory_mib")
         )
+        row.primitives = _int_or_none(data.get("primitive_count"))
         row.training_time_s = _number(data.get("training_time_s")) or _number(training.get("total_time_s"))
     else:
         row.metrics_file = f"{metrics_path} (missing)"
@@ -289,6 +293,15 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _first_number(data: dict[str, Any], keys: Iterable[str]) -> float | None:
     for key in keys:
         value = _number(data.get(key))
@@ -311,6 +324,12 @@ def _fmt_float(value: float | None, digits: int) -> str:
     return f"{value:.{digits}f}"
 
 
+def _fmt_int(value: int | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{int(value):,}"
+
+
 def mean_row(rows: list[MetricsRow]) -> MetricsRow:
     dataset = rows[0].dataset if rows else "N/A"
     return MetricsRow(
@@ -320,6 +339,7 @@ def mean_row(rows: list[MetricsRow]) -> MetricsRow:
         ssim=_mean(row.ssim for row in rows),
         lpips=_mean(row.lpips for row in rows),
         fps=_mean(row.fps for row in rows),
+        primitives=_mean_int(row.primitives for row in rows),
         training_memory_mib=_mean(row.training_memory_mib for row in rows),
         training_time_s=_mean(row.training_time_s for row in rows),
         cd=_mean(row.cd for row in rows),
@@ -332,6 +352,13 @@ def _mean(values: Iterable[float | None]) -> float | None:
     if not valid:
         return None
     return sum(valid) / len(valid)
+
+
+def _mean_int(values: Iterable[int | None]) -> int | None:
+    valid = [value for value in values if value is not None]
+    if not valid:
+        return None
+    return int(round(sum(valid) / len(valid)))
 
 
 def print_table(rows: list[MetricsRow]) -> None:

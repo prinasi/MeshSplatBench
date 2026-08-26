@@ -160,21 +160,25 @@ def evaluate_images(
             metrics=True,
         )
     inference = manifest.get("timing", {})
-    benchmark_inference = _benchmark_diffsoup_inference(
-        method_label,
-        adapter,
-        ds,
-        adapter_cfg if config is not None else None,
-        dataset_cfg if config is not None else None,
-        method=method,
-        checkpoint=checkpoint,
-        dataset=dataset,
-        dataset_type=dataset_type,
-        image_dir=image_dir,
-        resolution=resolution,
-        eval_every=eval_every,
-        bg_color=bg_color,
-    )
+    try:
+        benchmark_inference = _benchmark_diffsoup_inference(
+            method_label,
+            adapter,
+            ds,
+            adapter_cfg if config is not None else None,
+            dataset_cfg if config is not None else None,
+            method=method,
+            checkpoint=checkpoint,
+            dataset=dataset,
+            dataset_type=dataset_type,
+            image_dir=image_dir,
+            resolution=resolution,
+            eval_every=eval_every,
+            bg_color=bg_color,
+        )
+    except Exception as exc:  # e.g. bundled CUDA ext unavailable; metrics still valid
+        typer.echo(f"[metrics] Inference benchmark skipped: {exc}", err=True)
+        benchmark_inference = None
     render_inference = inference
     if benchmark_inference is not None:
         inference = benchmark_inference
@@ -194,6 +198,7 @@ def evaluate_images(
         "training": training,
         "training_time_s": training.get("total_time_s") if training else None,
         "training_peak_gpu_memory_mib": training.get("peak_gpu_memory_mib") if training else None,
+        "primitive_count": _primitive_count_from_checkpoint(checkpoint_label, method_label),
         "aggregate": manifest["aggregate"],
         "per_view": [
             {"name": frame["name"], **(frame["metrics"] or {})}
@@ -204,6 +209,91 @@ def evaluate_images(
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     Path(output).write_text(json.dumps(metrics, indent=2))
     typer.echo(f"Metrics saved to {output}")
+
+
+def _primitive_count_from_checkpoint(checkpoint, method=None) -> int | None:
+    """Count model primitives from a checkpoint without importing the renderer.
+
+    Works for the common TriBench checkpoints (a ``.pt`` state dict or a ``.ply``
+    mesh) using only a CPU torch load, so it does not require the bundled CUDA
+    extensions to be importable.
+    """
+    import torch
+
+    path = Path(str(checkpoint)).expanduser() if checkpoint else None
+    if path is None or not path.exists():
+        return None
+
+    candidates: list[Path] = []
+    if path.is_dir():
+        for sub in path.rglob("point_cloud_state_dict.pt"):
+            candidates.append(sub)
+        for sub in path.rglob("*.pt"):
+            candidates.append(sub)
+        ply_candidates = sorted(
+            path.rglob("*.ply"),
+            key=lambda p: (0 if "point_cloud" in p.parts else 1, str(p)),
+        )
+        for sub in ply_candidates:
+            count = _ply_vertex_count(sub)
+            if count is not None:
+                return count
+    elif path.suffix == ".ply":
+        return _ply_vertex_count(path)
+    elif path.suffix == ".pt":
+        candidates.append(path)
+
+    if not candidates:
+        return None
+
+    # Prefer the explicit point-cloud state dict when present.
+    candidates.sort(key=lambda p: (0 if p.name == "point_cloud_state_dict.pt" else 1, str(p)))
+
+    count_keys = (
+        "triangles_points",
+        "_triangles_points",
+        "means3D",
+        "_xyz",
+        "F",
+        "_faces",
+        "faces",
+        "_points",
+        "points",
+        "opacity",
+        "_opacity",
+    )
+    for cand in candidates:
+        try:
+            sd = torch.load(cand, map_location="cpu", weights_only=True)
+        except Exception:
+            try:
+                sd = torch.load(cand, map_location="cpu")
+            except Exception:
+                continue
+        if isinstance(sd, dict) and isinstance(sd.get("state_dict"), dict):
+            sd = sd["state_dict"]
+        if not isinstance(sd, dict):
+            continue
+        for key in count_keys:
+            if key in sd:
+                try:
+                    return int(sd[key].shape[0])
+                except Exception:
+                    pass
+    return None
+
+
+def _ply_vertex_count(ply_path: Path) -> int | None:
+    try:
+        with ply_path.open("rb") as f:
+            for line in f:
+                if line.startswith(b"element vertex"):
+                    return int(line.split()[-1])
+                if line.strip() == b"end_header":
+                    break
+    except Exception:
+        return None
+    return None
 
 
 def _benchmark_diffsoup_inference(
