@@ -5,7 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from tribench.core.builder import build_from_cfg
-from tribench.core.config import Config, apply_overrides, load_config, resolve_dataset_config
+from tribench.core.config import (
+    Config,
+    apply_overrides,
+    finalize_config,
+    load_config,
+    resolve_dataset_config,
+)
 from tribench.core.registry import get_adapter
 
 
@@ -414,3 +420,29 @@ def test_apply_max_primitive_limit_per_method_caps():
     res_2dts = _apply_max_primitive_limit(cfg_2dts)
     assert res_2dts["trainer"]["max_primitives"] == 8000
     assert res_2dts["d2ts"]["target_point_num"] == 8000
+
+
+def test_max_primitives_retargets_output_paths_to_abl():
+    # 1. Triangle splatting without cap: default output path
+    cfg_ts_default = Config.fromfile("configs/triangle-splatting/mipnerf360/garden.yaml")
+    assert cfg_ts_default.output.dir == "outputs/triangle-splatting/mipnerf360/garden"
+
+    # 2. Triangle splatting with max_primitives=15000: retargeted to outputs/abl/triangle-splatting-15000/...
+    data_ts = Config.fromfile("configs/triangle-splatting/mipnerf360/garden.yaml").to_dict()
+    data_ts["trainer"]["max_primitives"] = 15000
+    cfg_ts_abl = Config(finalize_config(data_ts))
+    assert cfg_ts_abl.output.dir == "outputs/abl/triangle-splatting-15000/mipnerf360/garden"
+    assert cfg_ts_abl.output.metrics_file == "outputs/abl/triangle-splatting-15000/mipnerf360/garden/metrics.json"
+    assert cfg_ts_abl.adapter.checkpoint == "outputs/abl/triangle-splatting-15000/mipnerf360/garden/ckpt/point_cloud/iteration_30000"
+
+    # 3. Mesh splatting with cap=12000
+    data_ms = Config.fromfile("configs/mesh-splatting/mipnerf360/garden.yaml").to_dict()
+    data_ms["trainer"]["max_primitives"] = 12000
+    cfg_ms_abl = Config(finalize_config(data_ms))
+    assert cfg_ms_abl.output.dir == "outputs/abl/mesh-splatting-12000/mipnerf360/garden"
+
+    # 4. 2DTS with cap=8000
+    data_2dts = Config.fromfile("configs/2dts/mipnerf360/garden.yaml").to_dict()
+    data_2dts["trainer"]["max_primitives"] = 8000
+    cfg_2dts_abl = Config(finalize_config(data_2dts))
+    assert cfg_2dts_abl.output.dir == "outputs/abl/2dts-8000/mipnerf360/garden"

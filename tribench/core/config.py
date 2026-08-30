@@ -293,7 +293,26 @@ def _apply_max_primitive_limit(config: dict[str, Any]) -> dict[str, Any]:
             trainer[key] = cap if existing is None else min(int(existing), cap)
 
     config["trainer"] = trainer
+
+    if cap > 0 and method_type in {"triangle-splatting", "mesh-splatting", "2dts", "d2ts"}:
+        canonical_name = "2dts" if method_type in {"2dts", "d2ts"} else method_type
+        old_prefix = f"outputs/{canonical_name}"
+        new_prefix = f"outputs/abl/{canonical_name}-{cap}"
+        config = _retarget_ablation_paths(config, old_prefix, new_prefix)
+
     return config
+
+
+def _retarget_ablation_paths(value: Any, old_prefix: str, new_prefix: str) -> Any:
+    if isinstance(value, str):
+        if value == old_prefix or value.startswith(old_prefix + "/"):
+            return new_prefix + value[len(old_prefix):]
+        return value
+    if isinstance(value, Mapping):
+        return {k: _retarget_ablation_paths(v, old_prefix, new_prefix) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_retarget_ablation_paths(item, old_prefix, new_prefix) for item in value]
+    return value
 
 
 def _apply_dtu_defaults(config: dict[str, Any]) -> dict[str, Any]:
@@ -362,7 +381,21 @@ def _format_context(config: Mapping[str, Any]) -> dict[str, Any]:
     if dataset_name is None and root:
         dataset_name = Path(str(root).replace("{scene}", "")).name
     dataset_template_name = _dataset_template_name(dataset_cfg, dataset_name)
-    method = adapter_cfg.get("type") or adapter_cfg.get("name") or trainer_cfg.get("type") or trainer_cfg.get("name")
+    raw_method = adapter_cfg.get("type") or adapter_cfg.get("name") or trainer_cfg.get("type") or trainer_cfg.get("name")
+    raw_method_str = str(raw_method) if raw_method is not None else ""
+    canonical_method = raw_method_str.lower().replace("_", "-")
+    if canonical_method == "d2ts":
+        canonical_method = "2dts"
+
+    method_template_val = raw_method_str
+    cap = trainer_cfg.get("max_primitives")
+    if (
+        cap is not None
+        and int(cap) > 0
+        and canonical_method in {"triangle-splatting", "mesh-splatting", "2dts"}
+    ):
+        method_template_val = f"abl/{canonical_method}-{int(cap)}"
+
     max_steps = trainer_cfg.get("max_steps", "")
 
     return {
@@ -370,8 +403,8 @@ def _format_context(config: Mapping[str, Any]) -> dict[str, Any]:
         "dataset": str(dataset_template_name) if dataset_template_name is not None else "",
         "dataset_name": str(dataset_name) if dataset_name is not None else "",
         "dtu_eval_mode": str(dataset_cfg.get("dtu_eval_mode", "")),
-        "method": str(method) if method is not None else "",
-        "method_name": str(method) if method is not None else "",
+        "method": str(method_template_val),
+        "method_name": str(raw_method_str),
         "max_steps": str(max_steps) if max_steps is not None else "",
     }
 

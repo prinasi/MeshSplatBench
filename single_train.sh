@@ -119,21 +119,27 @@ Options:
   --retrain                Delete existing scene output and train again; also selects training when combined with stage flags
   --force_retrain          Alias for --retrain
   --rerun_existing         Rerun render/metrics/video/mesh even if outputs exist; does not retrain checkpoints
+  --max_primitives NUM     Global limit on maximum primitives (e.g. 15000)
+  --cap_triangle_splatting NUM  Limit for triangle-splatting
+  --cap_mesh_splatting NUM      Limit for mesh-splatting
+  --cap_2dts NUM                Limit for 2dts
   --dtu_eval_mode MODE     Override DTU mode for this run: full or foreground
   --dtu-full               Shortcut for --dtu_eval_mode full
   --dtu-foreground         Shortcut for --dtu_eval_mode foreground
   --python PATH            Python executable
   -h, --help               Show this help
 
-Each stage reads configs/<method>/<dataset>/<scene>.yaml. Dataset roots,
-image dirs, resolutions, max steps, eval stride, output paths, and video
-settings should be set in the YAML config files. --dtu_eval_mode creates
-temporary per-scene config overrides, so the base YAML files are not modified.
-When training is selected,
-scenes with existing training outputs are skipped by default; pass --retrain
-to remove the old scene output directory before training again. Rendering,
-NVS metrics, video, and DTU mesh metrics are also skipped when their
-outputs already exist; pass --rerun_existing to rebuild those outputs.
+Each stage reads configs/<method>/<dataset>/<scene>.yaml. By default, output
+paths are outputs/<method>/<dataset>/<scene>. When --max_primitives or a
+method-specific cap is specified, output paths are automatically redirected to
+outputs/abl/<method>-<max_primitives>/<dataset>/<scene> so that ablation runs
+do not overwrite baseline results or other ablation runs. --dtu_eval_mode and
+primitive caps create temporary per-scene config overrides, so base YAML files
+are never modified. When training is selected, scenes with existing training
+outputs are skipped by default; pass --retrain to remove the old scene output
+directory before training again. Rendering, NVS metrics, video, and DTU mesh
+metrics are also skipped when their outputs already exist; pass --rerun_existing
+to rebuild those outputs.
 EOF
 }
 
@@ -273,37 +279,90 @@ scene_config_path() {
     echo "${CONFIG_ROOT}/${method}/$(dataset_label "${dataset}")/${scene}.yaml"
 }
 
+TEMP_OVERRIDE_CONFIG_DIR=""
+
 cleanup_temp_configs() {
-    if [[ -n "${DTU_EVAL_MODE_CONFIG_DIR}" && -d "${DTU_EVAL_MODE_CONFIG_DIR}" ]]; then
-        rm -rf -- "${DTU_EVAL_MODE_CONFIG_DIR}"
+    if [[ -n "${TEMP_OVERRIDE_CONFIG_DIR}" && -d "${TEMP_OVERRIDE_CONFIG_DIR}" ]]; then
+        rm -rf -- "${TEMP_OVERRIDE_CONFIG_DIR}"
     fi
 }
 
-ensure_dtu_eval_mode_config_dir() {
-    if [[ -z "${DTU_EVAL_MODE_CONFIG_DIR}" ]]; then
-        DTU_EVAL_MODE_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tribench-dtu-mode.XXXXXX")"
+ensure_temp_override_config_dir() {
+    if [[ -z "${TEMP_OVERRIDE_CONFIG_DIR}" ]]; then
+        TEMP_OVERRIDE_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tribench-run-configs.XXXXXX")"
         trap cleanup_temp_configs EXIT
     fi
 }
 
-config_with_dtu_eval_mode() {
-    local config_file="$1" dataset="$2" scene="$3"
-    local base_abs output_file
+get_effective_cap() {
+    local method_id="$1"
+    local cap=""
+    case "${method_id}" in
+        triangle-splatting|triangle_splatting)
+            cap="${CAP_TRIANGLE_SPLATTING:-${CAP_MAX_PRIMITIVES}}"
+            ;;
+        mesh-splatting|mesh_splatting)
+            cap="${CAP_MESH_SPLATTING:-${CAP_MAX_PRIMITIVES}}"
+            ;;
+        2dts|d2ts)
+            cap="${CAP_2DTS:-${CAP_MAX_PRIMITIVES}}"
+            ;;
+        *)
+            cap="${CAP_MAX_PRIMITIVES}"
+            ;;
+    esac
+    echo "${cap}"
+}
 
-    if [[ -z "${DTU_EVAL_MODE}" || "$(normalize_dataset "${dataset}")" != "dtu" ]]; then
+config_with_runtime_overrides() {
+    local config_file="$1" dataset="$2" scene="$3" cap="$4"
+    local needs_dtu_override=0
+    if [[ -n "${DTU_EVAL_MODE}" && "$(normalize_dataset "${dataset}")" == "dtu" ]]; then
+        needs_dtu_override=1
+    fi
+
+    local needs_cap_override=0
+    if [[ -n "${cap}" && "${cap}" -gt 0 && "${METHOD_ID}" != "diffsoup" ]]; then
+        needs_cap_override=1
+    fi
+
+    if [[ "${needs_dtu_override}" -eq 0 && "${needs_cap_override}" -eq 0 ]]; then
         echo "${config_file}"
         return 0
     fi
 
-    ensure_dtu_eval_mode_config_dir
+    local base_abs output_file tag=""
     base_abs="$(cd "$(dirname "${config_file}")" && pwd)/$(basename "${config_file}")"
-    output_file="${DTU_EVAL_MODE_CONFIG_DIR}/${METHOD_ID}_$(dataset_label "${dataset}")_${scene}_${DTU_EVAL_MODE}.yaml"
+
+    if [[ "${needs_cap_override}" -eq 1 ]]; then
+        tag="${tag}_cap${cap}"
+    fi
+    if [[ "${needs_dtu_override}" -eq 1 ]]; then
+        tag="${tag}_${DTU_EVAL_MODE}"
+    fi
+
+    output_file="${TEMP_OVERRIDE_CONFIG_DIR}/${METHOD_ID}_$(dataset_label "${dataset}")_${scene}${tag}.yaml"
+
     cat > "${output_file}" <<EOF
 _base_: ${base_abs}
+EOF
+
+    if [[ "${needs_dtu_override}" -eq 1 ]]; then
+        cat >> "${output_file}" <<EOF
 
 dataset:
   dtu_eval_mode: ${DTU_EVAL_MODE}
 EOF
+    fi
+
+    if [[ "${needs_cap_override}" -eq 1 ]]; then
+        cat >> "${output_file}" <<EOF
+
+trainer:
+  max_primitives: ${cap}
+EOF
+    fi
+
     echo "${output_file}"
 }
 
@@ -714,27 +773,12 @@ run_train_config() {
 
     rm -f "${train_log}"
 
-    local effective_cap=""
-    case "${METHOD_ID}" in
-        triangle-splatting|triangle_splatting)
-            effective_cap="${CAP_TRIANGLE_SPLATTING:-${CAP_MAX_PRIMITIVES}}"
-            ;;
-        mesh-splatting|mesh_splatting)
-            effective_cap="${CAP_MESH_SPLATTING:-${CAP_MAX_PRIMITIVES}}"
-            ;;
-        2dts|d2ts)
-            effective_cap="${CAP_2DTS:-${CAP_MAX_PRIMITIVES}}"
-            ;;
-        *)
-            effective_cap="${CAP_MAX_PRIMITIVES}"
-            ;;
-    esac
-
+    local effective_cap="$(get_effective_cap "${METHOD_ID}")"
     local -a cmd=(
         "${TB_CMD_ARR[@]}" train
         --config "${config_file}"
     )
-    if [[ -n "${effective_cap}" ]]; then
+    if [[ -n "${effective_cap}" && "${effective_cap}" -gt 0 && "${METHOD_ID}" != "diffsoup" ]]; then
         cmd+=(--max-primitives "${effective_cap}")
     fi
 
@@ -1022,10 +1066,8 @@ fi
 
 resolve_python_bin
 resolve_tb_cmd
+ensure_temp_override_config_dir
 expand_targets "${TARGETS[@]}"
-if [[ -n "${DTU_EVAL_MODE}" ]]; then
-    ensure_dtu_eval_mode_config_dir
-fi
 
 # ---------------------------------------------------------------------------
 # Main loop
@@ -1039,14 +1081,24 @@ for TARGET in "${EXPANDED_TARGETS[@]}"; do
         echo "[${DATASET}/${SCENE}] Config missing: ${CONFIG_FILE}" >&2
         exit 1
     }
-    CONFIG_FILE="$(config_with_dtu_eval_mode "${CONFIG_FILE}" "${DATASET}" "${SCENE}")"
+    EFFECTIVE_CAP="$(get_effective_cap "${METHOD_ID}")"
+    CONFIG_FILE="$(config_with_runtime_overrides "${CONFIG_FILE}" "${DATASET}" "${SCENE}" "${EFFECTIVE_CAP}")"
     MODEL_PATH="$(config_output_dir "${CONFIG_FILE}")"
     [[ -z "${MODEL_PATH}" ]] && {
         echo "[${DATASET}/${SCENE}] Config missing output.dir: ${CONFIG_FILE}" >&2
         exit 1
     }
+    if [[ -n "${EFFECTIVE_CAP}" && "${EFFECTIVE_CAP}" -gt 0 && "${METHOD_ID}" != "diffsoup" ]]; then
+        if [[ "${MODEL_PATH}" == outputs/${METHOD_ID}* ]]; then
+            MODEL_PATH="outputs/abl/${METHOD_ID}-${EFFECTIVE_CAP}${MODEL_PATH#outputs/${METHOD_ID}}"
+        fi
+    fi
     if [[ -n "${LOG_ROOT}" ]]; then
-        LOG_DIR="${LOG_ROOT}/${METHOD_ID}/${DATASET}/${SCENE}"
+        if [[ -n "${EFFECTIVE_CAP}" && "${EFFECTIVE_CAP}" -gt 0 && "${METHOD_ID}" != "diffsoup" ]]; then
+            LOG_DIR="${LOG_ROOT}/abl/${METHOD_ID}-${EFFECTIVE_CAP}/${DATASET}/${SCENE}"
+        else
+            LOG_DIR="${LOG_ROOT}/${METHOD_ID}/${DATASET}/${SCENE}"
+        fi
     else
         LOG_DIR="${MODEL_PATH}/logs"
     fi
