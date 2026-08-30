@@ -33,6 +33,8 @@ env/
 # Project outputs
 outputs/
 runs/
+tests/
+pytest-of-root/
 
 # Unity / deployment benchmark generated artifacts
 *.triasset/
