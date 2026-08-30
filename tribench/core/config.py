@@ -219,7 +219,48 @@ def _apply_max_primitive_limit(config: dict[str, Any]) -> dict[str, Any]:
         return config
 
     trainer = dict(trainer_cfg)
-    cap_value = trainer.get("max_primitives")
+    method_type = str(trainer.get("type", trainer.get("name", ""))).lower().replace("_", "-")
+    method_key = method_type.replace("-", "_")
+
+    # 1. Look for method-specific cap first
+    cap_value = None
+    candidate_keys = [
+        f"max_primitives_{method_key}",
+        f"max_primitives_{method_type}",
+        f"max_shapes_{method_key}",
+        f"max_shapes_{method_type}",
+    ]
+    for key in candidate_keys:
+        if key in trainer and trainer[key] is not None:
+            cap_value = trainer[key]
+            break
+
+    if cap_value is None:
+        aliases = [method_key, method_type]
+        if method_type in {"2dts", "d2ts"}:
+            aliases.extend(["2dts", "d2ts"])
+        elif method_type in {"triangle-splatting", "triangle_splatting"}:
+            aliases.extend(["triangle_splatting", "triangle-splatting"])
+        elif method_type in {"mesh-splatting", "mesh_splatting"}:
+            aliases.extend(["mesh_splatting", "mesh-splatting"])
+        for alias in aliases:
+            block = config.get(alias)
+            if isinstance(block, Mapping):
+                val = block.get("max_primitives", block.get("max_shapes"))
+                if val is not None:
+                    cap_value = val
+                    break
+
+    if cap_value is None:
+        for key in candidate_keys:
+            if key in config and config[key] is not None:
+                cap_value = config[key]
+                break
+
+    # 2. Fall back to generic max_primitives
+    if cap_value is None:
+        cap_value = trainer.get("max_primitives", config.get("max_primitives"))
+
     if cap_value is None:
         return config
 
@@ -231,12 +272,17 @@ def _apply_max_primitive_limit(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"trainer.max_primitives must be positive, got {cap!r}")
 
     trainer["max_primitives"] = cap
-    method_type = str(trainer.get("type", trainer.get("name", ""))).lower().replace("_", "-")
 
-    if method_type == "triangle-splatting":
+    if method_type in {"triangle-splatting", "triangle_splatting"}:
         existing = trainer.get("max_shapes")
         trainer["max_shapes"] = cap if existing is None else min(int(existing), cap)
-    elif method_type == "2dts":
+    elif method_type in {"mesh-splatting", "mesh_splatting"}:
+        existing_shapes = trainer.get("max_shapes")
+        if existing_shapes is not None:
+            trainer["max_shapes"] = min(int(existing_shapes), cap)
+        existing_pts = trainer.get("max_points")
+        trainer["max_points"] = (cap * 3) if existing_pts is None else min(int(existing_pts), cap * 3)
+    elif method_type in {"2dts", "d2ts"}:
         d2ts = dict(config.get("d2ts", {}) or {})
         existing = d2ts.get("target_point_num")
         d2ts["target_point_num"] = cap if existing is None else min(int(existing), cap)

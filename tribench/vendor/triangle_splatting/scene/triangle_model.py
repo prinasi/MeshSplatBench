@@ -27,7 +27,7 @@ from torch import nn
 import os
 from tribench.vendor.triangle_splatting.utils.system_utils import mkdir_p
 from tribench.vendor.triangle_splatting.utils.sh_utils import RGB2SH
-from tribench.vendor._cmod.simple_knn._C import distCUDA2
+from tribench.vendor._cmod.simple_knn import distCUDA2
 from tribench.vendor.triangle_splatting.utils.graphics_utils import BasicPointCloud
 import math
 

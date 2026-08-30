@@ -427,3 +427,46 @@ def test_tribench_package_imports():
     import tribench
 
     assert tribench.__version__ == "0.1.0"
+
+
+def test_apply_max_primitive_limit_per_method_caps():
+    from tribench.core.config import _apply_max_primitive_limit
+
+    # 1. Triangle splatting with method-specific cap
+    cfg_ts = {
+        "trainer": {
+            "type": "triangle-splatting",
+            "max_primitives": 15000,
+            "max_primitives_triangle_splatting": 25000,
+        }
+    }
+    res_ts = _apply_max_primitive_limit(cfg_ts)
+    assert res_ts["trainer"]["max_primitives"] == 25000
+    assert res_ts["trainer"]["max_shapes"] == 25000
+
+    # 2. Mesh splatting with method-specific cap and max_points bound
+    cfg_ms = {
+        "trainer": {
+            "type": "mesh-splatting",
+            "max_primitives": 15000,
+            "max_primitives_mesh_splatting": 12000,
+            "max_points": 4000000,
+        }
+    }
+    res_ms = _apply_max_primitive_limit(cfg_ms)
+    assert res_ms["trainer"]["max_primitives"] == 12000
+    assert res_ms["trainer"]["max_points"] == 36000
+
+    # 3. 2DTS with method-specific block cap
+    cfg_2dts = {
+        "trainer": {
+            "type": "2dts",
+            "max_primitives": 15000,
+        },
+        "d2ts": {
+            "max_primitives": 8000,
+        },
+    }
+    res_2dts = _apply_max_primitive_limit(cfg_2dts)
+    assert res_2dts["trainer"]["max_primitives"] == 8000
+    assert res_2dts["d2ts"]["target_point_num"] == 8000

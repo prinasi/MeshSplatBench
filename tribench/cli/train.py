@@ -15,7 +15,7 @@ from typing import Optional
 import typer
 
 from tribench.core.builder import build_training_loop, build_training_method
-from tribench.core.config import Config, load_config, resolve_dataset_config, save_config_snapshot
+from tribench.core.config import Config, finalize_config, load_config, resolve_dataset_config, save_config_snapshot
 from tribench.renderers.backends import canonical_backend_name
 from tribench.core.runtime_stats import run_with_training_stats
 from tribench.trainers.checkpoints import find_latest_point_cloud_checkpoint
@@ -83,6 +83,10 @@ def train(
     output_dir: Path = typer.Option("./outputs", "--output-dir", "-o", help="Output directory"),
     config: Optional[Path] = typer.Option(None, "--config", "-c", help="Optional training config YAML"),
     max_steps: int = typer.Option(30_000, "--max-steps", help="Maximum training steps"),
+    max_primitives: Optional[int] = typer.Option(None, "--max-primitives", help="Global maximum primitives budget override"),
+    max_primitives_triangle_splatting: Optional[int] = typer.Option(None, "--max-primitives-triangle-splatting", help="Triangle-splatting primitives budget"),
+    max_primitives_mesh_splatting: Optional[int] = typer.Option(None, "--max-primitives-mesh-splatting", help="Mesh-splatting primitives budget"),
+    max_primitives_2dts: Optional[int] = typer.Option(None, "--max-primitives-2dts", help="2DTS primitives budget"),
     log_interval: int = typer.Option(100, "--log-interval", help="Steps between log output"),
     eval_interval: int = typer.Option(1_000, "--eval-interval", help="Steps between evaluation"),
     save_interval: int = typer.Option(5_000, "--save-interval", help="Steps between checkpoints"),
@@ -108,6 +112,21 @@ def train(
     """
     if config is not None:
         cfg = Config.fromfile(config)
+        overrides = {}
+        if max_primitives is not None:
+            overrides["max_primitives"] = max_primitives
+        if max_primitives_triangle_splatting is not None:
+            overrides["max_primitives_triangle_splatting"] = max_primitives_triangle_splatting
+        if max_primitives_mesh_splatting is not None:
+            overrides["max_primitives_mesh_splatting"] = max_primitives_mesh_splatting
+        if max_primitives_2dts is not None:
+            overrides["max_primitives_2dts"] = max_primitives_2dts
+        if overrides:
+            trainer_dict = dict(cfg.get("trainer", {}) or {})
+            trainer_dict.update(overrides)
+            cfg["trainer"] = trainer_dict
+            cfg = Config(finalize_config(cfg.to_dict()))
+
         if "trainer" in cfg or "loop" in cfg or "dataset" in cfg:
             summary = _train_from_structured_config(
                 cfg,

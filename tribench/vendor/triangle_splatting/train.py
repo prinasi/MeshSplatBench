@@ -386,7 +386,7 @@ def training(
                 new_round = False
 
             if iteration < opt.iterations:
-                if max_primitives is not None:
+                if max_primitives is not None and triangles._triangles_points.shape[0] > max_primitives:
                     triangles.enforce_max_primitives(max_primitives)
                 triangles.optimizer.step()
                 triangles.optimizer.zero_grad(set_to_none=True)

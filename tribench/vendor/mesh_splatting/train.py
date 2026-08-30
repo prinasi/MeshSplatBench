@@ -264,6 +264,8 @@ def training(
         if max_primitives_value and int(max_primitives_value) > 0
         else None
     )
+    if max_primitives is not None:
+        triangles.enforce_max_primitives(max_primitives)
     triangles.size_probs_zero = opt.size_probs_zero
     triangles.size_probs_zero_image_space = opt.size_probs_zero_image_space
 

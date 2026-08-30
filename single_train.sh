@@ -16,12 +16,16 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-CONFIG_ROOT="configs"
+CONFIG_ROOT="${CONFIG_ROOT:-configs}"
 LOG_ROOT=""
 LOG_DIR=""
 METHOD=""
 DTU_EVAL_MODE=""
 DTU_EVAL_MODE_CONFIG_DIR=""
+CAP_MAX_PRIMITIVES=""
+CAP_TRIANGLE_SPLATTING=""
+CAP_MESH_SPLATTING=""
+CAP_2DTS=""
 
 if [[ -n "${PYTHON_BIN:-}" ]]; then
     PYTHON_BIN="${PYTHON_BIN}"
@@ -710,10 +714,29 @@ run_train_config() {
 
     rm -f "${train_log}"
 
+    local effective_cap=""
+    case "${METHOD_ID}" in
+        triangle-splatting|triangle_splatting)
+            effective_cap="${CAP_TRIANGLE_SPLATTING:-${CAP_MAX_PRIMITIVES}}"
+            ;;
+        mesh-splatting|mesh_splatting)
+            effective_cap="${CAP_MESH_SPLATTING:-${CAP_MAX_PRIMITIVES}}"
+            ;;
+        2dts|d2ts)
+            effective_cap="${CAP_2DTS:-${CAP_MAX_PRIMITIVES}}"
+            ;;
+        *)
+            effective_cap="${CAP_MAX_PRIMITIVES}"
+            ;;
+    esac
+
     local -a cmd=(
         "${TB_CMD_ARR[@]}" train
         --config "${config_file}"
     )
+    if [[ -n "${effective_cap}" ]]; then
+        cmd+=(--max-primitives "${effective_cap}")
+    fi
 
     echo "[${dataset}/${scene}] Training started. Log: ${train_log}"
     printf '[%s/%s] Command: CUDA_VISIBLE_DEVICES=%s %s\n\n' \
@@ -932,6 +955,10 @@ while [[ $# -gt 0 ]]; do
         --dtu_eval_mode|--dtu-eval-mode) require_value "$@"; DTU_EVAL_MODE="$(validate_dtu_eval_mode "$2")"; shift 2 ;;
         --dtu_full|--dtu-full|--full-dtu) DTU_EVAL_MODE="full"; shift ;;
         --dtu_foreground|--dtu-foreground|--foreground-dtu) DTU_EVAL_MODE="foreground"; shift ;;
+        --max_primitives|--max-primitives|--max_shapes|--max-shapes) require_value "$@"; CAP_MAX_PRIMITIVES="$2"; shift 2 ;;
+        --cap_triangle_splatting|--cap-triangle-splatting) require_value "$@"; CAP_TRIANGLE_SPLATTING="$2"; shift 2 ;;
+        --cap_mesh_splatting|--cap-mesh-splatting) require_value "$@"; CAP_MESH_SPLATTING="$2"; shift 2 ;;
+        --cap_2dts|--cap-2dts|--cap_d2ts|--cap-d2ts) require_value "$@"; CAP_2DTS="$2"; shift 2 ;;
         --python)            require_value "$@"; PYTHON_BIN="$2"; shift 2 ;;
         -h|--help)           usage; exit 0 ;;
         *)

@@ -3,7 +3,10 @@ import torch.nn as nn
 import torch
 from typing import Callable, Tuple
 
-from . import _C
+try:
+    from . import _C
+except ImportError:
+    _C = None
 
 
 def cpu_deep_copy_tuple(input_tuple):

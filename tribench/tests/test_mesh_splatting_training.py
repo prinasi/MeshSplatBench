@@ -103,3 +103,33 @@ def test_mesh_update_structure_limits_split_candidates_by_primitive_budget():
 
     assert update["type"] == "densify"
     assert method._model.add_calls == [1]
+
+
+def test_mesh_model_enforce_max_primitives_prunes_faces_and_unused_vertices():
+    from tribench.vendor.mesh_splatting.scene.triangle_model import TriangleModel
+
+    model = TriangleModel.__new__(TriangleModel)
+    model._triangle_indices = torch.tensor([
+        [0, 1, 2],
+        [1, 2, 3],
+        [2, 3, 4],
+        [3, 4, 5],
+    ], dtype=torch.int32)
+    model.vertices = torch.randn(6, 3)
+    model.vertex_weight = torch.ones(6, 1)
+    model._features_dc = torch.zeros(6, 1, 3)
+    model._features_rest = torch.zeros(6, 15, 3)
+    model.importance_score = torch.tensor([1.0, 10.0, 5.0, 0.5])
+    model.image_size = torch.zeros(4)
+    model.pixel_count = torch.zeros(4)
+    model.optimizer = torch.optim.Adam([
+        {"params": [model.vertices], "name": "vertices"},
+        {"params": [model.vertex_weight], "name": "vertex_weight"},
+        {"params": [model._features_dc], "name": "f_dc"},
+        {"params": [model._features_rest], "name": "f_rest"},
+    ])
+
+    removed = model.enforce_max_primitives(2)
+    assert removed == 2
+    assert model._triangle_indices.shape[0] == 2
+    assert model.vertices.shape[0] == 4

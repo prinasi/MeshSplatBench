@@ -305,6 +305,8 @@ class MeshSplattingTrainingMethod(TrainingMethod):
         self._model.add_percentage = self._opt.add_percentage
         self._model.size_probs_zero = self._opt.size_probs_zero
         self._model.size_probs_zero_image_space = self._opt.size_probs_zero_image_space
+        if self._opt.max_primitives is not None:
+            self._model.enforce_max_primitives(self._opt.max_primitives)
         self._optimizer = self._model.optimizer
 
         self._train_cameras = self._scene.getTrainCameras().copy()
@@ -658,6 +660,9 @@ class MeshSplattingTrainingMethod(TrainingMethod):
         self._ensure_initialized()
         if epoch >= self.max_steps:
             self._final_cleanup()
+        if self._opt.max_primitives is not None:
+            self._model.enforce_max_primitives(self._opt.max_primitives)
+            self._optimizer = self._model.optimizer
         if self._scene is not None:
             self._scene.save(epoch)
         metadata = {
@@ -692,6 +697,8 @@ class MeshSplattingTrainingMethod(TrainingMethod):
         self._model.add_percentage = self._opt.add_percentage
         self._model.size_probs_zero = self._opt.size_probs_zero
         self._model.size_probs_zero_image_space = self._opt.size_probs_zero_image_space
+        if self._opt.max_primitives is not None:
+            self._model.enforce_max_primitives(self._opt.max_primitives)
         self._optimizer = self._model.optimizer
         self._viewpoint_stack = self._train_cameras.copy()
         self.set_step(step)
