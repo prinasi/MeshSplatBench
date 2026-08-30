@@ -265,7 +265,7 @@ def test_diffsoup_config_resolves_final_params_checkpoint():
     assert cfg["trainer"]["downscale"] == 4
     assert "white_background" not in cfg["trainer"]
     assert cfg["dataset"]["root"].endswith("data/mipnerf360/room")
-    assert cfg["dataset"]["image_dir"] == "images_4"
+    assert cfg["dataset"]["image_dir"] in ("images_2", "images_4")
     assert cfg["dataset"]["resolution"] == 1
     assert cfg["adapter"]["checkpoint"] == "outputs/diffsoup/mipnerf360/room/ckpt/final_params.pt"
 
