@@ -724,8 +724,13 @@ class TriangleModel:
     def _sample_alives(self, probs, num, big_mask, alive_indices=None):
         probs = torch.nan_to_num(probs, nan=0.0, posinf=0.0, neginf=0.0)
         probs = torch.clamp(probs, min=0.0)
+        num_pos = int((probs > 0).sum().item())
+        k = min(int(num), num_pos)
+        if k <= 0:
+            return torch.empty((0,), dtype=torch.int64, device=probs.device)
+
         probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
-        sampled_idxs = torch.multinomial(probs, min(num, (probs>0).sum().item()), replacement=False)
+        sampled_idxs = torch.multinomial(probs, k, replacement=False)
 
         if alive_indices is not None:
             sampled_idxs = alive_indices[sampled_idxs]
@@ -785,11 +790,17 @@ class TriangleModel:
                 neginf=0.0,
             )
             scores = opacity if opacity.numel() > 0 and (opacity.max() - opacity.min()) > 1e-8 else None
-        if scores is None:
-            scores = self.triangle_areas().detach().reshape(-1).float()
-        scores = torch.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
 
-        keep_idx = torch.topk(scores, k=max_primitives, largest=True, sorted=False).indices
+        if scores is None:
+            # At initialization (or when no informative importance/opacity scores exist):
+            # Do NOT use largest triangle areas, because that selects outer sky dome
+            # and far outlier floaters while discarding dense foreground surfaces.
+            # Instead, uniformly subsample across the point cloud to preserve the scene geometry.
+            keep_idx = torch.randperm(current, device=self._triangles_points.device)[:max_primitives]
+        else:
+            scores = torch.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
+            keep_idx = torch.topk(scores, k=max_primitives, largest=True, sorted=False).indices
+
         keep_mask = torch.zeros(current, dtype=torch.bool, device=self._triangles_points.device)
         keep_mask[keep_idx] = True
         self.prune_points(~keep_mask)
@@ -819,6 +830,8 @@ class TriangleModel:
         big_mask   = compar > self.split_size
 
         add_idx = self._sample_alives(probs=probs, num=num_gs, big_mask=big_mask)
+        if add_idx.numel() == 0:
+            return 0
 
         big_mask   = compar[add_idx] > self.split_size
         small_mask = ~big_mask
@@ -878,15 +891,15 @@ class TriangleModel:
         mask[torch.nonzero(dead_mask, as_tuple=True)] = True
         self.prune_points(mask)
 
-        self.triangle_area = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
-        self.image_size = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
-        self.importance_score = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
+        self.triangle_area = torch.zeros((self.get_triangles_points.shape[0]), device=self.get_triangles_points.device)
+        self.image_size = torch.zeros((self.get_triangles_points.shape[0]), device=self.get_triangles_points.device)
+        self.importance_score = torch.zeros((self.get_triangles_points.shape[0]), device=self.get_triangles_points.device)
 
     def remove_final_points(self, mask):
         self.prune_points(mask)
-        self.triangle_area = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
-        self.image_size = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
-        self.importance_score = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
+        self.triangle_area = torch.zeros((self.get_triangles_points.shape[0]), device=self.get_triangles_points.device)
+        self.image_size = torch.zeros((self.get_triangles_points.shape[0]), device=self.get_triangles_points.device)
+        self.importance_score = torch.zeros((self.get_triangles_points.shape[0]), device=self.get_triangles_points.device)
 
 
     def reset_opacity(self, sigma_reset):

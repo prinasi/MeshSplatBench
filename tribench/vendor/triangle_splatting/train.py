@@ -353,6 +353,13 @@ def training(
                     if not outdoor:
                         dead_mask = torch.logical_or(dead_mask, (triangles.image_size > 1400).squeeze())
 
+                if dead_mask.all():
+                    dead_mask = (triangles.get_opacity <= opt.opacity_dead).squeeze()
+                    if dead_mask.all():
+                        keep_count = max(1, int(0.1 * triangles._opacity.shape[0]))
+                        keep_idx = torch.topk(triangles.get_opacity.squeeze(), k=keep_count, largest=True).indices
+                        dead_mask[keep_idx] = False
+
                 total_dead += dead_mask.sum()
                 if opt.proba_distr == 0:
                     odd_group = True
@@ -379,6 +386,12 @@ def training(
 
                 if not new_round:
                     dead_mask = torch.logical_or(dead_mask, (triangles.triangle_area < 2).squeeze())
+                if dead_mask.all():
+                    dead_mask = (triangles.get_opacity <= opt.opacity_dead).squeeze()
+                    if dead_mask.all():
+                        keep_count = max(1, int(0.1 * triangles._opacity.shape[0]))
+                        keep_idx = torch.topk(triangles.get_opacity.squeeze(), k=keep_count, largest=True).indices
+                        dead_mask[keep_idx] = False
                 triangles.remove_final_points(dead_mask)
                 if max_primitives is not None:
                     triangles.enforce_max_primitives(max_primitives)

@@ -444,6 +444,13 @@ class TriangleSplattingTrainingMethod(TrainingMethod):
             if include_image_size:
                 dead_mask = torch.logical_or(dead_mask, image_size_dead)
 
+        if dead_mask.all():
+            dead_mask = opacity_dead
+            if dead_mask.all():
+                keep_count = max(1, int(0.1 * self._model._opacity.shape[0]))
+                keep_idx = torch.topk(self._model.get_opacity.squeeze(), k=keep_count, largest=True).indices
+                dead_mask[keep_idx] = False
+
         return dead_mask, {
             "dead_importance": int(importance_dead.sum().item()),
             "dead_opacity": int(opacity_dead.sum().item()),

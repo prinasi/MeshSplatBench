@@ -152,3 +152,71 @@ def test_training_method_accepts_dtu_eval_mode_from_extra_args(tmp_path):
     )
 
     assert method._build_dataset_args().dtu_eval_mode == "foreground"
+
+
+def test_sample_alives_returns_empty_when_no_positive_probs():
+    model = TriangleModel.__new__(TriangleModel)
+    probs = torch.zeros(10)
+    big_mask = torch.zeros(10, dtype=torch.bool)
+    sampled = model._sample_alives(probs=probs, num=5, big_mask=big_mask)
+    assert sampled.numel() == 0
+    assert sampled.dtype == torch.int64
+
+
+def test_sample_alives_returns_empty_when_num_is_zero():
+    model = TriangleModel.__new__(TriangleModel)
+    probs = torch.ones(10)
+    big_mask = torch.zeros(10, dtype=torch.bool)
+    sampled = model._sample_alives(probs=probs, num=0, big_mask=big_mask)
+    assert sampled.numel() == 0
+    assert sampled.dtype == torch.int64
+
+
+def test_triangle_model_enforce_max_primitives_at_step_zero():
+    model = TriangleModel.__new__(TriangleModel)
+    model._triangles_points = torch.nn.Parameter(torch.randn(10, 3, 3))
+    model._features_dc = torch.nn.Parameter(torch.zeros(10, 1, 3))
+    model._features_rest = torch.nn.Parameter(torch.zeros(10, 1, 3))
+    model._opacity = torch.nn.Parameter(torch.zeros(10, 1))  # uniform opacity
+    model._sigma = torch.nn.Parameter(torch.zeros(10, 1))
+    model._mask = torch.nn.Parameter(torch.ones(10, 1))
+    model.triangle_area = torch.zeros(10)
+    model.image_size = torch.zeros(10)
+    model.importance_score = torch.zeros(10)  # all zeros at step 0
+    model.max_scaling = torch.zeros(10)
+    model.max_radii2D = torch.zeros(10)
+    model.max_density_factor = torch.zeros(10)
+    model.denom = torch.zeros(10, 1)
+    model.opacity_activation = torch.sigmoid
+    model.optimizer = torch.optim.Adam(
+        [
+            {"params": [model._features_dc], "lr": 0.0, "name": "f_dc"},
+            {"params": [model._features_rest], "lr": 0.0, "name": "f_rest"},
+            {"params": [model._opacity], "lr": 0.0, "name": "opacity"},
+            {"params": [model._triangles_points], "lr": 0.0, "name": "triangles_points"},
+            {"params": [model._sigma], "lr": 0.0, "name": "sigma"},
+            {"params": [model._mask], "lr": 0.0, "name": "mask"},
+        ],
+        lr=0.0,
+    )
+
+    removed = model.enforce_max_primitives(4)
+    assert removed == 6
+    assert model.get_triangles_points.shape[0] == 4
+    assert model.get_number_of_points == 4
+
+
+def test_add_new_gs_all_dead_returns_zero():
+    model = TriangleModel.__new__(TriangleModel)
+    model._triangles_points = torch.nn.Parameter(torch.randn(5, 3, 3))
+    model._opacity = torch.nn.Parameter(torch.zeros(5, 1))
+    model._sigma = torch.nn.Parameter(torch.zeros(5, 1))
+    model.opacity_activation = torch.sigmoid
+    model.add_shape = 1.3
+    model.split_size = 24.0
+    model.image_size = torch.zeros(5)
+    dead_mask = torch.ones(5, dtype=torch.bool)
+
+    res = model.add_new_gs(cap_max=5, oddGroup=True, dead_mask=dead_mask)
+    assert res == 0
+

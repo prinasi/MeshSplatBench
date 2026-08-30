@@ -288,8 +288,7 @@ class VanillaTSModel(BaseModel):
         if opacity.numel() == current and opacity.numel() > 0 and (opacity.max() - opacity.min()) > 1e-8:
             return opacity
 
-        area = self.get_area.detach().reshape(-1).float()
-        return torch.nan_to_num(area, nan=0.0, posinf=0.0, neginf=0.0)
+        return None
 
     def enforce_max_primitives(self, max_primitives: int | None = None) -> int:
         if max_primitives is None:
@@ -305,7 +304,10 @@ class VanillaTSModel(BaseModel):
             return 0
 
         scores = self._primitive_scores()
-        keep_idx = torch.topk(scores, k=max_primitives, largest=True, sorted=False).indices
+        if scores is None:
+            keep_idx = torch.randperm(current, device=self._vertex.device)[:max_primitives]
+        else:
+            keep_idx = torch.topk(scores, k=max_primitives, largest=True, sorted=False).indices
         keep_mask = torch.zeros(current, dtype=torch.bool, device=self._vertex.device)
         keep_mask[keep_idx] = True
         self._prune_points(~keep_mask)

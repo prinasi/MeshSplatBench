@@ -776,8 +776,15 @@ class TriangleModel:
 
     def _sample_alives(self, probs, num, alive_indices=None):
         torch.manual_seed(1)  # always same "random" indices
+        probs = torch.nan_to_num(probs, nan=0.0, posinf=0.0, neginf=0.0)
+        probs = torch.clamp(probs, min=0.0)
+        num_pos = int((probs > 0).sum().item())
+        k = min(int(num), num_pos)
+        if k <= 0:
+            return torch.empty((0,), dtype=torch.int64, device=probs.device)
+
         probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
-        sampled_idxs = torch.multinomial(probs, num, replacement=False)
+        sampled_idxs = torch.multinomial(probs, k, replacement=False)
         if alive_indices is not None:
             sampled_idxs = alive_indices[sampled_idxs]
         return sampled_idxs        
@@ -856,10 +863,14 @@ class TriangleModel:
         ):
             scores = self.importance_score.detach().reshape(-1).float()
         else:
-            scores = self.triangle_areas().detach().reshape(-1).float()
-        scores = torch.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
+            scores = None
 
-        keep_idx = torch.topk(scores, k=max_primitives, largest=True, sorted=False).indices
+        if scores is None:
+            keep_idx = torch.randperm(current, device=self._triangle_indices.device)[:max_primitives]
+        else:
+            scores = torch.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
+            keep_idx = torch.topk(scores, k=max_primitives, largest=True, sorted=False).indices
+
         keep_mask = torch.zeros(current, dtype=torch.bool, device=self._triangle_indices.device)
         keep_mask[keep_idx] = True
         self.prune_triangles(keep_mask)
