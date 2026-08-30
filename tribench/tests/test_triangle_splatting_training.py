@@ -220,3 +220,42 @@ def test_add_new_gs_all_dead_returns_zero():
     res = model.add_new_gs(cap_max=5, oddGroup=True, dead_mask=dead_mask)
     assert res == 0
 
+
+def test_densification_postfix_handles_cpu_max_scaling_without_error():
+    model = TriangleModel.__new__(TriangleModel)
+    model._triangles_points = torch.nn.Parameter(torch.randn(5, 3, 3))
+    model._features_dc = torch.nn.Parameter(torch.zeros(5, 1, 3))
+    model._features_rest = torch.nn.Parameter(torch.zeros(5, 1, 3))
+    model._opacity = torch.nn.Parameter(torch.zeros(5, 1))
+    model._sigma = torch.nn.Parameter(torch.zeros(5, 1))
+    model._mask = torch.nn.Parameter(torch.ones(5, 1))
+    model.optimizer = torch.optim.Adam(
+        [
+            {"params": [model._features_dc], "lr": 0.0, "name": "f_dc"},
+            {"params": [model._features_rest], "lr": 0.0, "name": "f_rest"},
+            {"params": [model._opacity], "lr": 0.0, "name": "opacity"},
+            {"params": [model._triangles_points], "lr": 0.0, "name": "triangles_points"},
+            {"params": [model._sigma], "lr": 0.0, "name": "sigma"},
+            {"params": [model._mask], "lr": 0.0, "name": "mask"},
+        ],
+        lr=0.0,
+    )
+    model.max_scaling = torch.empty(0)  # CPU tensor
+
+    new_triangles = torch.randn(2, 3, 3)
+    new_features_dc = torch.zeros(2, 1, 3)
+    new_features_rest = torch.zeros(2, 1, 3)
+    new_opacity = torch.zeros(2, 1)
+    new_sigma = torch.zeros(2, 1)
+    new_mask = torch.ones(2, 1)
+
+    model.densification_postfix(
+        new_triangles, new_features_dc, new_features_rest, new_opacity, new_sigma, new_mask
+    )
+
+    assert model.max_scaling.shape[0] == 7
+    assert model.max_scaling.device == model._triangles_points.device
+    assert model.denom.shape == (7, 1)
+    assert model.max_radii2D.shape[0] == 7
+
+

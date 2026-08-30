@@ -229,6 +229,22 @@ class TriangleModel:
         self.image_size = torch.zeros(count, dtype=torch.float, device=device)
         self.importance_score = torch.zeros(count, dtype=torch.float, device=device)
 
+        max_scaling = getattr(self, "max_scaling", None)
+        if not isinstance(max_scaling, torch.Tensor) or max_scaling.device != device or max_scaling.shape[0] != count:
+            self.max_scaling = torch.zeros(count, dtype=torch.float, device=device)
+
+        max_radii2D = getattr(self, "max_radii2D", None)
+        if not isinstance(max_radii2D, torch.Tensor) or max_radii2D.device != device or max_radii2D.shape[0] != count:
+            self.max_radii2D = torch.zeros(count, dtype=torch.float, device=device)
+
+        max_density_factor = getattr(self, "max_density_factor", None)
+        if not isinstance(max_density_factor, torch.Tensor) or max_density_factor.device != device or max_density_factor.shape[0] != count:
+            self.max_density_factor = torch.zeros(count, dtype=torch.float, device=device)
+
+        denom = getattr(self, "denom", None)
+        if not isinstance(denom, torch.Tensor) or denom.device != device or denom.shape[0] != count:
+            self.denom = torch.zeros((count, 1), dtype=torch.float, device=device)
+
     def save(self, path):
 
         mkdir_p(path)
@@ -275,11 +291,12 @@ class TriangleModel:
         self._features_rest = point_cloud_state_dict["features_rest"][i:i+plus].to("cuda").to(torch.float32).detach().clone().requires_grad_(True)
         self._opacity = point_cloud_state_dict["opacity"][i:i+plus].to("cuda").to(torch.float32).detach().clone().requires_grad_(True)
         
-        self._mask = nn.Parameter(torch.ones((self._triangles_points.size(0), 1), device="cuda").requires_grad_(True))
+        device = self._triangles_points.device
+        self._mask = nn.Parameter(torch.ones((self._triangles_points.size(0), 1), device=device).requires_grad_(True))
         num_points_per_triangle = []
         for i in range(self._triangles_points.size(0)):
             num_points_per_triangle.append(self._triangles_points[i].shape[0])
-        tensor_num_points_per_triangle = torch.tensor(num_points_per_triangle, dtype=torch.int, device='cuda:0')
+        tensor_num_points_per_triangle = torch.tensor(num_points_per_triangle, dtype=torch.int, device=device)
         cumsum_of_points_per_triangle = torch.cumsum(torch.nn.functional.pad(tensor_num_points_per_triangle, (1,0), value=0), 0, dtype=torch.int)[:-1]
         number_of_points = self._triangles_points.shape[0]
 
@@ -645,17 +662,30 @@ class TriangleModel:
         self._sigma = optimizable_tensors["sigma"]
         self._mask = optimizable_tensors["mask"]
 
-        self.denom = torch.zeros((self.get_triangles_points.shape[0], 1), device="cuda")
-        self.max_radii2D = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
-        self.max_density_factor = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
-        self.triangle_area = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
+        device = self.get_triangles_points.device
+        count = self.get_triangles_points.shape[0]
 
-        self.max_scaling = torch.cat((self.max_scaling, torch.zeros(new_opacities.shape[0], device="cuda")),dim=0)
+        self.denom = torch.zeros((count, 1), device=device)
+        self.max_radii2D = torch.zeros(count, device=device)
+        self.max_density_factor = torch.zeros(count, device=device)
+        self.triangle_area = torch.zeros(count, device=device)
+
+        if (
+            isinstance(self.max_scaling, torch.Tensor)
+            and self.max_scaling.device == device
+            and self.max_scaling.shape[0] + new_opacities.shape[0] == count
+        ):
+            self.max_scaling = torch.cat(
+                (self.max_scaling, torch.zeros(new_opacities.shape[0], device=device)),
+                dim=0,
+            )
+        else:
+            self.max_scaling = torch.zeros(count, device=device)
 
         num_points_per_triangle = []
         for i in range(self._triangles_points.size(0)):
             num_points_per_triangle.append(self._triangles_points[i].shape[0])
-        tensor_num_points_per_triangle = torch.tensor(num_points_per_triangle, dtype=torch.int, device='cuda:0')
+        tensor_num_points_per_triangle = torch.tensor(num_points_per_triangle, dtype=torch.int, device=device)
         cumsum_of_points_per_triangle = torch.cumsum(torch.nn.functional.pad(tensor_num_points_per_triangle, (1,0), value=0), 0, dtype=torch.int)[:-1]
         number_of_points = self._triangles_points.shape[0]
 
@@ -938,7 +968,8 @@ class TriangleModel:
         for i in range(new_model._triangles_points.size(0)):
             num_points_per_triangle.append(new_model._triangles_points[i].shape[0])
 
-        tensor_num_points_per_triangle = torch.tensor(num_points_per_triangle, dtype=torch.int, device='cuda:0')
+        device = new_model._triangles_points.device
+        tensor_num_points_per_triangle = torch.tensor(num_points_per_triangle, dtype=torch.int, device=device)
         cumsum_of_points_per_triangle = torch.cumsum(torch.nn.functional.pad(tensor_num_points_per_triangle, (1,0), value=0), 0, dtype=torch.int)[:-1]
         number_of_points = new_model._triangles_points.shape[0]
 
@@ -946,9 +977,9 @@ class TriangleModel:
         new_model._cumsum_of_points_per_triangle = cumsum_of_points_per_triangle
         new_model._number_of_points = number_of_points
 
-        new_model.max_scaling = torch.zeros((number_of_points), dtype=torch.float, device="cuda")
-        new_model.max_radii2D = torch.zeros((number_of_points), dtype=torch.float, device="cuda")
-        new_model.max_density_factor = torch.zeros((number_of_points), dtype=torch.float, device="cuda")
-        new_model.denom = torch.zeros((number_of_points, 1), device="cuda")
+        new_model.max_scaling = torch.zeros((number_of_points), dtype=torch.float, device=device)
+        new_model.max_radii2D = torch.zeros((number_of_points), dtype=torch.float, device=device)
+        new_model.max_density_factor = torch.zeros((number_of_points), dtype=torch.float, device=device)
+        new_model.denom = torch.zeros((number_of_points, 1), device=device)
 
         return new_model
