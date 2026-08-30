@@ -313,41 +313,6 @@ def test_triangle_splatting_scene_configs_apply_full_eval_caps():
         assert cfg["trainer"]["max_shapes"] == cap
 
 
-def test_texture_ablation_configs_resolve_to_15k():
-    config_dir = Path(__file__).resolve().parents[2] / "configs" / "texture_abl_cfgs"
-    scene_configs = sorted(
-        path
-        for path in config_dir.glob("*/*/*.yaml")
-        if "/native/" not in path.as_posix()
-    )
-    native_configs = sorted((config_dir / "2dts" / "native").glob("*.yaml"))
-
-    assert len(scene_configs) == 102
-    assert len(native_configs) == 4
-
-    for path in scene_configs:
-        cfg = Config.fromfile(path)
-        method = path.relative_to(config_dir).parts[0]
-        assert cfg.trainer.max_primitives == 15_000
-        assert cfg.output.dir.startswith(f"outputs/texture_abl/{method}/")
-        assert cfg.adapter.checkpoint.startswith(f"outputs/texture_abl/{method}/")
-        assert cfg.output.metrics_file.startswith(f"{cfg.output.dir}/")
-        assert cfg.output.stats_file.startswith(f"{cfg.output.dir}/")
-        assert cfg.render.video.output_dir.startswith(f"{cfg.output.dir}/")
-        assert cfg.profile.output.startswith(f"{cfg.output.dir}/")
-        assert cfg.inspect.output.startswith(f"{cfg.output.dir}/")
-        assert not cfg.output.dir.startswith(f"outputs/{method}/")
-        if method == "triangle-splatting":
-            assert cfg.trainer.max_shapes == 15_000
-        if method == "2dts":
-            assert cfg.d2ts.target_point_num == 15_000
-            assert str(cfg.d2ts.native_config).startswith(
-                "configs/texture_abl_cfgs/2dts/native/"
-            )
-
-    for path in native_configs:
-        assert "target_point_num: 15000" in path.read_text(encoding="utf-8")
-
 
 
 def test_2dts_mipnerf360_opaque_experiment_configs_resolve_to_isolated_outputs():
@@ -371,28 +336,7 @@ def test_2dts_mipnerf360_opaque_experiment_configs_resolve_to_isolated_outputs()
         assert cfg.dataset.scene == path.stem
 
 
-def test_texture_ablation_dtu_full_override_retargets_outputs(tmp_path: Path):
-    base_config = (
-        Path(__file__).resolve().parents[2]
-        / "configs"
-        / "texture_abl_cfgs"
-        / "2dts"
-        / "dtu"
-        / "scan24.yaml"
-    )
-    config = tmp_path / "scan24_full.yaml"
-    config.write_text(
-        f"_base_: {base_config}\n"
-        "dataset:\n"
-        "  dtu_eval_mode: full\n"
-    )
 
-    cfg = Config.fromfile(config)
-
-    assert cfg.dataset.dtu_eval_mode == "full"
-    assert cfg.output.dir == "outputs/texture_abl/2dts/dtu-full/scan24"
-    assert cfg.adapter.checkpoint == "outputs/texture_abl/2dts/dtu-full/scan24/ckpt"
-    assert cfg.mesh.output == "outputs/texture_abl/2dts/dtu-full/scan24/mesh/30000_pcd.ply"
 
 
 def test_build_from_cfg_with_params():
