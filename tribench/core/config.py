@@ -257,8 +257,11 @@ def _apply_max_primitive_limit(config: dict[str, Any]) -> dict[str, Any]:
                 cap_value = config[key]
                 break
 
-    # 2. Fall back to generic max_primitives
+    # 2. Fall back to generic max_primitives (mesh-splatting is excluded;
+    #    it uses only the native max_points vertex safeguard).
     if cap_value is None:
+        if method_type in {"mesh-splatting", "mesh_splatting"}:
+            return config
         cap_value = trainer.get("max_primitives", config.get("max_primitives"))
 
     if cap_value is None:
@@ -276,12 +279,6 @@ def _apply_max_primitive_limit(config: dict[str, Any]) -> dict[str, Any]:
     if method_type in {"triangle-splatting", "triangle_splatting"}:
         existing = trainer.get("max_shapes")
         trainer["max_shapes"] = cap if existing is None else min(int(existing), cap)
-    elif method_type in {"mesh-splatting", "mesh_splatting"}:
-        existing_shapes = trainer.get("max_shapes")
-        if existing_shapes is not None:
-            trainer["max_shapes"] = min(int(existing_shapes), cap)
-        existing_pts = trainer.get("max_points")
-        trainer["max_points"] = (cap * 3) if existing_pts is None else min(int(existing_pts), cap * 3)
     elif method_type in {"2dts", "d2ts"}:
         d2ts = dict(config.get("d2ts", {}) or {})
         existing = d2ts.get("target_point_num")
@@ -294,7 +291,7 @@ def _apply_max_primitive_limit(config: dict[str, Any]) -> dict[str, Any]:
 
     config["trainer"] = trainer
 
-    if cap > 0 and method_type in {"triangle-splatting", "mesh-splatting", "2dts", "d2ts"}:
+    if cap > 0 and method_type in {"triangle-splatting", "2dts", "d2ts"}:
         canonical_name = "2dts" if method_type in {"2dts", "d2ts"} else method_type
         old_prefix = f"outputs/{canonical_name}"
         new_prefix = f"outputs/abl/{canonical_name}-{cap}"
@@ -392,7 +389,7 @@ def _format_context(config: Mapping[str, Any]) -> dict[str, Any]:
     if (
         cap is not None
         and int(cap) > 0
-        and canonical_method in {"triangle-splatting", "mesh-splatting", "2dts"}
+        and canonical_method in {"triangle-splatting", "2dts"}
     ):
         method_template_val = f"abl/{canonical_method}-{int(cap)}"
 

@@ -394,18 +394,17 @@ def test_apply_max_primitive_limit_per_method_caps():
     assert res_ts["trainer"]["max_primitives"] == 25000
     assert res_ts["trainer"]["max_shapes"] == 25000
 
-    # 2. Mesh splatting with method-specific cap and max_points bound
+    # 2. Mesh splatting: generic max_primitives is ignored (native max_points preserved)
     cfg_ms = {
         "trainer": {
             "type": "mesh-splatting",
             "max_primitives": 15000,
-            "max_primitives_mesh_splatting": 12000,
             "max_points": 4000000,
         }
     }
     res_ms = _apply_max_primitive_limit(cfg_ms)
-    assert res_ms["trainer"]["max_primitives"] == 12000
-    assert res_ms["trainer"]["max_points"] == 36000
+    assert "max_primitives" not in res_ms["trainer"] or res_ms["trainer"].get("max_primitives") == 15000
+    assert res_ms["trainer"]["max_points"] == 4000000  # NOT overridden to cap*3
 
     # 3. 2DTS with method-specific block cap
     cfg_2dts = {
@@ -435,11 +434,11 @@ def test_max_primitives_retargets_output_paths_to_abl():
     assert cfg_ts_abl.output.metrics_file == "outputs/abl/triangle-splatting-15000/mipnerf360/garden/metrics.json"
     assert cfg_ts_abl.adapter.checkpoint == "outputs/abl/triangle-splatting-15000/mipnerf360/garden/ckpt/point_cloud/iteration_30000"
 
-    # 3. Mesh splatting with cap=12000
+    # 3. Mesh splatting with max_primitives=12000: paths NOT retargeted (native behaviour)
     data_ms = Config.fromfile("configs/mesh-splatting/mipnerf360/garden.yaml").to_dict()
     data_ms["trainer"]["max_primitives"] = 12000
     cfg_ms_abl = Config(finalize_config(data_ms))
-    assert cfg_ms_abl.output.dir == "outputs/abl/mesh-splatting-12000/mipnerf360/garden"
+    assert cfg_ms_abl.output.dir == "outputs/mesh-splatting/mipnerf360/garden"
 
     # 4. 2DTS with cap=8000
     data_2dts = Config.fromfile("configs/2dts/mipnerf360/garden.yaml").to_dict()

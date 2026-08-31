@@ -625,7 +625,6 @@ def _mesh_splatting_native_argv(
         "lr_triangles_points_init",
         "max_diff_threshold",
         "max_points",
-        "max_primitives",
         "position_lr_delay_mult",
         "position_lr_max_steps",
         "prune_size",

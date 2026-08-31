@@ -302,7 +302,7 @@ get_effective_cap() {
             cap="${CAP_TRIANGLE_SPLATTING:-${CAP_MAX_PRIMITIVES}}"
             ;;
         mesh-splatting|mesh_splatting)
-            cap="${CAP_MESH_SPLATTING:-${CAP_MAX_PRIMITIVES}}"
+            cap="${CAP_MESH_SPLATTING}"
             ;;
         2dts|d2ts)
             cap="${CAP_2DTS:-${CAP_MAX_PRIMITIVES}}"

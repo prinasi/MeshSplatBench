@@ -39,7 +39,7 @@ class _FakeMeshModel:
         return 0
 
 
-def _method_with_fake_mesh(num_triangles: int, *, max_primitives: int | None):
+def _method_with_fake_mesh(num_triangles: int, *, max_points: int = 1_000_000):
     method = MeshSplattingTrainingMethod.__new__(MeshSplattingTrainingMethod)
     method._ensure_initialized = lambda: None
     method._model = _FakeMeshModel(num_triangles)
@@ -48,8 +48,7 @@ def _method_with_fake_mesh(num_triangles: int, *, max_primitives: int | None):
     method._need_delaunay = False
     method._prune_threshold = 0.0
     method._opt = SimpleNamespace(
-        max_points=1_000_000,
-        max_primitives=max_primitives,
+        max_points=max_points,
         run_restricted_delaunay=10_000,
         densify_until_iter=5_000,
         densification_interval=500,
@@ -87,8 +86,9 @@ def test_mesh_training_method_accepts_dtu_eval_mode_from_extra_args(tmp_path):
     assert method._build_dataset_args().dtu_eval_mode == "foreground"
 
 
-def test_mesh_update_structure_skips_densify_at_primitive_cap():
-    method = _method_with_fake_mesh(10, max_primitives=10)
+def test_mesh_update_structure_skips_densify_at_vertex_cap():
+    """Densification is skipped when vertices >= max_points (official vertex safeguard)."""
+    method = _method_with_fake_mesh(10, max_points=30)
 
     update = method.update_structure(1_000)
 
@@ -96,13 +96,14 @@ def test_mesh_update_structure_skips_densify_at_primitive_cap():
     assert method._model.add_calls == []
 
 
-def test_mesh_update_structure_limits_split_candidates_by_primitive_budget():
-    method = _method_with_fake_mesh(10, max_primitives=13)
+def test_mesh_update_structure_densifies_when_under_vertex_cap():
+    """Densification proceeds when vertices < max_points."""
+    method = _method_with_fake_mesh(10, max_points=1_000_000)
 
     update = method.update_structure(1_000)
 
     assert update["type"] == "densify"
-    assert method._model.add_calls == [1]
+    assert method._model.add_calls == [None]
 
 
 def test_mesh_model_enforce_max_primitives_prunes_faces_and_unused_vertices():

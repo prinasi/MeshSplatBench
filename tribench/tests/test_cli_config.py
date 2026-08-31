@@ -168,7 +168,7 @@ def test_triangle_splatting_native_argv_maps_max_primitives_to_max_shapes():
     assert argv[argv.index("--max_primitives") + 1] == "15000"
 
 
-def test_mesh_splatting_native_argv_passes_max_primitives():
+def test_mesh_splatting_native_argv_excludes_max_primitives():
     argv = _mesh_splatting_native_argv(
         trainer_cfg={"max_primitives": 15_000},
         dataset_root="data/scene",
@@ -177,7 +177,7 @@ def test_mesh_splatting_native_argv_passes_max_primitives():
         quiet=True,
     )
 
-    assert argv[argv.index("--max_primitives") + 1] == "15000"
+    assert "--max_primitives" not in argv
 
 
 def test_2dts_config_resolves_native_training_paths():
