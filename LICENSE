@@ -1,0 +1,44 @@
+MIT License
+
+Copyright (c) 2026 MeshSplatBench / TriBench Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+Third-Party Component Licenses:
+
+This project incorporates or interfaces with several open-source algorithms and
+libraries under `tribench/vendor/` and `submodules/`:
+
+1. 2D Triangle Splatting (2DTS) / 2D Gaussian Splatting:
+   - Original 3D Gaussian Splatting codebase by Inria and MPII (licensed under the
+     Inria non-commercial research license).
+   - 2D Gaussian Splatting extensions licensed under their respective open-source terms.
+
+2. Triangle Splatting:
+   - Licensed under their original research publication terms.
+
+3. MeshSplatting:
+   - Licensed under their original research publication terms.
+
+4. DiffSoup:
+   - Licensed under their original research publication terms.
+
+5. EffRDel (submodules/effrdel):
+   - Licensed under the MIT License.

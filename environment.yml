@@ -1,0 +1,34 @@
+name: tribench
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - ninja
+  - cmake>=3.20
+  - pytorch>=2.0.0
+  - torchvision
+  - pytorch-cuda=11.8
+  - pip:
+      - numpy<2.0.0
+      - Pillow
+      - imageio[ffmpeg]
+      - opencv-python
+      - scipy
+      - trimesh
+      - pytorch-msssim
+      - lpips
+      - typer>=0.9
+      - pyyaml
+      - rich
+      - tabulate
+      - plyfile
+      - open3d
+      - scikit-image
+      - scikit-learn
+      - matplotlib
+      - nanobind>=2.11.0
+      - -e .

@@ -35,6 +35,8 @@ outputs/
 runs/
 tests/
 pytest-of-root/
+**/[Rr]enders/
+**/[Rr]esults/
 
 # Unity / deployment benchmark generated artifacts
 *.triasset/
@@ -42,8 +44,8 @@ unity_metrics_report.csv
 unity_metrics_report.json
 unity_metrics_report.md
 
-# Unity project/build caches. Keep source templates under tools/ committed;
-# ignore generated projects, local player builds, and editor metadata.
+# Unity project/build caches.
+# Keep ProjectSettings, Packages, and Assets committed; ignore generated caches.
 [Ll]ibrary/
 [Tt]emp/
 [Oo]bj/
@@ -57,12 +59,18 @@ unity_metrics_report.md
 *.unityproj
 *.pidb
 *.booproj
+*.blob
+*.bak
+*.tribench-vulkan.bak
 
-# Data directory
-data/
+# Data directory (keep documentation, ignore local dataset copies)
+data/*
+!data/README.md
 
-# Logs
+# Logs & temporary debug files
 *.log
+.aris/
+debug.txt
 
 # OS files
 .DS_Store

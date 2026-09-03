@@ -1,34 +1,65 @@
 <!-- @format -->
 
-# TriBench
+# MeshSplatBench: A Unified Benchmark for Triangle-Based Neural Rendering
 
-A Python-first developer toolkit for unified benchmarking of triangle-splatting-style radiance field methods.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![arXiv](https://img.shields.io/badge/arXiv-2609.01306-b31b1b.svg)](https://arxiv.org/abs/2609.01306)
+
+**MeshSplatBench** (`tribench`) is a unified, Python-first benchmarking toolkit and evaluation framework for comparing triangle-splatting-style radiance field reconstruction methods, bridging academic novel view synthesis research and real-time industrial game engine deployment (Unity).
 
 ## Overview
 
-TriBench provides a single, consistent evaluation framework for comparing different triangle-based radiance field reconstruction methods. Instead of wrangling per-repo scripts and ad-hoc metrics, you get:
+MeshSplatBench provides a single, consistent evaluation framework for comparing different triangle-based radiance field reconstruction methods. Instead of wrangling per-repo scripts and ad-hoc metrics, you get:
 
 - **Standardized metrics** -- PSNR, SSIM, LPIPS, and geometry quality, computed the same way for every method.
 - **Adapter pattern** -- plug any triangle-splatting method into the same API.
 - **Reproducible experiments** -- YAML configs lock down every hyperparameter.
 - **CLI-first workflow** -- inspect, profile, evaluate, and compare from the terminal.
+- **Industrial Engine Parity** -- export method-preserving `.triasset` packages and evaluate real-time framerates and rendering fidelity natively in Unity.
 
 ## Supported Methods
 
 | Method                       | Adapter                    | Status                                   |
 | ---------------------------- | -------------------------- | ---------------------------------------- |
-| 2D Triangle Splatting (2DTS) | `D2TSAdapter`              | Initial config/train/render/eval support |
-| Triangle Splatting           | `TriangleSplattingAdapter` | Config/train/render/eval support         |
-| MeshSplatting                | `MeshSplattingAdapter`     | Config/train/render/eval support         |
-| DiffSoup                     | `DiffSoupAdapter`          | Config/train/render/eval/export support; Unity image parity pending |
+| 2D Triangle Splatting (2DTS) | `D2TSAdapter`              | Config/train/render/eval/export support  |
+| Triangle Splatting           | `TriangleSplattingAdapter` | Config/train/render/eval/export support  |
+| MeshSplatting                | `MeshSplattingAdapter`     | Config/train/render/eval/export support  |
+| DiffSoup                     | `DiffSoupAdapter`          | Config/train/render/eval/export support; In-shader Micro-MLP support |
 
 ## Installation
 
+### Option 1: Conda Environment (Recommended)
+
 ```bash
-git clone https://github.com/your-org/TriBench.git
-cd TriBench
-pip install -e ".[dev]"
+git clone https://github.com/your-org/tribench.git
+cd tribench
+conda env create -f environment.yml
+conda activate tribench
 ```
+
+### Option 2: Pip Install
+
+```bash
+git clone https://github.com/your-org/tribench.git
+cd tribench
+pip install -e ".[dev,cuda]"
+```
+
+## Dataset Setup
+
+MeshSplatBench evaluates methods on standard novel view synthesis benchmarks: **Mip-NeRF 360**, **NeRF-Synthetic (Blender)**, **Tanks & Temples**, and **DTU**.
+
+Readers should download the datasets from their official sources and place or symlink them into the `data/` directory according to the default format:
+
+```bash
+mkdir -p data
+ln -s /path/to/MipNeRF360 data/mipnerf360
+ln -s /path/to/nerf_synthetic data/nerf_synthetic
+ln -s /path/to/tandt data/tandt
+ln -s /path/to/DTU data/dtu
+```
+
+Detailed directory trees, download links, and COLMAP structures are documented in [data/README.md](data/README.md).
 
 ## Quick Start
 
@@ -533,6 +564,22 @@ profiling, and configuration behavior.
    - Report forward latency, FPS, peak CUDA memory, primitive count, checkpoint size, and optional backward latency.
    - Start with Triangle Splatting, then reuse the same profile schema for other adapters.
 
+## Citation
+
+If you find this benchmark, codebase, or results helpful in your research, please cite our paper:
+
+```bibtex
+@misc{zhang2026meshsplatbenchunifiedbenchmarktrianglebased,
+      title={MeshSplatBench: A Unified Benchmark for Triangle-Based Neural Rendering}, 
+      author={Kaixuan Zhang and Minxian Li and Mingwu Ren and Xiatian Zhu},
+      year={2026},
+      eprint={2609.01306},
+      archivePrefix={arXiv},
+      primaryClass={cs.GR},
+      url={https://arxiv.org/abs/2609.01306}, 
+}
+```
+
 ## License
 
-MIT
+This project is licensed under the [MIT License](LICENSE). Third-party submodules and vendor components under `tribench/vendor/` and `submodules/` are subject to their respective original licenses.

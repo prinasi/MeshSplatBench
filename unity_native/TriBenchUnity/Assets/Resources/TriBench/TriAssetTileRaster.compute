@@ -1,0 +1,837 @@
+// TriBench Tile-based Parallel Sorting & Software Rasterizer Compute Shader
+// Directly reproduces native CUDA tile-based binning, radix sort, and front-to-back
+// transmittance compositing to eliminate transparent primitive depth-sorting artifacts.
+
+#pragma kernel PreprocessTriangles
+#pragma kernel BlockScan
+#pragma kernel BlockScanSums
+#pragma kernel AddBlockSums
+#pragma kernel ClearTileRanges
+#pragma kernel DuplicateWithKeys
+#pragma kernel FinalizeTotalKeys
+#pragma kernel RadixCount
+#pragma kernel RadixScanBuckets
+#pragma kernel RadixScatter
+#pragma kernel IdentifyTileRanges
+#pragma kernel TileRasterize
+
+// -----------------------------------------------------------------------------
+// Structures and Common Buffers
+// -----------------------------------------------------------------------------
+
+struct PreprocessedGeom {
+    float2 p0;
+    float2 p1;
+    float2 p2;
+    float3 viewDepth;
+    float3 clipW;
+    float3 incenterBary;
+    float4 params; // x: alpha, y: sigma/gamma, z: phi_min_inv, w: renderMode
+    float3 color0;
+    float3 color1;
+    float3 color2;
+};
+
+StructuredBuffer<float> _Positions;
+StructuredBuffer<int> _Indices;
+StructuredBuffer<float> _Opacity;
+StructuredBuffer<float> _Sigma;  // Not used for RenderMode 2 (2DTS)
+StructuredBuffer<float> _ShDc;
+StructuredBuffer<float> _ShRest;
+StructuredBuffer<float> _Features;
+StructuredBuffer<float> _ColorMlpParams;
+
+RWStructuredBuffer<uint> _TileCounts;
+RWStructuredBuffer<uint2> _TriTileRectMin;
+RWStructuredBuffer<uint2> _TriTileRectMax;
+RWStructuredBuffer<float> _TriDepths;
+RWStructuredBuffer<PreprocessedGeom> _PreprocessedGeom;
+
+StructuredBuffer<uint> _ScanOffsets;
+RWStructuredBuffer<uint> _ScanOffsetsRW;
+StructuredBuffer<uint> _ScanInput;
+RWStructuredBuffer<uint> _ScanOutput;
+RWStructuredBuffer<uint> _BlockSums;
+RWStructuredBuffer<uint> _ScannedBlockSums;
+
+// [0] = validated (tile, primitive) key count for the current frame,
+// [1] = the unclamped required count when capacity was exhausted, otherwise 0.
+StructuredBuffer<uint> _TotalKeys;
+RWStructuredBuffer<uint> _TotalKeysRW;
+
+StructuredBuffer<uint> _SrcKeysTile;
+StructuredBuffer<uint> _SrcKeysDepth;
+StructuredBuffer<uint> _SrcValues;
+RWStructuredBuffer<uint> _DstKeysTile;
+RWStructuredBuffer<uint> _DstKeysDepth;
+RWStructuredBuffer<uint> _DstValues;
+
+RWStructuredBuffer<uint> _BlockHistograms;
+RWStructuredBuffer<uint> _GlobalBucketOffsets;
+
+RWStructuredBuffer<uint2> _TileRanges;
+RWTexture2D<float4> _OutputTarget;
+
+// -----------------------------------------------------------------------------
+// Uniforms
+// -----------------------------------------------------------------------------
+
+uint _PrimitiveCount;
+int _RenderMode; // 0: Triangle Splatting, 1: Mesh Splatting, 2: 2DTS, 3: DiffSoup
+int _ShDegree;
+int _ShRestCoefficients;
+int _VertexColor;
+int _SigmaPerVertex;
+int _FeatureSamples;
+int _FeatureDim;
+int _FeatureLevel;
+float _Gamma;
+float _OpacityFloor;
+float _GammaVertexRescale;
+float3 _CameraWorldPos;
+float4x4 _ViewProj;
+float4x4 _InvViewProj;
+float4x4 _WorldToCamera;
+uint _ScreenWidth;
+uint _ScreenHeight;
+uint _TileGridWidth;
+uint _TileGridHeight;
+
+uint _TotalElements;
+uint _NumBlocks;        // primitive-count blocks for the scan kernels
+uint _RadixNumBlocks;   // key-capacity blocks for the radix histogram layout
+uint _RadixShift;
+uint _RadixBitPass; // 0: Depth, 1: Tile
+uint _KeyCapacity;  // Allocated per-(tile, primitive) key slots.
+uint _TileRangeCount;
+
+// -----------------------------------------------------------------------------
+// Helper Functions
+// -----------------------------------------------------------------------------
+
+float3 Pos(int i) { return float3(_Positions[i * 3], _Positions[i * 3 + 1], _Positions[i * 3 + 2]); }
+float3 ShDc(int offset) { return float3(_ShDc[offset], _ShDc[offset + 1], _ShDc[offset + 2]); }
+float3 ShRest(int offset) { return float3(_ShRest[offset], _ShRest[offset + 1], _ShRest[offset + 2]); }
+float3 Feature(int offset) { return float3(_Features[offset], _Features[offset + 1], _Features[offset + 2]); }
+float Sigmoid(float x) { return 1.0 / (1.0 + exp(-x)); }
+
+float3 EvalSh(int entity, float3 p, bool vertexLayout)
+{
+    int e = entity;
+    float3 r = 0.28209479177387814 * ShDc(e * 3);
+    if (_ShDegree == 0) return max(r + 0.5, 0.0);
+    float3 d = normalize(p - _CameraWorldPos);
+    float x = d.x, y = d.y, z = d.z, xx = x*x, yy = y*y, zz = z*z, xy = x*y, yz = y*z, xz = x*z;
+    int baseRest = e * _ShRestCoefficients * 3;
+    r += -0.4886025119029199 * y * ShRest(baseRest)
+        + 0.4886025119029199 * z * ShRest(baseRest + 3)
+        - 0.4886025119029199 * x * ShRest(baseRest + 6);
+    if (_ShDegree > 1) {
+        r += 1.0925484305920792 * xy * ShRest(baseRest + 9)
+           - 1.0925484305920792 * yz * ShRest(baseRest + 12)
+           + 0.31539156525252005 * (2*zz - xx - yy) * ShRest(baseRest + 15)
+           - 1.0925484305920792 * xz * ShRest(baseRest + 18)
+           + 0.5462742152960396 * (xx - yy) * ShRest(baseRest + 21);
+    }
+    if (_ShDegree > 2) {
+        r += -0.5900435899266435 * y * (3*xx - yy) * ShRest(baseRest + 24)
+           + 2.890611442640554 * xy * z * ShRest(baseRest + 27)
+           - 0.4570457994644658 * y * (4*zz - xx - yy) * ShRest(baseRest + 30)
+           + 0.3731763325901154 * z * (2*zz - 3*xx - 3*yy) * ShRest(baseRest + 33)
+           - 0.4570457994644658 * x * (4*zz - xx - yy) * ShRest(baseRest + 36)
+           + 1.445305721320277 * z * (xx - yy) * ShRest(baseRest + 39)
+           - 0.5900435899266435 * x * (xx - 3*yy) * ShRest(baseRest + 42);
+    }
+    return max(r + 0.5, 0.0);
+}
+
+void EvalViewDirSh2(float3 dir, out float sh[9])
+{
+    float x = dir.x;
+    float y = dir.y;
+    float z = dir.z;
+
+    sh[0] = 0.28209479177387814;
+    sh[1] = -0.4886025119029199 * y;
+    sh[2] = 0.4886025119029199 * z;
+    sh[3] = -0.4886025119029199 * x;
+
+    float xx = x * x, yy = y * y, zz = z * z;
+    float xy = x * y, xz = x * z, yz = y * z;
+
+    sh[4] = 1.0925484305920792 * xy;
+    sh[5] = -1.0925484305920792 * yz;
+    sh[6] = 0.31539156525252005 * (2.0 * zz - xx - yy);
+    sh[7] = -1.0925484305920792 * xz;
+    sh[8] = 0.5462742152960396 * (xx - yy);
+}
+
+float3 EvaluateColorMLP(float feat[7], float3 viewDir)
+{
+    float sh[9];
+    EvalViewDirSh2(viewDir, sh);
+
+    float x[16];
+    [unroll] for (int k = 0; k < 7; k++) x[k] = feat[k];
+    [unroll] for (int m = 0; m < 9; m++) x[7 + m] = sh[m];
+
+    // Layer 0: 16 -> 16 (weights: 0..255, bias: 256..271)
+    float h1[16];
+    [unroll] for (int i0 = 0; i0 < 16; i0++) {
+        float sum = _ColorMlpParams[256 + i0];
+        [unroll] for (int j0 = 0; j0 < 16; j0++) {
+            sum += x[j0] * _ColorMlpParams[i0 * 16 + j0];
+        }
+        h1[i0] = max(0.0, sum);
+    }
+
+    // Layer 1: 16 -> 16 (weights: 272..527, bias: 528..543)
+    float h2[16];
+    [unroll] for (int i1 = 0; i1 < 16; i1++) {
+        float sum = _ColorMlpParams[528 + i1];
+        [unroll] for (int j1 = 0; j1 < 16; j1++) {
+            sum += h1[j1] * _ColorMlpParams[272 + i1 * 16 + j1];
+        }
+        h2[i1] = max(0.0, sum);
+    }
+
+    // Layer 2: 16 -> 3 (weights: 544..591, bias: 592..594)
+    float3 y;
+    float s0 = _ColorMlpParams[592];
+    [unroll] for (int k0 = 0; k0 < 16; k0++) s0 += h2[k0] * _ColorMlpParams[544 + k0];
+    y.x = 1.0 / (1.0 + exp(-clamp(s0, -20.0, 20.0)));
+
+    float s1 = _ColorMlpParams[593];
+    [unroll] for (int k1 = 0; k1 < 16; k1++) s1 += h2[k1] * _ColorMlpParams[560 + k1];
+    y.y = 1.0 / (1.0 + exp(-clamp(s1, -20.0, 20.0)));
+
+    float s2 = _ColorMlpParams[594];
+    [unroll] for (int k2 = 0; k2 < 16; k2++) s2 += h2[k2] * _ColorMlpParams[576 + k2];
+    y.z = 1.0 / (1.0 + exp(-clamp(s2, -20.0, 20.0)));
+
+    float res = saturate(feat[3]);
+    float3 rgbBase = float3(feat[0], feat[1], feat[2]);
+    return saturate((1.0 - res) * rgbBase + res * y);
+}
+
+void DiffSoupLatticeWeights(float2 bary01, out uint3 indices, out float3 weights)
+{
+    uint resolution = 1u << (uint)_FeatureLevel;
+    float b0Level = bary01.x * (float)resolution;
+    float b1Level = bary01.y * (float)resolution;
+    uint x = min((uint)floor(b0Level), resolution - 1u);
+    uint y = min((uint)floor(b1Level), resolution - 1u - x);
+    b0Level -= (float)x;
+    b1Level -= (float)y;
+
+    bool flip = b0Level + b1Level > 1.0;
+    uint flipU = flip ? 1u : 0u;
+    float flipF = flip ? 1.0 : 0.0;
+    uint x0 = x + 1u;
+    uint y0 = y;
+    uint x1 = x;
+    uint y1 = y + 1u;
+    uint x2 = x + flipU;
+    uint y2 = min(y + flipU, resolution - x2);
+
+    indices.x = (x0 + y0) * (x0 + y0 + 1u) / 2u + y0;
+    indices.y = (x1 + y1) * (x1 + y1 + 1u) / 2u + y1;
+    indices.z = (x2 + y2) * (x2 + y2 + 1u) / 2u + y2;
+    weights.x = (1.0 - flipF) * b0Level + flipF * (1.0 - b1Level);
+    weights.y = (1.0 - flipF) * b1Level + flipF * (1.0 - b0Level);
+    weights.z = 1.0 - weights.x - weights.y;
+}
+
+float SampleDiffSoupAlpha(uint primitiveId, float2 bary01)
+{
+    uint3 indices;
+    float3 weights;
+    DiffSoupLatticeWeights(bary01, indices, weights);
+    uint sampleBase = primitiveId * (uint)_FeatureSamples;
+    return weights.x * _Opacity[sampleBase + indices.x]
+         + weights.y * _Opacity[sampleBase + indices.y]
+         + weights.z * _Opacity[sampleBase + indices.z];
+}
+
+void SampleDiffSoupFeatures(uint primitiveId, float2 bary01, out float feat[7])
+{
+    uint3 indices;
+    float3 weights;
+    DiffSoupLatticeWeights(bary01, indices, weights);
+    uint sampleBase = primitiveId * (uint)_FeatureSamples;
+    uint featureBase = sampleBase * (uint)_FeatureDim;
+    [unroll] for (int channel = 0; channel < 7; ++channel) {
+        feat[channel] = weights.x * _Features[featureBase + indices.x * (uint)_FeatureDim + (uint)channel]
+                      + weights.y * _Features[featureBase + indices.y * (uint)_FeatureDim + (uint)channel]
+                      + weights.z * _Features[featureBase + indices.z * (uint)_FeatureDim + (uint)channel];
+    }
+}
+
+float3 DiffSoupViewDirection(uint2 pixel)
+{
+    float2 ndc = -1.0 + 2.0 * (float2(pixel) + 0.5) / float2(_ScreenWidth, _ScreenHeight);
+    float4 worldFar = mul(_InvViewProj, float4(ndc, 1.0, 1.0));
+    float safeW = abs(worldFar.w) >= 1e-8 ? worldFar.w : (worldFar.w < 0.0 ? -1e-8 : 1e-8);
+    worldFar.xyz /= safeW;
+    return normalize(_CameraWorldPos - worldFar.xyz);
+}
+
+// -----------------------------------------------------------------------------
+// KERNEL 1: PreprocessTriangles
+// -----------------------------------------------------------------------------
+
+[numthreads(256, 1, 1)]
+void PreprocessTriangles(uint id : SV_DispatchThreadID)
+{
+    if (id >= _PrimitiveCount) return;
+
+    int i0 = _Indices[id * 3];
+    int i1 = _Indices[id * 3 + 1];
+    int i2 = _Indices[id * 3 + 2];
+
+    float3 p0 = Pos(i0);
+    float3 p1 = Pos(i1);
+    float3 p2 = Pos(i2);
+
+    if (_RenderMode == 2 && abs(_GammaVertexRescale - 1.0) > 1e-6) {
+        float3 center = (p0 + p1 + p2) / 3.0;
+        p0 = center + (p0 - center) * _GammaVertexRescale;
+        p1 = center + (p1 - center) * _GammaVertexRescale;
+        p2 = center + (p2 - center) * _GammaVertexRescale;
+    }
+
+    // Transform to View Space for depth calculation
+    float3 v0 = mul(_WorldToCamera, float4(p0, 1.0)).xyz;
+    float3 v1 = mul(_WorldToCamera, float4(p1, 1.0)).xyz;
+    float3 v2 = mul(_WorldToCamera, float4(p2, 1.0)).xyz;
+
+    // View-space depth (camera looks along negative Z in OpenGL/Vulkan, positive in DX/Metal)
+    float depth = (abs(v0.z) + abs(v1.z) + abs(v2.z)) / 3.0;
+
+    // Project to clip space
+    float4 c0 = mul(_ViewProj, float4(p0, 1.0));
+    float4 c1 = mul(_ViewProj, float4(p1, 1.0));
+    float4 c2 = mul(_ViewProj, float4(p2, 1.0));
+
+    // Native DiffSoup rejects a triangle unless all three homogeneous w values
+    // are positive. Other splat modes retain the conservative all-behind test.
+    bool outsideNear = _RenderMode == 3
+        ? (c0.w <= 0.001 || c1.w <= 0.001 || c2.w <= 0.001)
+        : (c0.w <= 0.001 && c1.w <= 0.001 && c2.w <= 0.001);
+    if (outsideNear) {
+        _TileCounts[id] = 0;
+        return;
+    }
+
+    // Convert clip coordinates to screen pixel coordinates
+    // NDC [-1, 1] maps to texture pixel [0, W] and [0, H] (bottom-left origin)
+    float2 screenSize = float2(_ScreenWidth, _ScreenHeight);
+    float2 s0 = ((c0.xy / max(abs(c0.w), 1e-6)) * float2(0.5, 0.5) + 0.5) * screenSize;
+    float2 s1 = ((c1.xy / max(abs(c1.w), 1e-6)) * float2(0.5, 0.5) + 0.5) * screenSize;
+    float2 s2 = ((c2.xy / max(abs(c2.w), 1e-6)) * float2(0.5, 0.5) + 0.5) * screenSize;
+
+    float minX = min(s0.x, min(s1.x, s2.x));
+    float maxX = max(s0.x, max(s1.x, s2.x));
+    float minY = min(s0.y, min(s1.y, s2.y));
+    float maxY = max(s0.y, max(s1.y, s2.y));
+
+    // Screen frustum overlap test
+    if (maxX < 0 || minX >= _ScreenWidth || maxY < 0 || minY >= _ScreenHeight) {
+        _TileCounts[id] = 0;
+        return;
+    }
+
+    // Tile bounding box (16x16 tiles) with 2px conservative expansion matching CUDA
+    int bx_min = max(0, (int)floor((minX - 2.0) / 16.0));
+    int by_min = max(0, (int)floor((minY - 2.0) / 16.0));
+    int bx_max = min((int)_TileGridWidth, (int)ceil((maxX + 2.0) / 16.0));
+    int by_max = min((int)_TileGridHeight, (int)ceil((maxY + 2.0) / 16.0));
+
+    if (bx_max <= bx_min || by_max <= by_min) {
+        _TileCounts[id] = 0;
+        return;
+    }
+
+    uint tiles_touched = (uint)((bx_max - bx_min) * (by_max - by_min));
+    _TileCounts[id] = tiles_touched;
+    _TriTileRectMin[id] = uint2((uint)bx_min, (uint)by_min);
+    _TriTileRectMax[id] = uint2((uint)bx_max, (uint)by_max);
+    _TriDepths[id] = depth;
+
+    // Precompute incenter and coverage parameters
+    float a = length(s1 - s2);
+    float b = length(s0 - s2);
+    float c = length(s0 - s1);
+    float3 incenterBary = float3(a, b, c) / max(a + b + c, 1e-6);
+
+    PreprocessedGeom geom;
+    geom.p0 = s0;
+    geom.p1 = s1;
+    geom.p2 = s2;
+    geom.viewDepth = float3(abs(v0.z), abs(v1.z), abs(v2.z));
+    geom.clipW = float3(c0.w, c1.w, c2.w);
+    geom.incenterBary = incenterBary;
+
+    float alpha = 1.0;
+    float sigma = 1.0;
+
+    if (_RenderMode == 3) {
+        // DiffSoup appearance and opacity live on an Rmax triangle lattice.
+        // They are sampled per pixel after rasterization, not reduced to one
+        // value per primitive during preprocessing.
+        geom.color0 = 0.0;
+        geom.color1 = 0.0;
+        geom.color2 = 0.0;
+    } else {
+        bool perVertex = _RenderMode == 1 || (_RenderMode == 2 && _VertexColor != 0);
+        if (perVertex) {
+            geom.color0 = EvalSh(i0, p0, true);
+            geom.color1 = EvalSh(i1, p1, true);
+            geom.color2 = EvalSh(i2, p2, true);
+        } else {
+            float3 col = EvalSh((int)id, (p0 + p1 + p2) / 3.0, false);
+            geom.color0 = col;
+            geom.color1 = col;
+            geom.color2 = col;
+        }
+
+        float rawOp = clamp(_Opacity[id], -20.0, 20.0);
+        alpha = _RenderMode == 1 ? clamp(_Opacity[id], 0.0, 1.0) : Sigmoid(rawOp);
+        if (_RenderMode == 0) sigma = 0.01 + exp(clamp(_Sigma[id], -20.0, 20.0));
+        else if (_RenderMode == 1) sigma = exp(clamp(_Sigma[_SigmaPerVertex != 0 ? i0 : 0], -20.0, 20.0));
+        else sigma = max(_Gamma, 1e-4);
+    }
+
+    geom.params = float4(alpha, sigma, 0.0, (float)_RenderMode);
+    _PreprocessedGeom[id] = geom;
+}
+
+// -----------------------------------------------------------------------------
+// KERNELS 2-4: Parallel Scan for Tile Offsets
+// -----------------------------------------------------------------------------
+
+groupshared uint s_scan[512];
+
+[numthreads(256, 1, 1)]
+void BlockScan(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
+{
+    uint globalId = id.x;
+    uint val = globalId < _TotalElements ? _ScanInput[globalId] : 0;
+    s_scan[groupIndex] = val;
+    GroupMemoryBarrierWithGroupSync();
+
+    // In-place Blelloch / Hillis-Steele inclusive scan
+    for (uint stride = 1; stride < 256; stride *= 2) {
+        uint temp = 0;
+        if (groupIndex >= stride) {
+            temp = s_scan[groupIndex - stride];
+        }
+        GroupMemoryBarrierWithGroupSync();
+        s_scan[groupIndex] += temp;
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if (globalId < _TotalElements) {
+        _ScanOutput[globalId] = s_scan[groupIndex];
+    }
+
+    // Write the block sum
+    if (groupIndex == 255 || globalId == _TotalElements - 1) {
+        _BlockSums[groupId.x] = s_scan[groupIndex];
+    }
+}
+
+[numthreads(256, 1, 1)]
+void BlockScanSums(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
+{
+    // Exclusive scan of per-block totals. _NumBlocks can far exceed the
+    // 256-thread group (e.g. 3M primitives -> ~12k blocks), so process the
+    // blocks in 256-wide chunks, carrying the running sum across chunks.
+    uint runningSum = 0;
+    for (uint chunk = 0; chunk < _NumBlocks; chunk += 256) {
+        uint idx = chunk + groupIndex;
+        uint val = (idx < _NumBlocks) ? _BlockSums[idx] : 0;
+        s_scan[groupIndex] = val;
+        GroupMemoryBarrierWithGroupSync();
+
+        for (uint stride = 1; stride < 256; stride *= 2) {
+            uint temp = 0;
+            if (groupIndex >= stride) {
+                temp = s_scan[groupIndex - stride];
+            }
+            GroupMemoryBarrierWithGroupSync();
+            s_scan[groupIndex] += temp;
+            GroupMemoryBarrierWithGroupSync();
+        }
+
+        if (idx < _NumBlocks) {
+            _ScannedBlockSums[idx] = runningSum + s_scan[groupIndex] - val;
+        }
+        GroupMemoryBarrierWithGroupSync();
+        runningSum += s_scan[255];
+    }
+}
+
+[numthreads(256, 1, 1)]
+void AddBlockSums(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID)
+{
+    uint globalId = id.x;
+    if (globalId >= _TotalElements) return;
+
+    uint addVal = (groupId.x > 0) ? _ScannedBlockSums[groupId.x - 1] : 0;
+    uint inclusive = _ScanOutput[globalId] + addVal;
+    uint inputVal = _ScanInput[globalId];
+    // Convert inclusive to exclusive offset
+    _ScanOffsetsRW[globalId] = inclusive - inputVal;
+}
+
+[numthreads(256, 1, 1)]
+void ClearTileRanges(uint3 id : SV_DispatchThreadID)
+{
+    // IdentifyTileRanges only writes ranges for tiles that gain or lose a
+    // boundary; every other entry must reset to an empty range each frame or
+    // stale primitives from the previous camera would be rasterized.
+    uint i = id.x;
+    if (i < _TileRangeCount) {
+        _TileRanges[i] = uint2(0u, 0u);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// KERNEL 5: DuplicateWithKeys
+// -----------------------------------------------------------------------------
+
+[numthreads(256, 1, 1)]
+void DuplicateWithKeys(uint id : SV_DispatchThreadID)
+{
+    if (id >= _PrimitiveCount) return;
+
+    uint count = _TileCounts[id];
+    if (count == 0) return;
+
+    uint baseOffset = _ScanOffsets[id];
+    uint2 rectMin = _TriTileRectMin[id];
+    uint2 rectMax = _TriTileRectMax[id];
+    float depth = _TriDepths[id];
+
+    // Convert positive depth float to integer key preserving order
+    uint depthKey = asuint(max(depth, 0.0));
+
+    uint curOffset = baseOffset;
+    for (uint y = rectMin.y; y < rectMax.y; y++) {
+        for (uint x = rectMin.x; x < rectMax.x; x++) {
+            // Never write past the allocated key slots; FinalizeTotalKeys
+            // clamps the reported total and raises the overflow flag.
+            if (curOffset >= _KeyCapacity) {
+                return;
+            }
+            uint tileId = y * _TileGridWidth + x;
+            _DstKeysTile[curOffset] = tileId;
+            _DstKeysDepth[curOffset] = depthKey;
+            _DstValues[curOffset] = id;
+            curOffset++;
+        }
+    }
+}
+
+[numthreads(1, 1, 1)]
+void FinalizeTotalKeys()
+{
+    uint lastIndex = _PrimitiveCount - 1;
+    uint total = _ScanOffsetsRW[lastIndex] + _ScanInput[lastIndex];
+    bool overflow = total > _KeyCapacity;
+    _TotalKeysRW[0] = overflow ? _KeyCapacity : total;
+    _TotalKeysRW[1] = overflow ? total : 0u;
+}
+
+// -----------------------------------------------------------------------------
+// KERNELS 6-8: GPU 8-Bit Radix Sort
+// -----------------------------------------------------------------------------
+
+groupshared uint s_hist[256];
+groupshared uint s_bucket[256];
+
+[numthreads(256, 1, 1)]
+void RadixCount(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
+{
+    s_hist[groupIndex] = 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    uint globalId = id.x;
+    if (globalId < _TotalKeys[0]) {
+        uint key = (_RadixBitPass == 0) ? _SrcKeysDepth[globalId] : _SrcKeysTile[globalId];
+        uint bucket = (key >> _RadixShift) & 0xFF;
+        InterlockedAdd(s_hist[bucket], 1);
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    _BlockHistograms[groupId.x * 256 + groupIndex] = s_hist[groupIndex];
+}
+
+[numthreads(256, 1, 1)]
+void RadixScanBuckets(uint groupIndex : SV_GroupIndex)
+{
+    // Scans the 256 radix buckets across all key-capacity blocks
+    uint bucket = groupIndex;
+    uint runningSum = 0;
+
+    for (uint b = 0; b < _RadixNumBlocks; b++) {
+        uint idx = b * 256 + bucket;
+        uint count = _BlockHistograms[idx];
+        _BlockHistograms[idx] = runningSum;
+        runningSum += count;
+    }
+
+    s_scan[bucket] = runningSum;
+    GroupMemoryBarrierWithGroupSync();
+
+    // Prefix sum over the total bucket counts
+    for (uint stride = 1; stride < 256; stride *= 2) {
+        uint temp = 0;
+        if (bucket >= stride) {
+            temp = s_scan[bucket - stride];
+        }
+        GroupMemoryBarrierWithGroupSync();
+        s_scan[bucket] += temp;
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    uint totalBefore = (bucket > 0) ? s_scan[bucket - 1] : 0;
+    _GlobalBucketOffsets[bucket] = totalBefore;
+}
+
+[numthreads(256, 1, 1)]
+void RadixScatter(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
+{
+    uint totalElements = _TotalKeys[0];
+    uint globalId = id.x;
+    bool valid = globalId < totalElements;
+
+    uint keyTile = 0;
+    uint keyDepth = 0;
+    uint val = 0;
+    uint bucket = 0xFFFFFFFFu;
+    if (valid) {
+        keyTile = _SrcKeysTile[globalId];
+        keyDepth = _SrcKeysDepth[globalId];
+        val = _SrcValues[globalId];
+        uint key = (_RadixBitPass == 0) ? keyDepth : keyTile;
+        bucket = (key >> _RadixShift) & 0xFF;
+    }
+    s_bucket[groupIndex] = valid ? bucket : 0xFFFFFFFFu;
+    GroupMemoryBarrierWithGroupSync();
+
+    // Stable within-block rank: the number of earlier threads (by
+    // SV_GroupIndex, which matches global element order within the block)
+    // carrying the same bucket. LSD radix requires this stability so that the
+    // depth order established by the depth passes survives the tile passes.
+    uint localRank = 0;
+    if (valid) {
+        for (uint j = 0; j < groupIndex; ++j) {
+            localRank += (s_bucket[j] == bucket) ? 1u : 0u;
+        }
+    }
+
+    if (!valid) return;
+
+    uint blockOffset = _BlockHistograms[groupId.x * 256 + bucket];
+    uint globalBucketOffset = _GlobalBucketOffsets[bucket];
+
+    uint destIdx = globalBucketOffset + blockOffset + localRank;
+
+    _DstKeysTile[destIdx] = keyTile;
+    _DstKeysDepth[destIdx] = keyDepth;
+    _DstValues[destIdx] = val;
+}
+
+// -----------------------------------------------------------------------------
+// KERNEL 9: IdentifyTileRanges
+// -----------------------------------------------------------------------------
+
+[numthreads(256, 1, 1)]
+void IdentifyTileRanges(uint id : SV_DispatchThreadID)
+{
+    // The keys are tile-sorted at this point; only the validated prefix of
+    // _TotalKeys[0] entries is meaningful.
+    uint totalElements = _TotalKeys[0];
+    if (id >= totalElements) return;
+
+    uint tileCapacity = _TileGridWidth * _TileGridHeight;
+    uint currTile = _SrcKeysTile[id];
+    if (currTile >= tileCapacity) return;
+
+    if (id == 0) {
+        _TileRanges[currTile].x = 0;
+    } else {
+        uint prevTile = _SrcKeysTile[id - 1];
+        if (currTile != prevTile) {
+            if (prevTile < tileCapacity) {
+                _TileRanges[prevTile].y = id;
+            }
+            _TileRanges[currTile].x = id;
+        }
+    }
+
+    if (id == totalElements - 1) {
+        _TileRanges[currTile].y = totalElements;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// KERNEL 10: TileRasterize (Software Rasterizer & Transmittance Compositor)
+// -----------------------------------------------------------------------------
+
+#define TILE_SIZE 16
+#define BATCH_SIZE 128
+
+groupshared PreprocessedGeom s_geoms[BATCH_SIZE];
+groupshared uint s_primitiveIds[BATCH_SIZE];
+groupshared uint s_numBatches;
+
+// Point-in-triangle barycentric calculation
+bool ComputeBarycentrics(float2 p, float2 a, float2 b, float2 c, out float3 bary)
+{
+    float2 v0 = b - a;
+    float2 v1 = c - a;
+    float2 v2 = p - a;
+
+    float den = v0.x * v1.y - v1.x * v0.y;
+    if (abs(den) < 1e-8) {
+        bary = float3(0, 0, 0);
+        return false;
+    }
+
+    float invDen = 1.0 / den;
+    float u = (v2.x * v1.y - v1.x * v2.y) * invDen;
+    float v = (v0.x * v2.y - v2.x * v0.y) * invDen;
+    float w = 1.0 - u - v;
+
+    bary = float3(w, u, v);
+    return true;
+}
+
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void TileRasterize(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID)
+{
+    uint2 tile = groupId.xy;
+    uint2 pix = tile * TILE_SIZE + groupThreadId.xy;
+    uint threadIdx = groupThreadId.y * TILE_SIZE + groupThreadId.x;
+
+    bool inside = (pix.x < _ScreenWidth && pix.y < _ScreenHeight);
+    bool done = !inside;
+
+    uint tileId = tile.y * _TileGridWidth + tile.x;
+
+    // Thread 0 computes uniform values for the entire tile
+    if (threadIdx == 0) {
+        uint2 range = _TileRanges[tileId];
+        uint totalInTile = (range.y >= range.x) ? (range.y - range.x) : 0;
+        s_numBatches = (totalInTile + BATCH_SIZE - 1) / BATCH_SIZE;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    uint2 range = _TileRanges[tileId];
+    uint totalInTile = (range.y >= range.x) ? (range.y - range.x) : 0;
+
+    float T = 1.0;
+    float3 C = float3(0.0, 0.0, 0.0);
+    float2 pixCenter = float2((float)pix.x + 0.5, (float)pix.y + 0.5);
+    bool isDiffSoup = _RenderMode == 3;
+    float bestDiffSoupDepth = 3.402823466e+38;
+    uint bestDiffSoupPrimitive = 0xffffffffu;
+    float2 bestDiffSoupBary01 = 0.0;
+
+    uint numBatches = s_numBatches;
+
+    for (uint b = 0; b < numBatches; b++) {
+        uint batchStart = range.x + b * BATCH_SIZE;
+        uint batchCount = min((uint)BATCH_SIZE, totalInTile - b * BATCH_SIZE);
+
+        // Cooperative load
+        if (threadIdx < batchCount) {
+            uint primitiveId = _SrcValues[batchStart + threadIdx];
+            s_geoms[threadIdx] = _PreprocessedGeom[primitiveId];
+            s_primitiveIds[threadIdx] = primitiveId;
+        }
+        GroupMemoryBarrierWithGroupSync();
+
+        // Process batch items
+        for (uint j = 0; j < batchCount; j++) {
+            if (done) continue;
+
+            PreprocessedGeom g = s_geoms[j];
+            float3 bary;
+            if (!ComputeBarycentrics(pixCenter, g.p0, g.p1, g.p2, bary)) continue;
+
+            // Outside test
+            if (bary.x < 0.0 || bary.y < 0.0 || bary.z < 0.0) continue;
+
+            float baseAlpha = g.params.x;
+            float sigmaVal = g.params.y;
+            int mode = (int)g.params.w;
+
+            if (mode == 3) {
+                // CUDA's fragment barycentrics are homogeneous/perspective
+                // corrected.  The screen-space barycentrics above must be
+                // divided by clip w before sampling the Rmax lattice.
+                float3 correctedBary = bary / g.clipW;
+                correctedBary /= max(correctedBary.x + correctedBary.y + correctedBary.z, 1e-8);
+                uint primitiveId = s_primitiveIds[j];
+                float latticeAlpha = SampleDiffSoupAlpha(primitiveId, correctedBary.xy);
+                if (latticeAlpha < 0.5) continue;
+
+                float pixelDepth = dot(correctedBary, g.viewDepth);
+                if (pixelDepth < bestDiffSoupDepth) {
+                    bestDiffSoupDepth = pixelDepth;
+                    bestDiffSoupPrimitive = primitiveId;
+                    bestDiffSoupBary01 = correctedBary.xy;
+                }
+                continue;
+            }
+
+            float coverage = 1.0;
+            if (mode == 0 || mode == 1) {
+                // Incenter-normalised soft coverage
+                float phi = min(bary.x / max(g.incenterBary.x, 1e-6),
+                            min(bary.y / max(g.incenterBary.y, 1e-6),
+                                bary.z / max(g.incenterBary.z, 1e-6)));
+                coverage = pow(saturate(phi), max(sigmaVal, 1e-4));
+            } else if (mode == 2) {
+                // 2DTS eccentricity coverage
+                float ecc = 1.0 - 3.0 * min(bary.x, min(bary.y, bary.z));
+                coverage = exp(-0.5 * pow(max(ecc, 0.0), 2.0 * max(sigmaVal, 1e-4)));
+            }
+
+            float alpha = (mode == 3) ? 1.0 : saturate(baseAlpha * coverage);
+            if (alpha < (1.0 / 255.0)) continue;
+
+            // Interpolate color
+            float3 triCol = bary.x * g.color0 + bary.y * g.color1 + bary.z * g.color2;
+
+            // Strict Front-to-Back Transmittance Blending
+            C += alpha * T * triCol;
+            T *= (1.0 - alpha);
+
+            // Early ray termination
+            if (T < 0.0001) {
+                done = true;
+            }
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if (inside && isDiffSoup && bestDiffSoupPrimitive != 0xffffffffu) {
+        float feat[7];
+        SampleDiffSoupFeatures(bestDiffSoupPrimitive, bestDiffSoupBary01, feat);
+        C = EvaluateColorMLP(feat, DiffSoupViewDirection(pix));
+        T = 0.0;
+    }
+
+    if (inside) {
+        // Pure premultiplied front-to-back result.  The evaluation background
+        // is composited once, after readback, by the capture supervisor
+        // (ColmapBatchCapture.CompositePremultipliedBackground) using the
+        // background declared by the asset manifest.
+        _OutputTarget[pix] = float4(C, 1.0 - T);
+    }
+}
