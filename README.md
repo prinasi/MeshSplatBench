@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![arXiv](https://img.shields.io/badge/arXiv-2609.01306-b31b1b.svg)](https://arxiv.org/abs/2609.01306)
 
-**MeshSplatBench** (`tribench`) is a unified, Python-first benchmarking toolkit and evaluation framework for comparing triangle-splatting-style radiance field reconstruction methods, bridging academic novel view synthesis research and real-time industrial game engine deployment (Unity).
+**MeshSplatBench** is a unified, Python-first benchmarking toolkit and evaluation framework for comparing triangle-splatting-style radiance field reconstruction methods, bridging academic novel view synthesis research and real-time industrial game engine deployment (Unity).
 
 ## Overview
 
@@ -437,29 +437,6 @@ outputs/{method}/{dataset}/{scene}/
 └── train_stats.json      # training time / peak GPU memory
 ```
 
-### What changes and why
-
-1. **Checkpoints → `ckpt/`.** Previously each method scattered checkpoints
-   differently (2DTS used `point_cloud/`, `ckpt/`, `glb/`, `mesh_ply/` at the
-   scene root; triangle-/mesh-splatting used `point_cloud/iteration_N/`;
-   DiffSoup dropped a bare `final_params.pt`). All four are redirected under a
-   single `ckpt/` folder. Each method keeps its native internal structure
-   inside `ckpt/`, so adapters and resume logic keep working.
-2. **Renders → `renders/{split}/`.** Rendered images and their ground truth are
-   saved once, split by `train`/`test`, with `renders/` (prediction) and `gt/`
-   (truth) subfolders plus a per-split `manifest.json`/`metrics.json`.
-3. **Metrics reuse renders.** `eval images` no longer re-renders into a separate
-   `test_metrics/` folder. It reads the already-saved `renders/{split}/renders`
-   and `renders/{split}/gt` images (and reuses the per-split manifest timing),
-   then writes only `metrics.json`. No duplicate images are written.
-4. **Exported geometry → `mesh/`.** `mesh.ply`/`fuse_post.ply` and the 2DTS
-   `{N}_pcd.ply` move under `mesh/`.
-5. **Video → `video/`.** Unchanged; already unified.
-6. **Logs → `logs/`.** Pipeline stage logs, native training stdout, tensorboard
-   event files, config dumps, and DiffSoup loss curves are consolidated into a
-   single `logs/` folder. The previous mix of `log/`, `logs/`, root-level
-   `cfg_args`, and tensorboard files at the scene root is removed.
-
 ### Adapter checkpoint paths
 
 The `adapter.checkpoint` template in each method base config points at `ckpt/`:
@@ -470,24 +447,6 @@ The `adapter.checkpoint` template in each method base config points at `ckpt/`:
 | Triangle Splatting | `outputs/{method}/{dataset}/{scene}/ckpt/point_cloud/iteration_{max_steps}` |
 | MeshSplatting      | `outputs/{method}/{dataset}/{scene}/ckpt/point_cloud/iteration_{max_steps}` |
 | DiffSoup           | `outputs/{method}/{dataset}/{scene}/ckpt/final_params.pt`     |
-
-### Implementation checklist
-
-- [x] `configs/base/_base_.yaml`: renders/eval/mesh templates → unified layout.
-- [x] `configs/base/dtu.yaml` + `configs/2dts/dtu/*.yaml`: `mesh/` paths.
-- [x] `configs/base/{2dts,diffsoup,mesh-splatting,triangle-splatting}.yaml`:
-      `adapter.checkpoint` → `ckpt/`.
-- [x] `tribench/core/rendering.py`: `render_dataset_split` writes
-      `renders/{split}/{renders,gt}` + per-split manifest/metrics, plus
-      `compute_metrics_from_render_dir` for metrics without re-rendering.
-- [x] `tribench/cli/render.py`: pass the run dir + split to the renderer.
-- [x] `tribench/cli/eval.py`: compute metrics from saved renders, no re-render,
-      no `test_metrics/`.
-- [x] `tribench/cli/train.py`: redirect every method's checkpoint to `ckpt/`.
-- [x] Vendor trainers (`triangle_splatting`, `mesh_splatting`, `d2ts`): send
-      tensorboard/log output to `logs/` and 2DTS artifacts to `ckpt/`/`mesh/`.
-- [x] `single_train.sh`: update completion markers for the new layout.
-- [x] Tests: update render-layout expectations.
 
 
 ## Project Structure
@@ -509,16 +468,8 @@ MeshSplatBench/
 └── pyproject.toml
 ```
 
-## Development Roadmap
 
-The project is organized into four phases:
-
-1. **Phase 1 -- Foundation**: Core abstractions (cameras, stats, registry), primitive types, and the first adapter (2DTS).
-2. **Phase 2 -- Training & Evaluation**: Unified training loop, loss functions, full metric suite, and dataset loaders.
-3. **Phase 3 -- Remaining Adapters**: Triangle Splatting and MeshSplatting adapter coverage with parity validation, followed by DiffSoup.
-4. **Phase 4 -- Polish & Release**: CLI refinement, experiment configs, documentation, and public release.
-
-### Next Development Steps
+## Next Development Steps
 
 The immediate goal is to keep Triangle Splatting and MeshSplatting as trusted
 reference pipelines before broadening adapter coverage further. This gives the
