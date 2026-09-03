@@ -31,8 +31,8 @@ MeshSplatBench provides a single, consistent evaluation framework for comparing 
 ### Option 1: Conda Environment (Recommended)
 
 ```bash
-git clone https://github.com/your-org/tribench.git
-cd tribench
+git clone https://github.com/prinasi/MeshSplatBench.git
+cd MeshSplatBench
 conda env create -f environment.yml
 conda activate tribench
 ```
@@ -40,8 +40,8 @@ conda activate tribench
 ### Option 2: Pip Install
 
 ```bash
-git clone https://github.com/your-org/tribench.git
-cd tribench
+git clone https://github.com/your-org/MeshSplatBench.git
+cd MeshSplatBench
 pip install -e ".[dev,cuda]"
 ```
 
@@ -103,49 +103,15 @@ bash single_mesh_topology_unity_eval.sh mipnerf360/all 0 --unity "$UNITY" --unit
 
 ## Unity-native Evaluation
 
-TriBench can export method-preserving Unity `.triasset` packages, render Unity
+MeshSplatBench can export method-preserving Unity `.triasset` packages, render Unity
 test-view images for PSNR/SSIM/LPIPS, and profile GPU FPS/memory through a
 Linux standalone Development Player. The workflow is designed for completed
 config-driven runs under `outputs/{method}/{dataset}/{scene}`.
 
-### What must be committed
-
-Commit the source code and documentation needed to reproduce the Unity
-benchmark:
-
-```text
-single_export_unity.sh
-single_unity_eval.sh
-single_mesh_topology_unity_eval.sh
-tribench/unity_assets.py
-tribench/cli/export_unity.py
-tools/export_unity_triasset.py
-tools/validate_unity_triasset_cpu.py
-tools/create_unity_triasset_package.py
-tools/patch_legacy_unity_vulkan.py
-tools/run_unity_triasset_eval.py
-tools/build_unity_profile_player.py
-tools/run_unity_triasset_player_profile.py
-tools/evaluate_deployment_images.py
-tools/format_unity_metrics_report.py
-tools/aggregate_unity_triasset_eval.py
-tools/aggregate_unity_deployment_profile.py
-tools/evaluate_unity_triasset_outputs.py
-tools/unity_triasset_renderer/
-tribench/tests/test_unity_assets*.py
-tribench/tests/test_unity_deployment_cpu.py
-docs/unity_native_assets.md
-```
-
-Do not commit generated data: `outputs/`, `.triasset/` packages, captured Unity
-PNGs, runtime profile JSON/logs, generated Unity Player builds, Unity `Library/`
-or `Temp/`, local datasets, or report CSV/JSON/Markdown files. These are
-covered by `.gitignore`.
-
 ### Unity project setup
 
 Install Unity with Linux standalone build support. Then create or update a
-Unity project from the repository templates:
+Unity project from the repository templates (*e.g.*, export PROJECT=/path/to/MeshSplatBench/unity_native/TriBenchUnity):
 
 ```bash
 python3 tools/create_unity_triasset_package.py --unity-project "$PROJECT"
@@ -528,7 +494,7 @@ The `adapter.checkpoint` template in each method base config points at `ckpt/`:
 
 
 ```
-TriBench/
+MeshSplatBench/
 ├── tribench/
 │   ├── core/           # Cameras, stats, registry, config
 │   ├── primitives/     # Triangle primitive types (independent, mesh, convex)
