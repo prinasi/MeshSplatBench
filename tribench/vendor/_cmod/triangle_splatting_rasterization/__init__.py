@@ -21,12 +21,17 @@
 #
 
 from typing import NamedTuple
-import torch.nn as nn
+
 import torch
+from torch import nn
+
 try:
     from . import _C
-except ImportError:
+except ImportError as exc:
     _C = None
+    _C_IMPORT_ERROR = exc
+else:
+    _C_IMPORT_ERROR = None
 
 def cpu_deep_copy_tuple(input_tuple):
     copied_tensors = [item.cpu().clone() if isinstance(item, torch.Tensor) else item for item in input_tuple]

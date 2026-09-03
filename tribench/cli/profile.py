@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -13,23 +12,32 @@ profile_app = typer.Typer(no_args_is_help=True)
 
 @profile_app.callback(invoke_without_command=True)
 def profile(
-    method: Optional[str] = typer.Option(None, "--method", "-m", help="Method name"),
-    checkpoint: Optional[str] = typer.Option(
+    ctx: typer.Context,
+    method: str | None = typer.Option(None, "--method", "-m", help="Method name"),
+    checkpoint: str | None = typer.Option(
         None,
         "--checkpoint",
         "-c",
         help="Path to model checkpoint",
     ),
-    dataset: Optional[str] = typer.Option(
+    dataset: str | None = typer.Option(
         None,
         "--dataset",
         "-d",
         help="Path to dataset directory",
     ),
-    scene: Optional[str] = typer.Option(None, "--scene", help="Scene name or dataset directory"),
-    config: Optional[Path] = typer.Option(None, "--config", help="TriBench profile config YAML"),
+    scene: str | None = typer.Option(None, "--scene", help="Scene name or dataset directory"),
+    config: Path | None = typer.Option(  # noqa: B008
+        None, "--config", help="TriBench profile config YAML"
+    ),
     split: str = typer.Option("test", "--split", "-s", help="Dataset split"),
     repeats: int = typer.Option(100, "--repeats", "-r", help="Number of profiling repetitions"),
+    warmup: int = typer.Option(5, "--warmup", "-w", help="Number of untimed warmup renders"),
+    backward: bool = typer.Option(
+        False,
+        "--backward/--no-backward",
+        help="Also measure differentiable backward-pass latency",
+    ),
     output: str = typer.Option("profile.json", "--output", "-o", help="Output JSON file path"),
 ):
     """Profile renderer performance.
@@ -55,12 +63,19 @@ def profile(
         method = method or adapter_cfg.get("type") or trainer_cfg.get("type")
         checkpoint = checkpoint or adapter_cfg.get("checkpoint") or output_dir
         dataset = dataset or dataset_cfg.get("root") or dataset_cfg.get("dataset_path")
-        split = str(dataset_cfg.get("split", profile_cfg.get("split", split)))
-        repeats = int(profile_cfg.get("repeats", repeats))
-        if "output" in profile_cfg:
-            output = str(profile_cfg["output"])
-        elif output == "profile.json" and output_dir is not None:
-            output = str(Path(output_dir) / "profile.json")
+        if not _provided_on_command_line(ctx, "split"):
+            split = str(profile_cfg.get("split", dataset_cfg.get("split", split)))
+        if not _provided_on_command_line(ctx, "repeats"):
+            repeats = int(profile_cfg.get("repeats", repeats))
+        if not _provided_on_command_line(ctx, "warmup"):
+            warmup = int(profile_cfg.get("warmup", warmup))
+        if not _provided_on_command_line(ctx, "backward"):
+            backward = bool(profile_cfg.get("backward", backward))
+        if not _provided_on_command_line(ctx, "output"):
+            if "output" in profile_cfg:
+                output = str(profile_cfg["output"])
+            elif output_dir is not None:
+                output = str(Path(output_dir) / "profile.json")
 
     scene_name = _scene_name(scene)
     if scene is not None:
@@ -77,69 +92,80 @@ def profile(
         raise typer.BadParameter("Use --checkpoint, or set adapter.checkpoint in --config.")
     if repeats <= 0:
         raise typer.BadParameter("--repeats must be positive.")
+    if warmup < 0:
+        raise typer.BadParameter("--warmup must be non-negative.")
 
-    from tribench.core.registry import get_adapter
+    adapter_cfg = dict(adapter_cfg) if config is not None else {}
+    adapter_cfg["type"] = method
+    adapter_cfg["checkpoint"] = checkpoint
+    resolved_dataset_cfg = dict(dataset_cfg)
+    resolved_dataset_cfg["root"] = dataset
+    resolved_dataset_cfg["split"] = split
+
+    from tribench.core.builder import build_adapter, build_dataset
 
     typer.echo(f"Profiling method: {method}")
     typer.echo(f"Checkpoint: {checkpoint}")
     typer.echo(f"Dataset: {dataset} (split: {split})")
-    typer.echo(f"Repeats: {repeats}")
+    typer.echo(f"Repeats: {repeats} (warmup: {warmup})")
+    typer.echo(f"Backward: {'enabled' if backward else 'disabled'}")
 
     try:
-        adapter_cls = get_adapter(method)
-    except KeyError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
-
-    adapter = adapter_cls()
-
-    try:
-        adapter.load_checkpoint(checkpoint)
-        adapter.load_scene(dataset, split)
-    except (FileNotFoundError, NotImplementedError) as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
-
-    if config is not None:
-        from tribench.core.builder import build_dataset
-
-        resolved_dataset_cfg = dict(dataset_cfg)
-        resolved_dataset_cfg["root"] = dataset
-        resolved_dataset_cfg["split"] = split
+        adapter = build_adapter(adapter_cfg)
         profile_dataset = build_dataset(resolved_dataset_cfg)
-    else:
-        from tribench.core.datasets import load_dataset
+    except (FileNotFoundError, ImportError, KeyError, NotImplementedError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
-        profile_dataset = load_dataset(dataset, split=split)
     if len(profile_dataset) == 0:
         raise typer.BadParameter(f"Dataset split {split!r} contains no cameras.")
-    camera = profile_dataset.sample(0).camera.to(adapter.device)
+    sample = profile_dataset.sample(0)
+    camera = sample.camera.to(adapter.device)
 
-    from tribench.core.profiler import measure_peak_memory, profile_forward
+    from tribench.core.profiler import profile_renderer
 
-    forward = profile_forward(adapter, camera, repeats=repeats)
-    memory = measure_peak_memory(lambda: adapter.render(camera, mode="eval"))
     result = {
         "method": method,
         "checkpoint": checkpoint,
         "dataset": dataset,
         "split": split,
         "repeats": repeats,
+        "warmup": warmup,
         "status": "complete",
         "device": str(adapter.device),
-        "camera_name": profile_dataset.sample(0).name,
-        "forward": forward,
-        "memory": memory,
+        "camera_name": sample.name,
     }
+    result.update(
+        profile_renderer(
+            adapter,
+            camera,
+            repeats=repeats,
+            warmup=warmup,
+            include_backward=backward,
+        )
+    )
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, indent=2))
 
     typer.echo(f"Profile saved to {output_path}")
     typer.echo(
-        f"Forward: mean={forward['mean_ms']:.3f} ms, "
-        f"p50={forward['p50_ms']:.3f} ms, p95={forward['p95_ms']:.3f} ms"
+        f"Forward: mean={result['forward_latency_ms']:.3f} ms, "
+        f"p50={result['forward']['p50_ms']:.3f} ms, "
+        f"p95={result['forward']['p95_ms']:.3f} ms, fps={result['fps']:.2f}"
     )
+    typer.echo(
+        f"Peak CUDA memory: {result['peak_cuda_memory_gb']:.3f} GB; "
+        f"primitives: {result['primitive_count']}; "
+        f"checkpoint: {result['checkpoint_size_mb']} MB"
+    )
+    if backward:
+        typer.echo(f"Backward: mean={result['backward_latency_ms']:.3f} ms")
+
+
+def _provided_on_command_line(ctx: typer.Context, name: str) -> bool:
+    source = ctx.get_parameter_source(name)
+    return source is not None and source.name == "COMMANDLINE"
 
 
 def _scene_name(scene: str | None) -> str | None:

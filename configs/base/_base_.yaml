@@ -50,6 +50,8 @@ metrics:
 profile:
   split: test
   repeats: 100
+  warmup: 5
+  backward: false
   output: outputs/{method}/{dataset}/{scene}/profile.json
 
 mesh:

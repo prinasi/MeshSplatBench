@@ -22,8 +22,8 @@ MeshSplatBench provides a single, consistent evaluation framework for comparing 
 | Method                       | Adapter                    | Status                                   |
 | ---------------------------- | -------------------------- | ---------------------------------------- |
 | 2D Triangle Splatting (2DTS) | `D2TSAdapter`              | Config/train/render/eval/export support  |
-| Triangle Splatting           | `TriangleSplattingAdapter` | Config/train/render/eval/export support  |
-| MeshSplatting                | `MeshSplattingAdapter`     | Config/train/render/eval/export support  |
+| Triangle Splatting           | `TriangleSplattingAdapter` | Config/train/render/eval/profile/export support |
+| MeshSplatting                | `MeshSplattingAdapter`     | Config/train/render/eval/profile/export support |
 | DiffSoup                     | `DiffSoupAdapter`          | Config/train/render/eval/export support; In-shader Micro-MLP support |
 
 ## Installation
@@ -100,6 +100,128 @@ bash single_unity_eval.sh 2dts mipnerf360/bicycle 0 --unity "$UNITY" --unity-pro
 # MeshSplatting topology ablation: shared mesh, shader-level soup, materialized soup
 bash single_mesh_topology_unity_eval.sh mipnerf360/all 0 --unity "$UNITY" --unity-project "$PROJECT"
 ```
+
+## Profiling
+
+`tribench profile` measures the rendering performance of a trained checkpoint
+and writes a versioned JSON report. It reuses the same config resolution as
+train/render/eval, so a completed run can be profiled with the same config:
+
+```bash
+tribench profile --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+```
+
+The defaults in `configs/base/_base_.yaml` write the report to
+`outputs/{method}/{dataset}/{scene}/profile.json` and measure the `test` split
+with 100 timed repeats after 5 untimed warmup renders.
+
+### Measured metrics
+
+| Metric | Top-level key | Notes |
+| ------ | ------------- | ----- |
+| Forward latency | `forward_latency_ms` | Mean of the timed eval renders |
+| FPS | `fps` | `1000 / forward_latency_ms` |
+| Peak CUDA memory | `peak_cuda_memory_gb` | Peak device allocation during one eval render |
+| Primitive count | `primitive_count` | Triangles/faces/primitives in the checkpoint |
+| Checkpoint size | `checkpoint_size_mb` | On-disk state-dict size |
+| Backward latency | `backward_latency_ms` | Mean train-mode backward time; opt-in |
+
+The `forward` object (and `backward`, when enabled) carries the full timing
+summary (`mean_ms`, `std_ms`, `p50_ms`, `p95_ms`, `min_ms`, `max_ms`, `fps`),
+and `memory` reports both allocated and reserved peaks. Timings use CUDA events
+when the adapter runs on a CUDA device and wall-clock time otherwise. The
+report shape is versioned under `schema_version`.
+
+### Options and config keys
+
+Explicit command-line flags override the config; otherwise the `profile:`
+block from `--config` is used:
+
+```yaml
+profile:
+  split: test
+  repeats: 100
+  warmup: 5
+  backward: false
+  output: outputs/{method}/{dataset}/{scene}/profile.json
+```
+
+| Flag | Description |
+| ---- | ----------- |
+| `--method/-m`, `--checkpoint/-c`, `--dataset/-d` | Override adapter method, checkpoint path, or dataset root |
+| `--scene` | Scene name; resolves `{scene}` path templates |
+| `--split/-s` | Dataset split (train/test/all) |
+| `--repeats/-r` | Number of timed repetitions |
+| `--warmup/-w` | Number of untimed warmup renders |
+| `--backward/--no-backward` | Also measure backward-pass latency |
+| `--output/-o` | JSON report path |
+
+Fast smoke run on the same config:
+
+```bash
+tribench profile \
+  --config configs/triangle-splatting/mipnerf360/bicycle.yaml \
+  --repeats 3 \
+  --warmup 1 \
+  --backward \
+  --output /tmp/bicycle-profile.json
+```
+
+### Example report
+
+Triangle Splatting `bicycle` (4.89 M triangles, RTX 4090):
+
+```json
+{
+  "schema_version": 1,
+  "method": "triangle-splatting",
+  "dataset": "data/mipnerf360/bicycle",
+  "split": "test",
+  "device": "cuda:0",
+  "camera_name": "_DSC8679",
+  "repeats": 100,
+  "warmup": 5,
+  "status": "complete",
+  "forward_latency_ms": 14.847,
+  "fps": 67.35,
+  "peak_cuda_memory_gb": 3.399,
+  "primitive_count": 4888414,
+  "checkpoint_size_mb": 1100.22,
+  "forward": {
+    "mean_ms": 14.847,
+    "std_ms": 0.151,
+    "p50_ms": 14.850,
+    "p95_ms": 15.037,
+    "min_ms": 14.557,
+    "max_ms": 15.632,
+    "fps": 67.35
+  },
+  "memory": {
+    "peak_memory_allocated_gb": 3.399,
+    "peak_memory_reserved_gb": 3.697
+  }
+}
+```
+
+Running with `--backward` adds a `backward` summary with the same shape plus
+`backward_latency_ms` (about 27.7 ms for this scene).
+
+### CUDA extension rebuilds
+
+Native rasterization requires the bundled CUDA extensions. Rebuild them
+whenever the active PyTorch/CUDA environment changes; an ABI mismatch surfaces
+as an extension import error when the adapter loads:
+
+```bash
+conda activate tribench
+TRIBENCH_BUILD_CUDA=1 \
+  TRIBENCH_CUDA_BACKENDS=triangle-splatting,simple-knn \
+  python setup.py build_ext --inplace --force
+```
+
+Set `TRIBENCH_CUDA_BACKENDS` to the backends you need and `TRIBENCH_CUDA_ARCHS`
+to your GPU architecture (default `89`); set `TRIBENCH_SKIP_CUDA=1` to skip
+extension builds entirely.
 
 ## Unity-native Evaluation
 
@@ -434,6 +556,8 @@ outputs/{method}/{dataset}/{scene}/
 ├── config.yaml           # resolved config snapshot
 ├── metrics.json          # aggregated image metrics (test split)
 ├── mesh_metrics.json     # DTU/mesh geometry metrics
+├── profile.json          # renderer profiling report (tribench profile)
+├── stats.json            # model statistics (tribench inspect)
 └── train_stats.json      # training time / peak GPU memory
 ```
 
@@ -455,7 +579,7 @@ The `adapter.checkpoint` template in each method base config points at `ckpt/`:
 ```
 MeshSplatBench/
 ├── tribench/
-│   ├── core/           # Cameras, stats, registry, config
+│   ├── core/           # Cameras, stats, profiling, registry, config
 │   ├── primitives/     # Triangle primitive types (independent, mesh, convex)
 │   ├── renderers/      # Adapter wrappers for each method
 │   ├── trainers/       # Training loop, losses, hooks
@@ -468,18 +592,6 @@ MeshSplatBench/
 └── pyproject.toml
 ```
 
-
-## Next Development Steps
-
-The immediate goal is to keep Triangle Splatting and MeshSplatting as trusted
-reference pipelines before broadening adapter coverage further. This gives the
-remaining methods a concrete standard for training, rendering, evaluation,
-profiling, and configuration behavior.
-
-1. **Make profiling functional**
-   - Extend `tribench profile --config ...` beyond metadata output.
-   - Report forward latency, FPS, peak CUDA memory, primitive count, checkpoint size, and optional backward latency.
-   - Start with Triangle Splatting, then reuse the same profile schema for other adapters.
 
 ## Citation
 

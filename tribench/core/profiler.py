@@ -3,18 +3,38 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import torch
 
-
-def _cuda_sync() -> None:
-    """Synchronize CUDA if available."""
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
+PROFILE_SCHEMA_VERSION = 1
 
 
-def _time_fn(fn: Callable, repeats: int, warmup: int = 5) -> list[float]:
+def _cuda_device(device: str | torch.device | None = None) -> torch.device | None:
+    """Return the CUDA device used for a measurement, if any."""
+    if device is None:
+        return torch.device("cuda") if torch.cuda.is_available() else None
+    resolved = torch.device(device)
+    if resolved.type != "cuda" or not torch.cuda.is_available():
+        return None
+    return resolved
+
+
+def _cuda_sync(device: str | torch.device | None = None) -> None:
+    """Synchronize the selected CUDA device, if any."""
+    cuda_device = _cuda_device(device)
+    if cuda_device is not None:
+        torch.cuda.synchronize(cuda_device)
+
+
+def _time_fn(
+    fn: Callable,
+    repeats: int,
+    warmup: int = 5,
+    *,
+    device: str | torch.device | None = None,
+) -> list[float]:
     """Time a function call using CUDA events when available.
     
     Args:
@@ -25,28 +45,31 @@ def _time_fn(fn: Callable, repeats: int, warmup: int = 5) -> list[float]:
     Returns:
         List of elapsed times in milliseconds.
     """
-    # Warmup
+    if repeats <= 0:
+        raise ValueError("repeats must be positive")
+    if warmup < 0:
+        raise ValueError("warmup must be non-negative")
+
+    cuda_device = _cuda_device(device)
     for _ in range(warmup):
         fn()
-        _cuda_sync()
+        _cuda_sync(cuda_device)
 
     timings = []
-    use_cuda = torch.cuda.is_available()
 
     for _ in range(repeats):
-        if use_cuda:
-            start_event = torch.cuda.Event(enable_timing=True)
-            end_event = torch.cuda.Event(enable_timing=True)
-            start_event.record()
-            fn()
-            end_event.record()
-            torch.cuda.synchronize()
-            timings.append(start_event.elapsed_time(end_event))
+        if cuda_device is not None:
+            with torch.cuda.device(cuda_device):
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+                start_event.record()
+                fn()
+                end_event.record()
+                torch.cuda.synchronize(cuda_device)
+                timings.append(start_event.elapsed_time(end_event))
         else:
-            _cuda_sync()
             t0 = time.perf_counter()
             fn()
-            _cuda_sync()
             t1 = time.perf_counter()
             timings.append((t1 - t0) * 1000.0)
 
@@ -99,8 +122,37 @@ def profile_forward(
         with torch.no_grad():
             renderer.render(cameras, mode="eval")
 
-    timings = _time_fn(forward_fn, repeats, warmup)
+    timings = _time_fn(forward_fn, repeats, warmup, device=renderer.device)
     return _summarize_timings(timings)
+
+
+def _zero_grad(renderer: Any) -> None:
+    model = getattr(renderer, "_model", None)
+    optimizer = getattr(model, "optimizer", None)
+    if optimizer is not None:
+        optimizer.zero_grad(set_to_none=True)
+    elif isinstance(model, torch.nn.Module):
+        model.zero_grad(set_to_none=True)
+
+
+def _timed_call(
+    fn: Callable[[], Any],
+    device: str | torch.device | None,
+) -> tuple[Any, float]:
+    cuda_device = _cuda_device(device)
+    if cuda_device is not None:
+        with torch.cuda.device(cuda_device):
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+            start_event.record()
+            result = fn()
+            end_event.record()
+            torch.cuda.synchronize(cuda_device)
+            return result, float(start_event.elapsed_time(end_event))
+
+    t0 = time.perf_counter()
+    result = fn()
+    return result, (time.perf_counter() - t0) * 1000.0
 
 
 def profile_forward_backward(
@@ -121,36 +173,56 @@ def profile_forward_backward(
         Dictionary with 'forward', 'backward', and 'total' timing summaries.
     """
 
-    def forward_fn():
-        output = renderer.render(cameras, mode="train")
-        loss = output.rgb.mean()
-        return loss
+    if repeats <= 0:
+        raise ValueError("repeats must be positive")
+    if warmup < 0:
+        raise ValueError("warmup must be non-negative")
 
-    # Profile forward only
-    forward_timings = _time_fn(lambda: forward_fn(), repeats, warmup)
+    forward_timings: list[float] = []
+    backward_timings: list[float] = []
+    for index in range(warmup + repeats):
+        _zero_grad(renderer)
 
-    # Profile forward + backward
-    def forward_backward_fn():
-        loss = forward_fn()
-        loss.backward()
+        def forward_fn():
+            output = renderer.render(cameras, mode="train")
+            loss = output.rgb.mean()
+            if not loss.requires_grad:
+                raise RuntimeError(
+                    f"{renderer.__class__.__name__} does not expose a differentiable train render."
+                )
+            return loss
 
-    fb_timings = _time_fn(forward_backward_fn, repeats, warmup)
+        loss, forward_ms = _timed_call(forward_fn, renderer.device)
+        _, backward_ms = _timed_call(loss.backward, renderer.device)
+        _zero_grad(renderer)
+        if index >= warmup:
+            forward_timings.append(forward_ms)
+            backward_timings.append(backward_ms)
 
-    # Compute backward = (forward+backward) - forward
-    forward_summary = _summarize_timings(forward_timings)
-    fb_summary = _summarize_timings(fb_timings)
-
-    backward_timings = [fb - f for fb, f in zip(fb_timings, forward_timings)]
-    backward_summary = _summarize_timings(backward_timings)
+    total_timings = [fwd + bwd for fwd, bwd in zip(forward_timings, backward_timings)]
 
     return {
-        "forward": forward_summary,
-        "backward": backward_summary,
-        "total": fb_summary,
+        "forward": _summarize_timings(forward_timings),
+        "backward": _summarize_timings(backward_timings),
+        "total": _summarize_timings(total_timings),
     }
 
 
-def measure_peak_memory(fn: Callable) -> dict[str, float]:
+def profile_backward(
+    renderer: Any,
+    cameras: Any,
+    repeats: int = 100,
+    warmup: int = 5,
+) -> dict[str, float]:
+    """Profile only the backward portion of differentiable train renders."""
+    return profile_forward_backward(renderer, cameras, repeats, warmup)["backward"]
+
+
+def measure_peak_memory(
+    fn: Callable,
+    *,
+    device: str | torch.device | None = None,
+) -> dict[str, float | str]:
     """Measure peak CUDA memory usage of a function.
     
     Args:
@@ -159,23 +231,60 @@ def measure_peak_memory(fn: Callable) -> dict[str, float]:
     Returns:
         Dictionary with peak_memory_allocated_gb, peak_memory_reserved_gb.
     """
-    if not torch.cuda.is_available():
+    cuda_device = _cuda_device(device)
+    if cuda_device is None:
+        note = "CUDA not available" if not torch.cuda.is_available() else "Renderer device is not CUDA"
         return {
             "peak_memory_allocated_gb": 0.0,
             "peak_memory_reserved_gb": 0.0,
-            "note": "CUDA not available",
+            "note": note,
         }
 
-    torch.cuda.reset_peak_memory_stats()
-    torch.cuda.empty_cache()
+    with torch.cuda.device(cuda_device):
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize(cuda_device)
+        torch.cuda.reset_peak_memory_stats(cuda_device)
 
-    fn()
-    _cuda_sync()
+        fn()
+        torch.cuda.synchronize(cuda_device)
 
-    peak_allocated = torch.cuda.max_memory_allocated() / (1024**3)
-    peak_reserved = torch.cuda.max_memory_reserved() / (1024**3)
+        peak_allocated = torch.cuda.max_memory_allocated(cuda_device) / (1024**3)
+        peak_reserved = torch.cuda.max_memory_reserved(cuda_device) / (1024**3)
 
     return {
-        "peak_memory_allocated_gb": peak_allocated,
-        "peak_memory_reserved_gb": peak_reserved,
+        "peak_memory_allocated_gb": float(peak_allocated),
+        "peak_memory_reserved_gb": float(peak_reserved),
     }
+
+
+def profile_renderer(
+    renderer: Any,
+    cameras: Any,
+    *,
+    repeats: int = 100,
+    warmup: int = 5,
+    include_backward: bool = False,
+) -> dict[str, Any]:
+    """Collect the adapter-independent TriBench renderer profile schema."""
+    forward = profile_forward(renderer, cameras, repeats=repeats, warmup=warmup)
+    def memory_fn():
+        with torch.no_grad():
+            renderer.render(cameras, mode="eval")
+
+    memory = measure_peak_memory(memory_fn, device=renderer.device)
+    metadata = renderer.profile_metadata()
+    result: dict[str, Any] = {
+        "schema_version": PROFILE_SCHEMA_VERSION,
+        "forward_latency_ms": forward["mean_ms"],
+        "fps": forward["fps"],
+        "peak_cuda_memory_gb": memory["peak_memory_allocated_gb"],
+        "primitive_count": metadata.get("primitive_count"),
+        "checkpoint_size_mb": metadata.get("checkpoint_size_mb"),
+        "forward": forward,
+        "memory": memory,
+    }
+    if include_backward:
+        backward = profile_backward(renderer, cameras, repeats=repeats, warmup=warmup)
+        result["backward_latency_ms"] = backward["mean_ms"]
+        result["backward"] = backward
+    return result

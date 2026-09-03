@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 
 from tribench.core.cameras import CameraBatch
 from tribench.core.registry import register
@@ -104,16 +104,30 @@ class TriangleSplattingAdapter(RendererAdapter):
             return
 
         try:
+            from tribench.vendor._cmod.triangle_splatting_rasterization import (
+                _C as rasterizer_extension,
+            )
+            from tribench.vendor._cmod.triangle_splatting_rasterization import (
+                _C_IMPORT_ERROR as rasterizer_import_error,
+            )
             from tribench.vendor.triangle_splatting.scene.triangle_model import TriangleModel
             from tribench.vendor.triangle_splatting.triangle_renderer import render as ts_render
             from tribench.vendor.triangle_splatting.utils.graphics_utils import (
                 getProjectionMatrix,
                 getWorld2View2,
             )
+            if rasterizer_extension is None:
+                raise ImportError(
+                    "Triangle Splatting CUDA extension failed to load. Rebuild it in the active "
+                    "environment with `TRIBENCH_BUILD_CUDA=1 "
+                    "TRIBENCH_CUDA_BACKENDS=triangle-splatting,simple-knn "
+                    "python setup.py build_ext --inplace --force`. "
+                    f"Original error: {rasterizer_import_error}"
+                )
         except ImportError as exc:
             raise ImportError(
-                "Cannot import bundled triangle-splatting renderer. Reinstall "
-                "TriBench with its bundled CUDA extensions built."
+                "Cannot import bundled triangle-splatting renderer. Rebuild TriBench's bundled "
+                f"CUDA extensions for the active PyTorch environment. Details: {exc}"
             ) from exc
 
         self._TriangleModel = TriangleModel
@@ -509,6 +523,18 @@ class TriangleSplattingAdapter(RendererAdapter):
             },
         }
         return stats
+
+    def profile_metadata(self) -> dict[str, int | float]:
+        """Return profiling metadata without copying the full model to CPU."""
+        if self._model is None:
+            raise RuntimeError("No model loaded. Call load_checkpoint() first.")
+        checkpoint_size_mb = 0.0
+        if self._checkpoint_path and os.path.exists(self._checkpoint_path):
+            checkpoint_size_mb = os.path.getsize(self._checkpoint_path) / (1024 * 1024)
+        return {
+            "primitive_count": int(self._model._triangles_points.shape[0]),
+            "checkpoint_size_mb": round(checkpoint_size_mb, 2),
+        }
 
     # ---- Rendering ----
 

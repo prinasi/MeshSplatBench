@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -86,6 +86,18 @@ class RendererAdapter(ABC):
             Dictionary with generic and method-specific statistics.
         """
         ...
+
+    def profile_metadata(self) -> dict[str, int | float | None]:
+        """Return the model fields included in every profiling result."""
+        stats = self.model_stats()
+        primitive_count = stats.get("primitive_count")
+        checkpoint_size_mb = stats.get("checkpoint_size_mb")
+        return {
+            "primitive_count": int(primitive_count) if primitive_count is not None else None,
+            "checkpoint_size_mb": (
+                float(checkpoint_size_mb) if checkpoint_size_mb is not None else None
+            ),
+        }
 
     @abstractmethod
     def render(self, cameras: CameraBatch, *, mode: str = "eval") -> RenderOutput:
