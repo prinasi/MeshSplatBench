@@ -8,6 +8,8 @@ import torch
 
 from tribench.primitives.base import BasePrimitive
 
+_SH_C0 = 0.28209479177387814
+
 
 class IndexedMeshTriangle(BasePrimitive):
     """Indexed mesh with shared vertices (MeshSplatting-style).
@@ -22,6 +24,8 @@ class IndexedMeshTriangle(BasePrimitive):
         vertex_weights: Per-vertex weights, shape [V] or [V, D].
         opacity: Per-face opacity, shape [F].
         sigma: Global or per-face sigma parameter.
+        sh_coeffs: Optional flattened per-vertex SH coefficients,
+            shape [V, C] where C = (degree + 1)^2 * 3.
     """
 
     def __init__(
@@ -31,6 +35,7 @@ class IndexedMeshTriangle(BasePrimitive):
         vertex_weights: torch.Tensor | None = None,
         opacity: torch.Tensor | None = None,
         sigma: float | torch.Tensor = 1.0,
+        sh_coeffs: torch.Tensor | None = None,
     ):
         """Initialize indexed mesh triangles.
         
@@ -40,6 +45,7 @@ class IndexedMeshTriangle(BasePrimitive):
             vertex_weights: Per-vertex weights for MeshSplatting, shape [V] or [V, D].
             opacity: Per-face opacity, shape [F]. Defaults to ones.
             sigma: Global sigma or per-face sigma tensor.
+            sh_coeffs: Flattened per-vertex SH coefficients, shape [V, C].
         """
         assert vertices.dim() == 2 and vertices.shape[1] == 3, (
             f"Expected vertices shape [V, 3], got {vertices.shape}"
@@ -47,11 +53,16 @@ class IndexedMeshTriangle(BasePrimitive):
         assert faces.dim() == 2 and faces.shape[1] == 3, (
             f"Expected faces shape [F, 3], got {faces.shape}"
         )
+        if sh_coeffs is not None:
+            assert sh_coeffs.shape[0] == vertices.shape[0], (
+                "sh_coeffs must have one row per vertex"
+            )
         self.vertices = vertices
         self.faces = faces
         self.vertex_weights = vertex_weights
         self.opacity = opacity if opacity is not None else torch.ones(faces.shape[0], device=vertices.device)
         self.sigma = sigma
+        self.sh_coeffs = sh_coeffs
 
     @property
     def num_primitives(self) -> int:
@@ -104,10 +115,21 @@ class IndexedMeshTriangle(BasePrimitive):
             vertex_weights=self.vertex_weights.to(device) if self.vertex_weights is not None else None,
             opacity=self.opacity.to(device),
             sigma=sigma,
+            sh_coeffs=self.sh_coeffs.to(device) if self.sh_coeffs is not None else None,
         )
 
     def get_opacity(self) -> torch.Tensor:
         return self.opacity
+
+    def get_colors(self) -> torch.Tensor | None:
+        """Return per-vertex display colors in [0, 1], shape [V, 3].
+
+        Colors are baked from the SH DC component: ``0.5 + C0 * dc``.
+        """
+        if self.sh_coeffs is not None and self.sh_coeffs.shape[-1] >= 3:
+            dc = self.sh_coeffs[:, :3]
+            return (dc * _SH_C0 + 0.5).clamp(0, 1)
+        return None
 
     def extra_stats(self) -> dict[str, Any]:
         stats: dict[str, Any] = {}

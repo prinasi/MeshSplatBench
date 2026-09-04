@@ -8,7 +8,10 @@ import torch
 from tribench.renderers.base import RendererAdapter, RenderOutput
 from tribench.renderers.d2ts_adapter import D2TSAdapter
 from tribench.renderers.triangle_splatting_adapter import TriangleSplattingAdapter
-from tribench.renderers.mesh_splatting_adapter import MeshSplattingAdapter
+from tribench.renderers.mesh_splatting_adapter import (
+    MeshSplattingAdapter,
+    load_mesh_splatting_primitive_checkpoint,
+)
 from tribench.renderers.diffsoup_adapter import DiffSoupAdapter
 
 
@@ -186,6 +189,32 @@ class TestMeshSplattingAdapter:
 
         assert adapter._background_color == [1.0, 1.0, 1.0]
         assert adapter._background_color_override == [1.0, 1.0, 1.0]
+
+    def test_cpu_primitive_checkpoint_loader_preserves_topology_and_dc(self, tmp_path):
+        vertices = torch.tensor([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ])
+        faces = torch.tensor([[0, 1, 2]], dtype=torch.int32)
+        state = {
+            "triangles_points": vertices,
+            "_triangle_indices": faces,
+            "vertex_weight": torch.zeros(3, 1),
+            "opacity_floor": 0.2,
+            "sigma": 0.0,
+            "features_dc": torch.zeros(3, 1, 3),
+            "features_rest": torch.zeros(3, 15, 3),
+        }
+        torch.save(state, tmp_path / "point_cloud_state_dict.pt")
+
+        primitive = load_mesh_splatting_primitive_checkpoint(tmp_path)
+
+        assert primitive.vertices.device.type == "cpu"
+        torch.testing.assert_close(primitive.vertices, vertices)
+        torch.testing.assert_close(primitive.faces, faces.long())
+        torch.testing.assert_close(primitive.get_colors(), torch.full((3, 3), 0.5))
+        torch.testing.assert_close(primitive.get_opacity(), torch.tensor([0.6]))
 
 
 class TestDiffSoupAdapter:

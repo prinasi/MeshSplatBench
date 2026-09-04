@@ -20,6 +20,74 @@ from tribench.renderers.backends import get_backend
 from tribench.renderers.base import RendererAdapter, RenderOutput
 
 
+def load_mesh_splatting_primitive_checkpoint(path: str | Path):
+    """Load exportable MeshSplatting geometry directly on the CPU.
+
+    Offline PLY export only needs checkpoint tensors, not the CUDA renderer.
+    Keeping this path independent from ``TriangleModel.load_parameters`` also
+    avoids duplicating the full higher-order SH tensor on the GPU.
+    """
+    from tribench.primitives.mesh_triangle import IndexedMeshTriangle
+    from tribench.unity_assets import _mesh_splatting_opacity_floor
+
+    checkpoint = Path(path).expanduser()
+    state_path = checkpoint if checkpoint.is_file() else checkpoint / "point_cloud_state_dict.pt"
+    if not state_path.is_file():
+        raise FileNotFoundError(f"Checkpoint not found: {state_path}")
+
+    state = torch.load(str(state_path), map_location="cpu", weights_only=False)
+    if not isinstance(state, dict):
+        raise ValueError(f"MeshSplatting checkpoint must contain a state dict: {state_path}")
+    required = ("triangles_points", "_triangle_indices", "features_dc")
+    missing = [key for key in required if key not in state]
+    if missing:
+        raise ValueError(
+            f"MeshSplatting checkpoint is missing required tensors: {', '.join(missing)}"
+        )
+
+    vertices = torch.as_tensor(state["triangles_points"], dtype=torch.float32).detach()
+    faces = torch.as_tensor(state["_triangle_indices"], dtype=torch.long).detach()
+    sh_dc = torch.as_tensor(state["features_dc"], dtype=torch.float32).detach()
+    if vertices.dim() != 2 or vertices.shape[1] != 3:
+        raise ValueError(f"Expected MeshSplatting vertices [V, 3], got {tuple(vertices.shape)}")
+    if faces.dim() != 2 or faces.shape[1] != 3:
+        raise ValueError(f"Expected MeshSplatting faces [F, 3], got {tuple(faces.shape)}")
+    if sh_dc.numel() != vertices.shape[0] * 3:
+        raise ValueError(
+            "Expected one RGB SH-DC coefficient per MeshSplatting vertex, "
+            f"got {tuple(sh_dc.shape)} for {vertices.shape[0]} vertices"
+        )
+    sh_dc = sh_dc.reshape(vertices.shape[0], 3)
+
+    vertex_weight = state.get("vertex_weight")
+    face_opacity = None
+    activated_weight = None
+    if vertex_weight is not None:
+        logits = torch.as_tensor(vertex_weight, dtype=torch.float32).reshape(-1).detach()
+        if logits.shape[0] != vertices.shape[0]:
+            raise ValueError(
+                "Expected one MeshSplatting vertex weight per vertex, "
+                f"got {logits.shape[0]} for {vertices.shape[0]} vertices"
+            )
+        opacity_floor, _ = _mesh_splatting_opacity_floor(
+            state, state_path, override=None
+        )
+        activated_weight = opacity_floor + (1.0 - opacity_floor) * torch.sigmoid(logits)
+        face_opacity = activated_weight[faces].amin(dim=1)
+
+    sigma_logits = state.get("sigma", 0.0)
+    sigma_value = torch.as_tensor(sigma_logits).reshape(-1)
+    sigma = float(torch.exp(sigma_value[0]).item()) if sigma_value.numel() else 1.0
+    return IndexedMeshTriangle(
+        vertices=vertices,
+        faces=faces,
+        vertex_weights=activated_weight,
+        opacity=face_opacity,
+        sigma=sigma,
+        sh_coeffs=sh_dc,
+    )
+
+
 @register("mesh-splatting")
 class MeshSplattingAdapter(RendererAdapter):
     """Renderer adapter for MeshSplatting.
@@ -482,7 +550,12 @@ class MeshSplattingAdapter(RendererAdapter):
         vertices = model.get_vertices.detach().clone()
         faces = model.get_triangle_indices.detach().clone().long()
         vertex_weight = model.get_vertex_weight.detach().clone().squeeze()
-        face_opacity = vertex_weight[faces].mean(dim=1)
+        face_opacity = vertex_weight[faces].amin(dim=1)
+        # PLY vertex colors are view-independent, so retain only the trained
+        # SH DC term.  Avoid materializing model.get_features here: bicycle's
+        # full degree-3 tensor is roughly 570 MiB and is unnecessary for a
+        # static vertex-color bake.
+        sh_coeffs = model._features_dc.detach().reshape(vertices.shape[0], 3).clone()
 
         return IndexedMeshTriangle(
             vertices=vertices,
@@ -490,4 +563,5 @@ class MeshSplattingAdapter(RendererAdapter):
             vertex_weights=vertex_weight,
             opacity=face_opacity,
             sigma=model.get_sigma,
+            sh_coeffs=sh_coeffs,
         )

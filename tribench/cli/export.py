@@ -44,35 +44,41 @@ def point_cloud(
         None,
         "--output",
         "-o",
-        help="Output vertex-only PLY path (default: <config output.dir>/mesh.ply)",
+        help=(
+            "Output PLY path. Indexed primitives preserve their mesh faces; "
+            "other primitives are surface-sampled (default: <config output.dir>/mesh.ply)"
+        ),
     ),
     num_points: int = typer.Option(
         DEFAULT_NUM_POINTS,
         "--num-points",
-        help="Number of surface points to sample before optional downsampling",
+        help="Number of surface points for non-indexed primitives",
     ),
     color_mode: str = typer.Option(
         DEFAULT_COLOR_MODE,
         "--color-mode",
-        help="Point color mode: dc, opacity, or white",
+        help="Vertex/point color mode: dc, opacity, or white",
     ),
     normal_mode: str = typer.Option(
         DEFAULT_NORMAL_MODE,
         "--normal-mode",
-        help="Point normal mode: none or primitive",
+        help="Vertex/point normal mode: none or primitive",
     ),
     voxel_size: float = typer.Option(
         DEFAULT_VOXEL_SIZE,
         "--voxel-size",
-        help="Voxel size for optional downsampling; 0 disables downsampling",
+        help="Voxel size for optional point-cloud downsampling; 0 disables downsampling",
     ),
-    seed: Optional[int] = typer.Option(None, "--seed", help="Random seed for sampling"),
+    seed: Optional[int] = typer.Option(
+        None, "--seed", help="Random seed for non-indexed primitive sampling"
+    ),
 ):
-    """Export a standard point-only PLY sampled from adapter primitives."""
+    """Export a colored PLY, preserving indexed mesh topology when available."""
     import torch
 
     from tribench.core.builder import build_adapter
-    from tribench.core.viewer_geometry import export_point_cloud_ply
+    from tribench.core.viewer_geometry import export_indexed_mesh_ply, export_point_cloud_ply
+    from tribench.primitives.mesh_triangle import IndexedMeshTriangle
 
     if config is not None:
         cfg = load_cli_config(config)
@@ -116,8 +122,30 @@ def point_cloud(
     if normal_mode not in NORMAL_MODES:
         raise typer.BadParameter(f"--normal-mode must be one of: {', '.join(sorted(NORMAL_MODES))}")
 
-    adapter = build_adapter(adapter_cfg)
-    primitive = adapter.to_primitive()
+    adapter_type = str(adapter_cfg["type"]).replace("_", "-").lower()
+    if adapter_type == "mesh-splatting":
+        from tribench.renderers.mesh_splatting_adapter import (
+            load_mesh_splatting_primitive_checkpoint,
+        )
+
+        primitive = load_mesh_splatting_primitive_checkpoint(adapter_cfg["checkpoint"])
+    else:
+        adapter = build_adapter(adapter_cfg)
+        primitive = adapter.to_primitive()
+    if isinstance(primitive, IndexedMeshTriangle):
+        result = export_indexed_mesh_ply(
+            primitive,
+            output,
+            color_mode=color_mode,
+            normal_mode=normal_mode,
+        )
+        details = [f"{result.num_vertices} vertices", f"{result.num_faces} faces"]
+        details.append("RGB" if result.has_rgb else "geometry only")
+        if result.has_normals:
+            details.append("normals")
+        typer.echo(f"Mesh saved to {result.ply} ({', '.join(details)})")
+        return
+
     generator = None
     if seed is not None:
         vertices = getattr(primitive, "vertices", None)

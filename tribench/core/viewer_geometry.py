@@ -246,7 +246,11 @@ def _primitive_display_colors(primitive: BasePrimitive) -> torch.Tensor | None:
     """Return baked per-primitive RGB in [0, 1] where possible."""
     sh_coeffs = getattr(primitive, "sh_coeffs", None)
     if isinstance(sh_coeffs, torch.Tensor):
-        colors = _colors_from_sh(sh_coeffs, _primitive_reference_points(primitive))
+        colors = None
+        if sh_coeffs.shape[0] == primitive.num_primitives:
+            colors = _colors_from_sh(sh_coeffs, _primitive_reference_points(primitive))
+        else:
+            colors = _vertex_sh_face_colors(primitive, sh_coeffs)
         if colors is not None:
             return colors
 
@@ -254,6 +258,38 @@ def _primitive_display_colors(primitive: BasePrimitive) -> torch.Tensor | None:
     if colors is None:
         return None
     return colors.float().clamp(0, 1)
+
+
+def _vertex_sh_face_colors(
+    primitive: BasePrimitive,
+    sh_coeffs: torch.Tensor,
+) -> torch.Tensor | None:
+    """Bake per-face colors from per-vertex SH coefficients.
+
+    Indexed meshes store one SH row per vertex; display colors are baked
+    per vertex and then averaged over each triangle's three corners so the
+    result aligns with per-primitive color indexing downstream.
+    """
+    vertices = getattr(primitive, "vertices", None)
+    faces = getattr(primitive, "faces", None)
+    if not (
+        isinstance(vertices, torch.Tensor)
+        and vertices.dim() == 2
+        and vertices.shape[1] == 3
+        and isinstance(faces, torch.Tensor)
+        and faces.dim() == 2
+        and faces.shape[1] == 3
+    ):
+        return None
+    if sh_coeffs.shape[0] != vertices.shape[0]:
+        return None
+    vertex_colors = _colors_from_sh(sh_coeffs, vertices)
+    if vertex_colors is None:
+        return None
+    device = faces.device
+    if vertex_colors.device != device:
+        vertex_colors = vertex_colors.to(device)
+    return vertex_colors[faces].mean(dim=1)
 
 
 def _opacity_colormap(opacity: torch.Tensor) -> torch.Tensor:
@@ -325,6 +361,8 @@ def write_mesh_ply(
     faces: np.ndarray,          # [F, 3] int32
     rgb: np.ndarray | None = None,
     normals: np.ndarray | None = None,
+    *,
+    text: bool = True,
 ) -> None:
     """Write a standard mesh PLY with vertex + face elements."""
     from plyfile import PlyData, PlyElement
@@ -353,7 +391,7 @@ def write_mesh_ply(
     face["vertex_indices"] = faces
 
     els = [PlyElement.describe(vertex, "vertex"), PlyElement.describe(face, "face")]
-    PlyData(els, text=True).write(str(path))
+    PlyData(els, text=text).write(str(path))
 
 
 def _quantized_material_names(
@@ -614,6 +652,121 @@ class PointCloudExportResult:
     num_points: int = 0
     has_rgb: bool = False
     has_normals: bool = False
+
+
+@dataclass
+class IndexedMeshPlyExportResult:
+    ply: str
+    num_vertices: int = 0
+    num_faces: int = 0
+    has_rgb: bool = False
+    has_normals: bool = False
+
+
+def export_indexed_mesh_ply(
+    primitive: BasePrimitive,
+    output_path: str | Path,
+    *,
+    color_mode: str = "dc",
+    normal_mode: str = "none",
+) -> IndexedMeshPlyExportResult:
+    """Export an indexed primitive without sampling or duplicating vertices.
+
+    Colors are the primitive's view-independent per-vertex display colors.
+    Large meshes are written as binary little-endian PLY to keep export time
+    and file size practical.
+    """
+    vertices = getattr(primitive, "vertices", None)
+    faces = getattr(primitive, "faces", None)
+    if not (
+        isinstance(vertices, torch.Tensor)
+        and vertices.dim() == 2
+        and vertices.shape[1] == 3
+        and isinstance(faces, torch.Tensor)
+        and faces.dim() == 2
+        and faces.shape[1] == 3
+    ):
+        raise ValueError("Primitive does not expose indexed triangular mesh topology")
+
+    path = Path(output_path).expanduser()
+    if path.suffix == "":
+        path = path.with_suffix(".ply")
+    if path.suffix.lower() != ".ply":
+        raise ValueError("Mesh output must use a .ply extension")
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if color_mode == "dc":
+        colors = primitive.get_colors()
+    elif color_mode == "white":
+        colors = torch.ones(
+            vertices.shape[0], 3, device=vertices.device, dtype=vertices.dtype
+        )
+    elif color_mode == "opacity":
+        vertex_weights = getattr(primitive, "vertex_weights", None)
+        colors = (
+            _opacity_colormap(vertex_weights.reshape(-1))
+            if isinstance(vertex_weights, torch.Tensor)
+            and vertex_weights.numel() == vertices.shape[0]
+            else None
+        )
+    else:
+        raise ValueError(f"Unsupported indexed mesh color mode: {color_mode}")
+
+    rgb = None
+    if colors is not None:
+        if colors.shape != (vertices.shape[0], 3):
+            raise ValueError(
+                "Indexed mesh colors must have shape [num_vertices, 3], "
+                f"got {tuple(colors.shape)}"
+            )
+        rgb = (colors.detach().cpu().numpy().clip(0, 1) * 255).astype(np.uint8)
+
+    normals = None
+    if normal_mode == "primitive":
+        normals = getattr(primitive, "vertex_normals", None)
+        if not isinstance(normals, torch.Tensor) or normals.shape != vertices.shape:
+            face_vertices = vertices[faces]
+            face_normals = torch.cross(
+                face_vertices[:, 1] - face_vertices[:, 0],
+                face_vertices[:, 2] - face_vertices[:, 0],
+                dim=-1,
+            )
+            normals = torch.zeros_like(vertices)
+            for corner in range(3):
+                normals.index_add_(0, faces[:, corner], face_normals)
+            normals = normals / torch.linalg.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8)
+    elif normal_mode != "none":
+        raise ValueError(f"Unsupported indexed mesh normal mode: {normal_mode}")
+    normals_np = None
+    if isinstance(normals, torch.Tensor) and normals.shape == vertices.shape:
+        normals_np = normals.detach().cpu().numpy().astype(np.float32)
+
+    vertices_np = vertices.detach().cpu().numpy().astype(np.float32)
+    faces_np = faces.detach().cpu().numpy().astype(np.int32)
+    if faces_np.size:
+        min_index = int(faces_np.min())
+        max_index = int(faces_np.max())
+        if min_index < 0 or max_index >= vertices_np.shape[0]:
+            raise ValueError(
+                f"Mesh face indices [{min_index}, {max_index}] are invalid for "
+                f"{vertices_np.shape[0]} vertices"
+            )
+
+    write_mesh_ply(
+        path,
+        vertices_np,
+        faces_np,
+        rgb,
+        normals_np,
+        text=False,
+    )
+    return IndexedMeshPlyExportResult(
+        ply=str(path),
+        num_vertices=int(vertices_np.shape[0]),
+        num_faces=int(faces_np.shape[0]),
+        has_rgb=rgb is not None,
+        has_normals=normals_np is not None,
+    )
 
 
 def export_point_cloud_ply(

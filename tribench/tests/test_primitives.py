@@ -125,6 +125,17 @@ class TestIndexedMeshTriangle:
         prim_cpu = prim.to("cpu")
         assert prim_cpu.vertices.device == torch.device("cpu")
 
+    def test_sh_dc_vertex_colors(self, dummy_mesh_data):
+        vertices, faces = dummy_mesh_data
+        sh_dc = torch.zeros(vertices.shape[0], 3)
+        prim = IndexedMeshTriangle(vertices, faces, sh_coeffs=sh_dc)
+
+        colors = prim.get_colors()
+
+        assert colors is not None
+        assert colors.shape == (vertices.shape[0], 3)
+        torch.testing.assert_close(colors, torch.full_like(colors, 0.5))
+
 
 class TestConvexTriangle:
     """Tests for ConvexTriangle (Triangle Splatting-style)."""

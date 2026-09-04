@@ -18,6 +18,7 @@ from tribench.core.viewer_geometry import (
     _primitive_triangle_vertices,
     _sample_triangle_surface,
     _voxel_downsample,
+    export_indexed_mesh_ply,
     export_original_geometry,
     export_viewer_point_cloud,
     export_viewer_geometry,
@@ -217,6 +218,17 @@ class TestWriteMeshPLY:
         from plyfile import PlyData
         data = PlyData.read(str(path))
         assert "nx" in data["vertex"].data.dtype.names
+
+    def test_binary_mesh(self, tmp_path):
+        verts = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32)
+        faces = np.array([[0, 1, 2]], dtype=np.int32)
+        path = tmp_path / "mesh_binary.ply"
+        write_mesh_ply(path, verts, faces, text=False)
+        from plyfile import PlyData
+        data = PlyData.read(str(path))
+        assert not data.text
+        assert data["vertex"].count == 3
+        assert data["face"].count == 1
 
 
 class TestWriteMeshOBJ:
@@ -427,6 +439,62 @@ class TestExtractIndexedMesh:
         verts, faces, _, _ = result
         assert verts.shape == (4, 3)
         assert faces.shape == (2, 3)
+
+
+class TestExportIndexedMeshPly:
+    def test_preserves_faces_and_checkpoint_vertex_colors(self, tmp_path):
+        vertices = torch.tensor([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ])
+        faces = torch.tensor([[0, 1, 2], [0, 2, 3]])
+        sh_dc = torch.tensor([
+            [0.1, 0.2, 0.3],
+            [0.4, 0.5, 0.6],
+            [0.7, 0.8, 0.9],
+            [1.0, 1.1, 1.2],
+        ])
+        primitive = IndexedMeshTriangle(vertices, faces, sh_coeffs=sh_dc)
+
+        result = export_indexed_mesh_ply(primitive, tmp_path / "mesh.ply")
+
+        from plyfile import PlyData
+        data = PlyData.read(result.ply)
+        assert result.num_vertices == 4
+        assert result.num_faces == 2
+        assert result.has_rgb
+        assert data["vertex"].count == 4
+        assert data["face"].count == 2
+        assert "red" in data["vertex"].data.dtype.names
+        np.testing.assert_array_equal(
+            np.stack(data["face"].data["vertex_indices"]),
+            faces.numpy(),
+        )
+
+    def test_rejects_invalid_face_indices(self, tmp_path):
+        primitive = IndexedMeshTriangle(
+            torch.zeros(3, 3),
+            torch.tensor([[0, 1, 3]]),
+        )
+        with pytest.raises(ValueError, match="invalid"):
+            export_indexed_mesh_ply(primitive, tmp_path / "mesh.ply")
+
+    def test_white_colors_and_generated_vertex_normals(self, indexed_mesh, tmp_path):
+        result = export_indexed_mesh_ply(
+            indexed_mesh,
+            tmp_path / "white_mesh.ply",
+            color_mode="white",
+            normal_mode="primitive",
+        )
+
+        from plyfile import PlyData
+        data = PlyData.read(result.ply)
+        assert result.has_rgb
+        assert result.has_normals
+        np.testing.assert_array_equal(data["vertex"].data["red"], np.full(4, 255))
+        np.testing.assert_allclose(data["vertex"].data["nz"], np.ones(4))
 
 
 # ─── export_viewer_geometry tests ─────────────────────────────────────────
