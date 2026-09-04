@@ -74,11 +74,6 @@ tribench profile --config configs/triangle-splatting/mipnerf360/bicycle.yaml
 # Config values can still be overridden from the CLI
 tribench render video --config configs/triangle-splatting/mipnerf360/bicycle.yaml --output-dir outputs/demo-video
 
-# Structured training configs also honor --max-steps, and 2DTS automatically
-# resumes from local checkpoints when the latest step is still below the target.
-tribench train --config configs/opaque_2dts_mipnerf360/2dts/mipnerf360/bicycle.yaml --max-steps 30 --quiet
-tribench train --config configs/opaque_2dts_mipnerf360/2dts/mipnerf360/bicycle.yaml --max-steps 31 --quiet
-
 # Train complete datasets with the scene pipeline helper
 bash single_train.sh triangle-splatting mipnerf360/all 0
 bash single_train.sh triangle-splatting tandt/all 0
@@ -95,10 +90,7 @@ bash single_export_unity.sh triangle-splatting mipnerf360/all 0
 bash single_export_unity.sh mesh-splatting mipnerf360/garden 0
 
 # Export missing Unity assets, capture Unity frames, profile FPS/memory, and format report tables
-bash single_unity_eval.sh 2dts mipnerf360/bicycle 0 --unity "$UNITY" --unity-project "$PROJECT"
-
-# MeshSplatting topology ablation: shared mesh, shader-level soup, materialized soup
-bash single_mesh_topology_unity_eval.sh mipnerf360/all 0 --unity "$UNITY" --unity-project "$PROJECT"
+bash single_unity_eval.sh 2dts mipnerf360/bicycle 0 --unity "$UNITY" --unity-project MeshSplatBenchUnity
 ```
 
 ## Profiling
@@ -232,19 +224,11 @@ config-driven runs under `outputs/{method}/{dataset}/{scene}`.
 
 ### Unity project setup
 
-Install Unity with Linux standalone build support. Then create or update a
-Unity project from the repository templates (*e.g.*, export PROJECT=/path/to/MeshSplatBench/unity_native/TriBenchUnity):
-
-```bash
-python3 tools/create_unity_triasset_package.py --unity-project "$PROJECT"
-python3 tools/patch_legacy_unity_vulkan.py --unity-project "$PROJECT"
-```
-
-Set the usual paths:
+Install Unity with Linux standalone build support. 
+Set the usual path:
 
 ```bash
 export UNITY=/path/to/Unity/Editor/Unity
-export PROJECT=/path/to/TriBenchUnity
 ```
 
 `single_unity_eval.sh` applies the Vulkan compatibility patch automatically on
@@ -274,7 +258,7 @@ Existing valid packages are skipped; use `--force` to re-export.
 ```bash
 ./single_unity_eval.sh 2dts mipnerf360/all 0 \
   --unity "$UNITY" \
-  --unity-project "$PROJECT"
+  --unity-project MeshSplatBenchUnity
 ```
 
 For all methods:
@@ -283,7 +267,7 @@ For all methods:
 for method in 2dts triangle-splatting mesh-splatting diffsoup; do
   ./single_unity_eval.sh "$method" mipnerf360/all 0 \
     --unity "$UNITY" \
-    --unity-project "$PROJECT"
+    --unity-project MeshSplatBenchUnity
 done
 ```
 
@@ -313,7 +297,7 @@ Use `--general-purpose` and a separate output name:
 for method in 2dts triangle-splatting mesh-splatting diffsoup; do
   ./single_unity_eval.sh "$method" mipnerf360/all 0 \
     --unity "$UNITY" \
-    --unity-project "$PROJECT" \
+    --unity-project MeshSplatBenchUnity \
     --general-purpose \
     --output-name unity_general_purpose
 done
@@ -329,7 +313,7 @@ To isolate the value of MeshSplatting's shared-vertex topology, use:
 ```bash
 ./single_mesh_topology_unity_eval.sh mipnerf360/all 0 \
   --unity "$UNITY" \
-  --unity-project "$PROJECT"
+  --unity-project MeshSplatBenchUnity
 ```
 
 This runs `mesh-splatting` with three deployment layouts:
@@ -359,7 +343,7 @@ single shader-level condition is needed:
 ```bash
 ./single_unity_eval.sh mesh-splatting mipnerf360/bicycle 0 \
   --unity "$UNITY" \
-  --unity-project "$PROJECT" \
+  --unity-project MeshSplatBenchUnity \
   --topology soup \
   --output-name unity_method_aware_soup
 ```
@@ -369,7 +353,7 @@ For a single true Unity indexed MeshRenderer run, use:
 ```bash
 ./single_unity_eval.sh mesh-splatting mipnerf360/bicycle 0 \
   --unity "$UNITY" \
-  --unity-project "$PROJECT" \
+  --unity-project MeshSplatBenchUnity \
   --general-purpose \
   --topology indexed \
   --indexed-mesh-method-aware \
@@ -381,7 +365,7 @@ For true exported soup assets, use a separate asset subdirectory:
 ```bash
 ./single_unity_eval.sh mesh-splatting mipnerf360/bicycle 0 \
   --unity "$UNITY" \
-  --unity-project "$PROJECT" \
+  --unity-project MeshSplatBenchUnity \
   --asset-subdir unity_native_materialized_soup \
   --export-topology soup \
   --output-name unity_method_aware_materialized_soup
@@ -411,7 +395,7 @@ For fast smoke tests:
 ```bash
 ./single_unity_eval.sh diffsoup mipnerf360/bicycle 0 \
   --unity "$UNITY" \
-  --unity-project "$PROJECT" \
+  --unity-project MeshSplatBenchUnity \
   --profile-runs 1 \
   --profile-views 1 \
   --profile-warmup 20 \
@@ -426,7 +410,7 @@ rebuilt:
 ```bash
 ./single_unity_eval.sh diffsoup mipnerf360/all 0 \
   --unity "$UNITY" \
-  --unity-project "$PROJECT" \
+  --unity-project MeshSplatBenchUnity \
   --skip-capture \
   --skip-metrics \
   --force-profile
