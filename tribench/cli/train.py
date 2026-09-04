@@ -23,6 +23,7 @@ from tribench.trainers.loop import TrainingConfig, TrainingLoop
 from tribench.trainers.registry import get_training_method
 
 TRAIN_CONTEXT_SETTINGS = {"allow_extra_args": True, "ignore_unknown_options": True}
+DEFAULT_MAX_STEPS = 30_000
 
 
 def _yaml_to_dict(config: Path | None) -> dict:
@@ -82,7 +83,14 @@ def train(
     dataset: Optional[Path] = typer.Option(None, "--dataset", "-d", help="Path to dataset directory"),
     output_dir: Path = typer.Option("./outputs", "--output-dir", "-o", help="Output directory"),
     config: Optional[Path] = typer.Option(None, "--config", "-c", help="Optional training config YAML"),
-    max_steps: int = typer.Option(30_000, "--max-steps", help="Maximum training steps"),
+    max_steps: Optional[int] = typer.Option(
+        None,
+        "--max-steps",
+        help=(
+            "Maximum training steps. Overrides trainer.max_steps when explicitly set; "
+            f"defaults to {DEFAULT_MAX_STEPS} without a structured config"
+        ),
+    ),
     max_primitives: Optional[int] = typer.Option(None, "--max-primitives", help="Global maximum primitives budget override"),
     max_primitives_triangle_splatting: Optional[int] = typer.Option(None, "--max-primitives-triangle-splatting", help="Triangle-splatting primitives budget"),
     max_primitives_mesh_splatting: Optional[int] = typer.Option(None, "--max-primitives-mesh-splatting", help="Mesh-splatting primitives budget"),
@@ -140,6 +148,12 @@ def train(
                     f"in {summary['total_time_s']:.1f}s"
                 )
             return
+
+    # A structured config owns its default. Reaching this path means no
+    # structured trainer config was dispatched, so retain the historical 30k
+    # default for method/dataset-style CLI invocations.
+    if max_steps is None:
+        max_steps = DEFAULT_MAX_STEPS
 
     if method is None or dataset is None:
         raise typer.BadParameter(
@@ -278,7 +292,9 @@ def _train_from_structured_config(
 
     trainer_cfg = Config(cfg.trainer).to_dict()
     loop_cfg = Config(cfg.get("loop", {})).to_dict()
-    configured_max_steps = int(trainer_cfg.pop("max_steps", loop_cfg.get("max_steps", 30_000)))
+    configured_max_steps = int(
+        trainer_cfg.pop("max_steps", loop_cfg.get("max_steps", DEFAULT_MAX_STEPS))
+    )
     max_steps = int(max_steps_override) if max_steps_override is not None else configured_max_steps
     loop_cfg["max_steps"] = max_steps
 

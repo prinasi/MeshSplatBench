@@ -356,6 +356,48 @@ def test_structured_train_cli_max_steps_overrides_config(tmp_path: Path):
     assert captured["max_steps"] == 20
 
 
+def test_structured_train_cli_uses_configured_max_steps_unless_explicitly_overridden(
+    tmp_path: Path,
+):
+    config = tmp_path / "diffsoup.yaml"
+    run_dir = tmp_path / "run"
+    config.write_text(
+        "dataset:\n"
+        f"  root: {tmp_path / 'dataset'}\n"
+        "  type: colmap\n"
+        "trainer:\n"
+        "  type: diffsoup\n"
+        "  max_steps: 10000\n"
+        "output:\n"
+        f"  dir: {run_dir}\n"
+    )
+    captured_steps = []
+
+    def fake_run_diffsoup_native_config(**kwargs):
+        captured_steps.append(kwargs["max_steps"])
+        return {
+            "total_steps": kwargs["max_steps"],
+            "total_time_s": 0.0,
+            "avg_step_time_ms": 0.0,
+            "final_losses": {},
+        }
+
+    with patch("tribench.cli.train.run_with_training_stats", lambda fn, _: fn()):
+        with patch(
+            "tribench.trainers.diffsoup_native.run_diffsoup_native_config",
+            fake_run_diffsoup_native_config,
+        ):
+            configured = CliRunner().invoke(app, ["train", "--config", str(config)])
+            overridden = CliRunner().invoke(
+                app,
+                ["train", "--config", str(config), "--max-steps", "12000"],
+            )
+
+    assert configured.exit_code == 0, configured.output
+    assert overridden.exit_code == 0, overridden.output
+    assert captured_steps == [10_000, 12_000]
+
+
 
 def test_2dts_mipnerf360_opaque_experiment_native_overrides_match_dtu_style():
     from tribench.trainers.d2ts_native import _build_d2ts_native_config
