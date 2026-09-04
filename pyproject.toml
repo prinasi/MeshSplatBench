@@ -32,6 +32,7 @@ dependencies = [
     "trimesh",
     "pytorch-msssim",
     "lpips",
+    "plyfile",
     "typer>=0.9",
     "pyyaml",
     "rich",

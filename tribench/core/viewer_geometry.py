@@ -609,6 +609,72 @@ class ViewerPointCloudExportResult:
 
 
 @dataclass
+class PointCloudExportResult:
+    ply: str
+    num_points: int = 0
+    has_rgb: bool = False
+    has_normals: bool = False
+
+
+def export_point_cloud_ply(
+    primitive: BasePrimitive,
+    output_path: str | Path,
+    *,
+    num_points: int,
+    color_mode: str = "dc",
+    normal_mode: str = "none",
+    voxel_size: float = 0.0,
+    generator: torch.Generator | None = None,
+) -> PointCloudExportResult:
+    """Export one standard vertex-only PLY point cloud from a primitive."""
+    if num_points <= 0:
+        raise ValueError("num_points must be positive")
+    if voxel_size < 0:
+        raise ValueError("voxel_size must be non-negative")
+
+    xyz, rgb, normals, _ = primitive_to_point_cloud(
+        primitive,
+        num_points,
+        color_mode=color_mode,
+        normal_mode=normal_mode,
+        generator=generator,
+    )
+    if voxel_size > 0 and xyz.shape[0] > 0:
+        xyz, rgb, normals = _voxel_downsample(xyz, rgb, normals, voxel_size)
+
+    def _to_np_uint8(value):
+        if value is None:
+            return None
+        return (value.cpu().numpy().clip(0, 1) * 255).astype(np.uint8)
+
+    def _to_np_f32(value):
+        if value is None:
+            return None
+        return value.cpu().numpy().astype(np.float32)
+
+    path = Path(output_path).expanduser()
+    if path.suffix == "":
+        path = path.with_suffix(".ply")
+    if path.suffix.lower() != ".ply":
+        raise ValueError("Point-cloud output must use a .ply extension")
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    write_point_cloud_ply(
+        path,
+        _to_np_f32(xyz),
+        _to_np_uint8(rgb),
+        _to_np_f32(normals),
+    )
+
+    return PointCloudExportResult(
+        ply=str(path),
+        num_points=int(xyz.shape[0]),
+        has_rgb=rgb is not None,
+        has_normals=normals is not None,
+    )
+
+
+@dataclass
 class OriginalGeometryExportResult:
     geometry_ply: str | None = None
     geometry_path: str | None = None

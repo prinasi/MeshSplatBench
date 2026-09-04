@@ -8,6 +8,7 @@ from tribench.cli.eval import eval_app
 from tribench.cli.compare import compare_app
 from tribench.cli.train import TRAIN_CONTEXT_SETTINGS, train
 from tribench.cli.render import render_app
+from tribench.cli.export import export_app
 from tribench.cli.export_unity import export_unity_app
 
 app = typer.Typer(
@@ -26,6 +27,7 @@ app.command(
     help="Train a triangle splatting model.",
     context_settings=TRAIN_CONTEXT_SETTINGS,
 )(train)
+app.add_typer(export_app, name="export", help="Export trained geometry assets.")
 app.add_typer(render_app, name="render", help="Render images from a trained model.")
 app.add_typer(export_unity_app, name="export-unity", help="Export feature-preserving Unity-native assets.")
 
