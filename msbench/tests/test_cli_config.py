@@ -206,8 +206,6 @@ def test_2dts_dtu_foreground_keeps_native_full_image_mask_defaults():
 
     assert native.dataset.dtu_eval_mode == "foreground"
     assert native.dataset.dtu_use_alpha is True
-    assert native.dataset.background == "random"
-    assert native.dataset.test_background == "white"
     assert native.trainer.train_alpha_mask is False
     assert native.trainer.eval_alpha_mask is False
 
@@ -313,8 +311,6 @@ def test_2dts_dtu_full_disables_native_alpha_loading(tmp_path: Path):
     assert cfg.output.dir == "outputs/2dts/dtu-full/scan24"
     assert native.dataset.dtu_eval_mode == "full"
     assert native.dataset.dtu_use_alpha is False
-    assert native.dataset.background == "black"
-    assert native.dataset.test_background == "black"
     assert native.trainer.train_alpha_mask is False
     assert native.trainer.eval_alpha_mask is False
 
@@ -341,8 +337,6 @@ def test_2dts_dtu_accepts_masked_and_unmasked_aliases(tmp_path: Path):
     assert cfg_masked.dataset.dtu_eval_mode == "foreground"
     assert native_masked.dataset.dtu_eval_mode == "foreground"
     assert native_masked.dataset.dtu_use_alpha is True
-    assert native_masked.dataset.background == "random"
-    assert native_masked.dataset.test_background == "white"
 
     # Test "unmasked" -> normalized to "full"
     config_unmasked = tmp_path / "scan24_unmasked.yaml"
@@ -361,8 +355,6 @@ def test_2dts_dtu_accepts_masked_and_unmasked_aliases(tmp_path: Path):
     assert cfg_unmasked.dataset.dtu_eval_mode == "full"
     assert native_unmasked.dataset.dtu_eval_mode == "full"
     assert native_unmasked.dataset.dtu_use_alpha is False
-    assert native_unmasked.dataset.background == "black"
-    assert native_unmasked.dataset.test_background == "black"
 
 
 def test_2dts_disables_native_training_eval_by_default():

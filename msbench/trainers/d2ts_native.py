@@ -143,19 +143,6 @@ def _build_d2ts_native_config(
         dtu_eval_mode = str(dataset_cfg.get("dtu_eval_mode", "full")).lower()
         native.dataset.dtu_eval_mode = dtu_eval_mode
         native.dataset.dtu_use_alpha = dtu_eval_mode == "foreground"
-        if dataset_type == "dtu" or str(dataset_cfg.get("name", "")).lower() == "dtu":
-            # Keep the native renderer background aligned with the image
-            # loading/evaluation protocol.  Foreground mode composites RGBA GT
-            # against each camera's random training colour and uses white at
-            # test time.  Full mode preserves the source RGB, so a random
-            # renderer background would inject an unmatched loss signal; use
-            # the benchmark's deterministic black background for both splits.
-            if dtu_eval_mode == "foreground":
-                native.dataset.background = "random"
-                native.dataset.test_background = "white"
-            else:
-                native.dataset.background = "black"
-                native.dataset.test_background = "black"
 
     native.trainer.output_dir = str(output_dir.parent)
     native.trainer.iterations = int(max_steps)
