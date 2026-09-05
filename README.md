@@ -40,7 +40,7 @@ conda activate msbench
 ### Option 2: Pip Install
 
 ```bash
-git clone https://github.com/your-org/MeshSplatBench.git
+git clone https://github.com/prinasi/MeshSplatBench.git
 cd MeshSplatBench
 pip install -e ".[dev,cuda]"
 ```
@@ -90,7 +90,7 @@ bash single_export_unity.sh triangle-splatting mipnerf360/all 0
 bash single_export_unity.sh mesh-splatting mipnerf360/garden 0
 
 # Export missing Unity assets, capture Unity frames, profile FPS/memory, and format report tables
-bash single_unity_eval.sh 2dts mipnerf360/bicycle 0 --unity "$UNITY" --unity-project MeshSplatBenchUnity
+bash single_unity_eval.sh 2dts mipnerf360/bicycle 0 --unity "$UNITY" --unity-project unity
 ```
 
 ## Profiling
@@ -258,7 +258,7 @@ Existing valid packages are skipped; use `--force` to re-export.
 ```bash
 ./single_unity_eval.sh 2dts mipnerf360/all 0 \
   --unity "$UNITY" \
-  --unity-project MeshSplatBenchUnity
+  --unity-project unity
 ```
 
 For all methods:
@@ -267,7 +267,7 @@ For all methods:
 for method in 2dts triangle-splatting mesh-splatting diffsoup; do
   ./single_unity_eval.sh "$method" mipnerf360/all 0 \
     --unity "$UNITY" \
-    --unity-project MeshSplatBenchUnity
+    --unity-project unity
 done
 ```
 
@@ -297,7 +297,7 @@ Use `--general-purpose` and a separate output name:
 for method in 2dts triangle-splatting mesh-splatting diffsoup; do
   ./single_unity_eval.sh "$method" mipnerf360/all 0 \
     --unity "$UNITY" \
-    --unity-project MeshSplatBenchUnity \
+    --unity-project unity \
     --general-purpose \
     --output-name unity_general_purpose
 done
@@ -313,7 +313,7 @@ To isolate the value of MeshSplatting's shared-vertex topology, use:
 ```bash
 ./single_mesh_topology_unity_eval.sh mipnerf360/all 0 \
   --unity "$UNITY" \
-  --unity-project MeshSplatBenchUnity
+  --unity-project unity
 ```
 
 This runs `mesh-splatting` with three deployment layouts:
@@ -343,7 +343,7 @@ single shader-level condition is needed:
 ```bash
 ./single_unity_eval.sh mesh-splatting mipnerf360/bicycle 0 \
   --unity "$UNITY" \
-  --unity-project MeshSplatBenchUnity \
+  --unity-project unity \
   --topology soup \
   --output-name unity_method_aware_soup
 ```
@@ -353,7 +353,7 @@ For a single true Unity indexed MeshRenderer run, use:
 ```bash
 ./single_unity_eval.sh mesh-splatting mipnerf360/bicycle 0 \
   --unity "$UNITY" \
-  --unity-project MeshSplatBenchUnity \
+  --unity-project unity \
   --general-purpose \
   --topology indexed \
   --indexed-mesh-method-aware \
@@ -365,7 +365,7 @@ For true exported soup assets, use a separate asset subdirectory:
 ```bash
 ./single_unity_eval.sh mesh-splatting mipnerf360/bicycle 0 \
   --unity "$UNITY" \
-  --unity-project MeshSplatBenchUnity \
+  --unity-project unity \
   --asset-subdir unity_native_materialized_soup \
   --export-topology soup \
   --output-name unity_method_aware_materialized_soup
@@ -395,7 +395,7 @@ For fast smoke tests:
 ```bash
 ./single_unity_eval.sh diffsoup mipnerf360/bicycle 0 \
   --unity "$UNITY" \
-  --unity-project MeshSplatBenchUnity \
+  --unity-project unity \
   --profile-runs 1 \
   --profile-views 1 \
   --profile-warmup 20 \
@@ -410,7 +410,7 @@ rebuilt:
 ```bash
 ./single_unity_eval.sh diffsoup mipnerf360/all 0 \
   --unity "$UNITY" \
-  --unity-project MeshSplatBenchUnity \
+  --unity-project unity \
   --skip-capture \
   --skip-metrics \
   --force-profile
