@@ -3,7 +3,7 @@
 
 Each Unity process loads one asset, which avoids retaining multiple 0.5--1.2
 GiB triassets in unified memory.  PNGs and the no-I/O FPS CSV are written under
-the corresponding TriBench output directory.
+the corresponding MeshSplatBench output directory.
 """
 from __future__ import annotations
 
@@ -66,9 +66,10 @@ def unity_failure_summary(log_path: Path, *, max_lines: int = 12) -> str:
     if not log_path.is_file():
         return f"Unity log was not created: {log_path}"
     needles = (
-        "[tribench]", "error", "exception", "fatal", "crash", "sigsegv",
+        "[msbench]", "[meshsplatbench]", "error", "exception", "fatal", "crash", "sigsegv",
         "missing vulkan framebuffer", "shader error", "compilation failed",
     )
+
     matches = []
     for line in log_path.read_text(errors="replace").splitlines():
         stripped = line.strip()
@@ -204,7 +205,7 @@ def main() -> int:
                 "runtime": "editor-development-only",
             } if args.profile_only else None,
         }
-        (output / "tribench_run_protocol.json").write_text(json.dumps(run_protocol, indent=2) + "\n")
+        (output / "msbench_run_protocol.json").write_text(json.dumps(run_protocol, indent=2) + "\n")
         # A prior successful invocation leaves this marker behind.  It must be
         # removed before starting Unity; otherwise the supervisor can mistake
         # it for this process's completion and terminate Unity before Play
@@ -216,7 +217,7 @@ def main() -> int:
             profile_path.unlink(missing_ok=True)
         command = [
             str(args.unity), "-batchmode", *unity_graphics_arguments(), "-projectPath", str(args.unity_project),
-            "-executeMethod", "TriBench.UnityNative.Editor.TriAssetBatchRunner.Run",
+            "-executeMethod", "MeshSplatBench.UnityNative.Editor.TriAssetBatchRunner.Run",
             "-method", args.method, "-triasset", str(triasset), "-dataset", str(dataset), "-output", str(output),
             "-triasset-width", str(width), "-triasset-height", str(height),
             "-fps-warmup", str(args.fps_warmup), "-fps-frames", str(args.fps_frames),
@@ -240,7 +241,7 @@ def main() -> int:
             command.extend(("-indexed-mesh-method-aware", "1"))
         if args.method_aware:
             command.extend(("-method-specific", "1"))
-        print(f"[TriBench] Unity scene={scene}, reference={image_dir.name}, resolution={width}x{height}", flush=True)
+        print(f"[MeshSplatBench] Unity scene={scene}, reference={image_dir.name}, resolution={width}x{height}", flush=True)
         capture_started = time.time()
         process = subprocess.Popen(command)
         while process.poll() is None and not marker.is_file():

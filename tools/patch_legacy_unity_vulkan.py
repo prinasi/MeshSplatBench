@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch the legacy TriBenchUnity Metal renderer for safe Vulkan capture.
+"""Patch the legacy MeshSplatBenchUnity Metal renderer for safe Vulkan capture.
 
 The older standalone Unity project uses premultiplied front-to-back blending:
 ``Blend OneMinusDstAlpha One``.  That blend must start from transparent black;
@@ -14,7 +14,7 @@ explicitly with ``Camera.Render`` in Linux Editor batch mode.  The patch moves
 those draws into camera command buffers, which execute for both normal frames
 and explicit capture renders.
 
-The operation is idempotent and preserves one ``.tribench-vulkan.bak`` copy of
+The operation is idempotent and preserves one ``.msbench-vulkan.bak`` copy of
 every modified source file.
 """
 from __future__ import annotations
@@ -25,8 +25,8 @@ import shutil
 from pathlib import Path
 
 
-BACKUP_SUFFIX = ".tribench-vulkan.bak"
-CAPTURE_PATCH_MARKER = "TriBench Vulkan premultiplied-capture patch"
+BACKUP_SUFFIX = ".msbench-vulkan.bak"
+CAPTURE_PATCH_MARKER = "MeshSplatBench Vulkan premultiplied-capture patch"
 
 
 def _write_if_changed(path: Path, original: str, updated: str) -> bool:
@@ -57,7 +57,7 @@ def _patch_shader(source: str) -> str:
 
 def _indexed_mesh_splat_shader() -> str:
     return r'''// True Unity indexed MeshRenderer path for MeshSplatting topology ablations.
-Shader "TriBench/MeshSplatIndexedMesh"
+Shader "MeshSplatBench/MeshSplatIndexedMesh"
 {
  SubShader { Tags { "Queue"="Geometry" "RenderType"="Opaque" } Pass {
   Cull Off ZWrite On ZTest LEqual Blend Off
@@ -84,7 +84,7 @@ Shader "TriBench/MeshSplatIndexedMesh"
 
 def _patch_renderer(source: str) -> str:
     failure = (
-        'if (!material.SetPass(0)) { Debug.LogError("[TriBench] Shader pass is '
+        'if (!material.SetPass(0)) { Debug.LogError("[MeshSplatBench] Shader pass is '
         'unsupported on " + SystemInfo.graphicsDeviceType + ": " + '
         'material.shader.name); enabled = false; return; }'
     )
@@ -130,18 +130,18 @@ def _patch_standard_mesh_indexed_method_aware(source: str) -> str:
     /// indexed Mesh draw while evaluating the learned SH appearance in shader.''',
     )
     updated = updated.replace(
-        '''            string shaderName = indexedMeshMethodAware ? "TriBench/MeshSplatIndexedMesh" : "TriBench/StandardVertexColorRaw";
+        '''            string shaderName = indexedMeshMethodAware ? "MeshSplatBench/MeshSplatIndexedMesh" : "MeshSplatBench/StandardVertexColorRaw";
             VertexColorShader = VertexColorShader != null ? VertexColorShader : Shader.Find(shaderName);
             if (VertexColorShader == null) { Fail(shaderName + " shader was not found."); yield break; }''',
-        '''            string shaderName = indexedMeshMethodAware ? "TriBench/MeshSplatIndexedMesh" : "TriBench/StandardVertexColorRaw";
+        '''            string shaderName = indexedMeshMethodAware ? "MeshSplatBench/MeshSplatIndexedMesh" : "MeshSplatBench/StandardVertexColorRaw";
             VertexColorShader = indexedMeshMethodAware ? (Resources.Load<Shader>("MeshSplatIndexedMesh") ?? Shader.Find(shaderName)) : (VertexColorShader != null ? VertexColorShader : Shader.Find(shaderName));
             if (VertexColorShader == null) { Fail(shaderName + " shader was not found."); yield break; }''',
     )
     updated = updated.replace(
-        '''            string shaderName = indexedMeshMethodAware ? "TriBench/MeshSplatIndexedMesh" : "TriBench/StandardVertexColorRaw";
+        '''            string shaderName = indexedMeshMethodAware ? "MeshSplatBench/MeshSplatIndexedMesh" : "MeshSplatBench/StandardVertexColorRaw";
             VertexColorShader = indexedMeshMethodAware ? Shader.Find(shaderName) : (VertexColorShader != null ? VertexColorShader : Shader.Find(shaderName));
             if (VertexColorShader == null) { Fail(shaderName + " shader was not found."); yield break; }''',
-        '''            string shaderName = indexedMeshMethodAware ? "TriBench/MeshSplatIndexedMesh" : "TriBench/StandardVertexColorRaw";
+        '''            string shaderName = indexedMeshMethodAware ? "MeshSplatBench/MeshSplatIndexedMesh" : "MeshSplatBench/StandardVertexColorRaw";
             VertexColorShader = indexedMeshMethodAware ? (Resources.Load<Shader>("MeshSplatIndexedMesh") ?? Shader.Find(shaderName)) : (VertexColorShader != null ? VertexColorShader : Shader.Find(shaderName));
             if (VertexColorShader == null) { Fail(shaderName + " shader was not found."); yield break; }''',
     )
@@ -212,12 +212,12 @@ def _patch_standard_mesh_indexed_method_aware(source: str) -> str:
             if (!File.Exists(positionsPath) || !File.Exists(indicesPath))''',
             1,
         )
-    if "TriBench/MeshSplatIndexedMesh" not in updated:
+    if "MeshSplatBench/MeshSplatIndexedMesh" not in updated:
         updated = updated.replace(
-            '''            VertexColorShader = VertexColorShader != null ? VertexColorShader : Shader.Find("TriBench/StandardVertexColorRaw");
-            if (VertexColorShader == null) { Fail("TriBench/StandardVertexColorRaw shader was not found."); yield break; }
+            '''            VertexColorShader = VertexColorShader != null ? VertexColorShader : Shader.Find("MeshSplatBench/StandardVertexColorRaw");
+            if (VertexColorShader == null) { Fail("MeshSplatBench/StandardVertexColorRaw shader was not found."); yield break; }
             material = new Material(VertexColorShader) { hideFlags = HideFlags.HideAndDontSave };''',
-            '''            string shaderName = indexedMeshMethodAware ? "TriBench/MeshSplatIndexedMesh" : "TriBench/StandardVertexColorRaw";
+            '''            string shaderName = indexedMeshMethodAware ? "MeshSplatBench/MeshSplatIndexedMesh" : "MeshSplatBench/StandardVertexColorRaw";
             VertexColorShader = indexedMeshMethodAware ? (Resources.Load<Shader>("MeshSplatIndexedMesh") ?? Shader.Find(shaderName)) : (VertexColorShader != null ? VertexColorShader : Shader.Find(shaderName));
             if (VertexColorShader == null) { Fail(shaderName + " shader was not found."); yield break; }
             material = new Material(VertexColorShader) { hideFlags = HideFlags.HideAndDontSave };
@@ -230,7 +230,7 @@ def _patch_standard_mesh_indexed_method_aware(source: str) -> str:
                 material.SetInt("_ShDegree", activeShDegree);
                 material.SetInt("_RawCode", rawCode ? 1 : 0);
                 material.SetVector("_CameraWorldPos", TargetCamera != null ? TargetCamera.transform.position : Vector3.zero);
-                Debug.Log("[TriBench] Using true indexed MeshSplatting method-aware MeshRenderer path.");
+                Debug.Log("[MeshSplatBench] Using true indexed MeshSplatting method-aware MeshRenderer path.");
             }''',
             1,
         )
@@ -243,7 +243,7 @@ def _patch_standard_mesh_indexed_method_aware(source: str) -> str:
         )
     helper_anchor = "        static byte ToByte(float value)"
     if marker not in updated:
-        helper = f'''        // TriBench {marker}.
+        helper = f'''        // MeshSplatBench {marker}.
         public override void PrepareCamera(Camera camera)
         {{
             if (indexedMeshMethodAware && material != null && camera != null)
@@ -286,7 +286,7 @@ def _patch_standard_mesh_indexed_method_aware(source: str) -> str:
 
 def _patch_renderer_command_buffer(source: str, primitive_count: str, name: str) -> str:
     """Submit a legacy procedural renderer through the target camera itself."""
-    marker = "TriBench explicit camera command-buffer patch"
+    marker = "MeshSplatBench explicit camera command-buffer patch"
     if marker in source:
         # AfterEverything and BeforeImageEffects can both run after Unity has
         # ended the offscreen camera's Vulkan render pass.  Submitting with the
@@ -322,11 +322,11 @@ def _patch_renderer_command_buffer(source: str, primitive_count: str, name: str)
             1,
         )
         updated = updated.replace(
-            "            if (!InstallTriBenchCameraDraw()) yield break;\n",
+            "            if (!InstallMeshSplatBenchCameraDraw()) yield break;\n",
             "",
             1,
         )
-        callback_guard = "            if (triBenchDrawCommands != null) return;\n"
+        callback_guard = "            if (msBenchDrawCommands != null) return;\n"
         batch_guard = callback_guard + "            if (Application.isBatchMode) return;\n"
         if batch_guard not in updated:
             updated = updated.replace(callback_guard, batch_guard, 1)
@@ -346,14 +346,14 @@ def _patch_renderer_command_buffer(source: str, primitive_count: str, name: str)
     updated = updated.replace(
         field,
         field
-        + "\n        CommandBuffer triBenchDrawCommands;"
-        + "\n        Camera triBenchCommandCamera;",
+        + "\n        CommandBuffer msBenchDrawCommands;"
+        + "\n        Camera msBenchCommandCamera;",
         1,
     )
 
-    helper = f'''        // TriBench explicit camera command-buffer patch. OnRenderObject is
+    helper = f'''        // MeshSplatBench explicit camera command-buffer patch. OnRenderObject is
         // not a reliable callback for Camera.Render() on Linux Editor batch mode.
-        bool InstallTriBenchCameraDraw()
+        bool InstallMeshSplatBenchCameraDraw()
         {{
             if (TargetCamera == null) TargetCamera = Camera.main;
             if (TargetCamera == null || material == null)
@@ -367,24 +367,24 @@ def _patch_renderer_command_buffer(source: str, primitive_count: str, name: str)
                     + (material.shader == null ? "<null>" : material.shader.name));
                 return false;
             }}
-            triBenchDrawCommands = new CommandBuffer {{ name = "TriBench/{name} procedural draw" }};
-            triBenchDrawCommands.DrawProcedural(
+            msBenchDrawCommands = new CommandBuffer {{ name = "MeshSplatBench/{name} procedural draw" }};
+            msBenchDrawCommands.DrawProcedural(
                 Matrix4x4.identity, material, 0, MeshTopology.Triangles,
                 {primitive_count} * 3, 1);
-            triBenchCommandCamera = TargetCamera;
-            triBenchCommandCamera.AddCommandBuffer(CameraEvent.AfterForwardAlpha, triBenchDrawCommands);
-            Debug.Log("[TriBench] Installed explicit camera draw for {name} on "
+            msBenchCommandCamera = TargetCamera;
+            msBenchCommandCamera.AddCommandBuffer(CameraEvent.AfterForwardAlpha, msBenchDrawCommands);
+            Debug.Log("[MeshSplatBench] Installed explicit camera draw for {name} on "
                 + SystemInfo.graphicsDeviceType + ".");
             return true;
         }}
 
-        void RemoveTriBenchCameraDraw()
+        void RemoveMeshSplatBenchCameraDraw()
         {{
-            if (triBenchCommandCamera != null && triBenchDrawCommands != null)
-                triBenchCommandCamera.RemoveCommandBuffer(CameraEvent.AfterForwardAlpha, triBenchDrawCommands);
-            if (triBenchDrawCommands != null) triBenchDrawCommands.Release();
-            triBenchDrawCommands = null;
-            triBenchCommandCamera = null;
+            if (msBenchCommandCamera != null && msBenchDrawCommands != null)
+                msBenchCommandCamera.RemoveCommandBuffer(CameraEvent.AfterForwardAlpha, msBenchDrawCommands);
+            if (msBenchDrawCommands != null) msBenchDrawCommands.Release();
+            msBenchDrawCommands = null;
+            msBenchCommandCamera = null;
         }}
 
 '''
@@ -399,7 +399,7 @@ def _patch_renderer_command_buffer(source: str, primitive_count: str, name: str)
     updated = updated.replace(
         callback_open,
         callback_open
-        + "\n            if (triBenchDrawCommands != null) return;"
+        + "\n            if (msBenchDrawCommands != null) return;"
         + "\n            if (Application.isBatchMode) return;",
         1,
     )
@@ -409,7 +409,7 @@ def _patch_renderer_command_buffer(source: str, primitive_count: str, name: str)
     # its offscreen RenderTexture, so Vulkan tries to draw into a nonexistent
     # screen framebuffer. Installation is now deferred to PrepareCamera().
     updated = updated.replace(
-        "            if (!InstallTriBenchCameraDraw()) yield break;\n",
+        "            if (!InstallMeshSplatBenchCameraDraw()) yield break;\n",
         "",
         1,
     )
@@ -418,7 +418,7 @@ def _patch_renderer_command_buffer(source: str, primitive_count: str, name: str)
     if destroy in updated:
         updated = updated.replace(
             destroy,
-            destroy + " RemoveTriBenchCameraDraw();",
+            destroy + " RemoveMeshSplatBenchCameraDraw();",
             1,
         )
     else:
@@ -427,7 +427,7 @@ def _patch_renderer_command_buffer(source: str, primitive_count: str, name: str)
             raise ValueError(f"could not locate OnDestroy in {name}")
         updated = updated.replace(
             destroy,
-            destroy + "\n            RemoveTriBenchCameraDraw();",
+            destroy + "\n            RemoveMeshSplatBenchCameraDraw();",
             1,
         )
     return updated
@@ -483,22 +483,22 @@ def _patch_method_specific_camera_state(source: str) -> str:
             raise ValueError("could not locate MethodSpecific field anchor")
 
     shader_old = '''            string shaderName = mode == 1 && ablation == "full"
-                ? "TriBench/MeshSplatTerminalSolid"
+                ? "MeshSplatBench/MeshSplatTerminalSolid"
                 : mode == 1 && ablation == "alpha-test-depth"
-                    ? "TriBench/MeshSplatAlphaTestDepth"
+                    ? "MeshSplatBench/MeshSplatAlphaTestDepth"
                     : mode == 1 && ablation == "opaque-depth"
-                        ? "TriBench/MeshSplatOpaqueDepth"
-                        : "TriBench/MethodSpecificSplat";
+                        ? "MeshSplatBench/MeshSplatOpaqueDepth"
+                        : "MeshSplatBench/MethodSpecificSplat";
             SplatShader = SplatShader != null ? SplatShader : Shader.Find(shaderName);
 '''
     shader_new = '''            string shaderName = mode == 1 && ablation == "full"
-                ? "TriBench/MeshSplatTerminalSolid"
+                ? "MeshSplatBench/MeshSplatTerminalSolid"
                 : mode == 1 && ablation == "alpha-test-depth"
-                    ? "TriBench/MeshSplatAlphaTestDepth"
+                    ? "MeshSplatBench/MeshSplatAlphaTestDepth"
                     : mode == 1 && ablation == "opaque-depth"
-                        ? "TriBench/MeshSplatOpaqueDepth"
-                        : "TriBench/MethodSpecificSplat";
-            usesSortedTriangleOrder = shaderName == "TriBench/MethodSpecificSplat";
+                        ? "MeshSplatBench/MeshSplatOpaqueDepth"
+                        : "MeshSplatBench/MethodSpecificSplat";
+            usesSortedTriangleOrder = shaderName == "MeshSplatBench/MethodSpecificSplat";
             SplatShader = SplatShader != null ? SplatShader : Shader.Find(shaderName);
 '''
     if shader_new not in source:
@@ -550,7 +550,7 @@ def _patch_method_specific_camera_state(source: str) -> str:
             raise ValueError("could not locate MethodSpecific ready state")
         source = source.replace(ready_old, ready_new, 1)
 
-    helper_anchor = '        // TriBench explicit camera command-buffer patch. OnRenderObject is\n'
+    helper_anchor = '        // MeshSplatBench explicit camera command-buffer patch. OnRenderObject is\n'
     helper_block = '''        void InitializeTriangleOrder(float[] positionsData, int[] sourceIndices)
         {
             int count = Mathf.Min(primitiveCount, sourceIndices.Length / 3);
@@ -627,10 +627,10 @@ def _patch_method_specific_camera_state(source: str) -> str:
     old_prepare = '''        public override void PrepareCamera(Camera camera)
         {
             if (camera == null || material == null) return;
-            if (triBenchDrawCommands == null)
+            if (msBenchDrawCommands == null)
             {
                 TargetCamera = camera;
-                if (!InstallTriBenchCameraDraw()) { enabled = false; return; }
+                if (!InstallMeshSplatBenchCameraDraw()) { enabled = false; return; }
             }
             material.SetVector("_CameraWorldPos", camera.transform.position);
             material.SetInt("_RawCode", rawCode ? 1 : 0);
@@ -647,12 +647,12 @@ def _patch_method_specific_camera_state(source: str) -> str:
             if (camera == null || material == null) return;
             if (TargetCamera != camera)
             {
-                RemoveTriBenchCameraDraw();
+                RemoveMeshSplatBenchCameraDraw();
                 TargetCamera = camera;
             }
-            if (triBenchDrawCommands == null)
+            if (msBenchDrawCommands == null)
             {
-                if (!InstallTriBenchCameraDraw()) { enabled = false; return; }
+                if (!InstallMeshSplatBenchCameraDraw()) { enabled = false; return; }
             }
             RefreshTriangleOrder(camera);
             material.SetVector("_CameraWorldPos", camera.transform.position);
@@ -677,12 +677,12 @@ def _patch_method_specific_camera_state(source: str) -> str:
             if (camera == null || material == null) return;
             if (TargetCamera != camera)
             {
-                RemoveTriBenchCameraDraw();
+                RemoveMeshSplatBenchCameraDraw();
                 TargetCamera = camera;
             }
-            if (triBenchDrawCommands == null)
+            if (msBenchDrawCommands == null)
             {
-                if (!InstallTriBenchCameraDraw()) { enabled = false; return; }
+                if (!InstallMeshSplatBenchCameraDraw()) { enabled = false; return; }
             }
             RefreshTriangleOrder(camera);
             material.SetVector("_CameraWorldPos", camera.transform.position);
@@ -697,8 +697,8 @@ def _patch_method_specific_camera_state(source: str) -> str:
 '''
             source = source.replace(callback_anchor, prepare_block + callback_anchor, 1)
 
-    destroy_old = '        void OnDestroy() { RemoveTriBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n'
-    destroy_new = '        void OnDestroy() { RemoveTriBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n'
+    destroy_old = '        void OnDestroy() { RemoveMeshSplatBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n'
+    destroy_new = '        void OnDestroy() { RemoveMeshSplatBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n'
     if destroy_new not in source:
         if destroy_old in source:
             source = source.replace(destroy_old, destroy_new, 1)
@@ -706,7 +706,7 @@ def _patch_method_specific_camera_state(source: str) -> str:
             destroy_anchor = '        void OnDestroy()'
             if destroy_anchor not in source:
                 raise ValueError("could not locate MethodSpecific OnDestroy")
-            source = source.replace(destroy_anchor, '        void OnDestroy() { RemoveTriBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n\n        // original OnDestroy replaced by TriBench sort patch\n        void OnDestroy_disabled', 1)
+            source = source.replace(destroy_anchor, '        void OnDestroy() { RemoveMeshSplatBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n\n        // original OnDestroy replaced by MeshSplatBench sort patch\n        void OnDestroy_disabled', 1)
 
     return source
 
@@ -722,10 +722,10 @@ def _patch_generic_prepare_camera(source: str, name: str) -> str:
     method = '''        public override void PrepareCamera(Camera camera)
         {
             if (camera == null || material == null) return;
-            if (triBenchDrawCommands == null)
+            if (msBenchDrawCommands == null)
             {
                 TargetCamera = camera;
-                if (!InstallTriBenchCameraDraw()) enabled = false;
+                if (!InstallMeshSplatBenchCameraDraw()) enabled = false;
             }
         }
 
@@ -857,10 +857,10 @@ def _patch_triangle_splatting_camera_sort(source: str) -> str:
     old_prepare = '''        public override void PrepareCamera(Camera camera)
         {
             if (camera == null || material == null) return;
-            if (triBenchDrawCommands == null)
+            if (msBenchDrawCommands == null)
             {
                 TargetCamera = camera;
-                if (!InstallTriBenchCameraDraw()) enabled = false;
+                if (!InstallMeshSplatBenchCameraDraw()) enabled = false;
             }
         }
 '''
@@ -869,12 +869,12 @@ def _patch_triangle_splatting_camera_sort(source: str) -> str:
             if (camera == null || material == null) return;
             if (TargetCamera != camera)
             {
-                RemoveTriBenchCameraDraw();
+                RemoveMeshSplatBenchCameraDraw();
                 TargetCamera = camera;
             }
-            if (triBenchDrawCommands == null)
+            if (msBenchDrawCommands == null)
             {
-                if (!InstallTriBenchCameraDraw()) { enabled = false; return; }
+                if (!InstallMeshSplatBenchCameraDraw()) { enabled = false; return; }
             }
             RefreshTriangleOrder(camera);
         }
@@ -952,7 +952,7 @@ def _patch_method_specific_shader_level_soup(source: str) -> str:
                 // source vertex attributes through _Indices in the shader.  This
                 // disables hardware vertex sharing in the draw path without
                 // materializing multi-GiB duplicate SH buffers on the CPU/GPU.
-                Debug.Log("[TriBench] MeshSplatting shader-level soup topology: retaining indexed buffers; procedural corners fetch via _Indices.");
+                Debug.Log("[MeshSplatBench] MeshSplatting shader-level soup topology: retaining indexed buffers; procedural corners fetch via _Indices.");
             }
             positions = Upload(ReadFloat(Path.Combine(b, "positions.bin")));
             indices = Upload(sourceIndices);
@@ -978,7 +978,7 @@ def _patch_method_specific_shader_level_soup(source: str) -> str:
 def _capture_helpers() -> str:
     return r'''
 
-        // TriBench Vulkan premultiplied-capture patch. The method-aware shaders
+        // MeshSplatBench Vulkan premultiplied-capture patch. The method-aware shaders
         // use front-to-back premultiplied accumulation. Destination alpha must
         // start at zero; Color.black/white both carry alpha one in Unity.
         void PreparePremultipliedCaptureTarget()
@@ -1010,9 +1010,9 @@ def _capture_helpers() -> str:
             image.SetPixels32(pixels);
             image.Apply(false, false);
             if (coveredPixels == 0)
-                Debug.LogError("[TriBench] Capture target has zero alpha coverage; no procedural geometry reached the camera.");
+                Debug.LogError("[MeshSplatBench] Capture target has zero alpha coverage; no procedural geometry reached the camera.");
             else
-                Debug.Log($"[TriBench] Capture alpha coverage: {coveredPixels}/{pixels.Length} pixels.");
+                Debug.Log($"[MeshSplatBench] Capture alpha coverage: {coveredPixels}/{pixels.Length} pixels.");
         }
 '''
 
@@ -1059,9 +1059,9 @@ def _patch_capture(source: str) -> str:
             "            image.SetPixels32(pixels);\n"
             "            image.Apply(false, false);\n"
             "            if (coveredPixels == 0)\n"
-            "                Debug.LogError(\"[TriBench] Capture target has zero alpha coverage; no procedural geometry reached the camera.\");\n"
+            "                Debug.LogError(\"[MeshSplatBench] Capture target has zero alpha coverage; no procedural geometry reached the camera.\");\n"
             "            else\n"
-            "                Debug.Log($\"[TriBench] Capture alpha coverage: {coveredPixels}/{pixels.Length} pixels.\");",
+            "                Debug.Log($\"[MeshSplatBench] Capture alpha coverage: {coveredPixels}/{pixels.Length} pixels.\");",
             1,
         )
     # A camera command buffer has the correct view/projection globals during
@@ -1128,7 +1128,7 @@ def _patch_capture(source: str) -> str:
 
 
 def _patch_profile_player_build(source: str) -> str:
-    marker = "TriBench Linux standalone profile player patch"
+    marker = "MeshSplatBench Linux standalone profile player patch"
     if marker in source:
         return source
     if "target = BuildTarget.StandaloneOSX" not in source:
@@ -1136,17 +1136,17 @@ def _patch_profile_player_build(source: str) -> str:
     updated = source
     updated = updated.replace(
         '''            BuildPlayerOptions options = new BuildPlayerOptions {
-                scenes = new[] { "Assets/Scenes/TriBenchGarden.unity" },
+                scenes = new[] { "Assets/Scenes/MeshSplatBenchGarden.unity" },
                 locationPathName = output,
                 target = BuildTarget.StandaloneOSX,
                 options = BuildOptions.Development,
             };''',
         '''            BuildTarget target = ParseTarget(GetArgument("-profile-player-target"));
             BuildPlayerOptions options = new BuildPlayerOptions {
-                scenes = new[] { "Assets/Scenes/TriBenchGarden.unity" },
+                scenes = new[] { "Assets/Scenes/MeshSplatBenchGarden.unity" },
                 locationPathName = output,
                 target = target,
-                // TriBench Linux standalone profile player patch.
+                // MeshSplatBench Linux standalone profile player patch.
                 options = BuildOptions.Development,
             };''',
         1,
@@ -1175,7 +1175,7 @@ def _patch_profile_player_build(source: str) -> str:
                 case "standalonewindows64":
                     return BuildTarget.StandaloneWindows64;
                 default:
-                    throw new ArgumentException("Unsupported TriBench profile player target: " + value);
+                    throw new ArgumentException("Unsupported MeshSplatBench profile player target: " + value);
             }
         }
 
@@ -1184,9 +1184,9 @@ def _patch_profile_player_build(source: str) -> str:
 
 
 def patch_unity_project(project: Path) -> list[Path]:
-    assets = project.expanduser().resolve() / "Assets" / "TriBench"
+    assets = project.expanduser().resolve() / "Assets" / "MeshSplatBench"
     if not assets.is_dir():
-        raise FileNotFoundError(f"legacy TriBench Unity assets not found: {assets}")
+        raise FileNotFoundError(f"legacy MeshSplatBench Unity assets not found: {assets}")
 
     changed: list[Path] = []
     shader_root = assets / "Shaders"
@@ -1254,7 +1254,7 @@ def patch_unity_project(project: Path) -> list[Path]:
         if _write_if_changed(path, original, updated):
             changed.append(path)
 
-    build = assets / "Editor" / "TriBenchProfilePlayerBuild.cs"
+    build = assets / "Editor" / "MeshSplatBenchProfilePlayerBuild.cs"
     if build.is_file():
         original = build.read_text(encoding="utf-8")
         if _write_if_changed(build, original, _patch_profile_player_build(original)):
@@ -1264,17 +1264,17 @@ def patch_unity_project(project: Path) -> list[Path]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Patch a legacy TriBenchUnity Metal project for Vulkan capture."
+        description="Patch a legacy MeshSplatBenchUnity Metal project for Vulkan capture."
     )
     parser.add_argument("--unity-project", type=Path, required=True)
     args = parser.parse_args()
     changed = patch_unity_project(args.unity_project)
     if changed:
-        print("Patched legacy TriBench Unity project:")
+        print("Patched legacy MeshSplatBench Unity project:")
         for path in changed:
             print(f"  {path}")
     else:
-        print("Legacy TriBench Unity project is already patched.")
+        print("Legacy MeshSplatBench Unity project is already patched.")
     return 0
 
 

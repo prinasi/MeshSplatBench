@@ -34,7 +34,7 @@ MeshSplatBench provides a single, consistent evaluation framework for comparing 
 git clone https://github.com/prinasi/MeshSplatBench.git
 cd MeshSplatBench
 conda env create -f environment.yml
-conda activate tribench
+conda activate msbench
 ```
 
 ### Option 2: Pip Install
@@ -65,14 +65,14 @@ Detailed directory trees, download links, and COLMAP structures are documented i
 
 ```bash
 # Train, render, evaluate, inspect, and profile from one experiment config
-tribench train --config configs/triangle-splatting/mipnerf360/bicycle.yaml
-tribench render images --config configs/triangle-splatting/mipnerf360/bicycle.yaml
-tribench eval images --config configs/triangle-splatting/mipnerf360/bicycle.yaml
-tribench inspect --config configs/triangle-splatting/mipnerf360/bicycle.yaml
-tribench profile --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+msbench train --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+msbench render images --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+msbench eval images --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+msbench inspect --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+msbench profile --config configs/triangle-splatting/mipnerf360/bicycle.yaml
 
 # Config values can still be overridden from the CLI
-tribench render video --config configs/triangle-splatting/mipnerf360/bicycle.yaml --output-dir outputs/demo-video
+msbench render video --config configs/triangle-splatting/mipnerf360/bicycle.yaml --output-dir outputs/demo-video
 
 # Train complete datasets with the scene pipeline helper
 bash single_train.sh triangle-splatting mipnerf360/all 0
@@ -95,12 +95,12 @@ bash single_unity_eval.sh 2dts mipnerf360/bicycle 0 --unity "$UNITY" --unity-pro
 
 ## Profiling
 
-`tribench profile` measures the rendering performance of a trained checkpoint
+`msbench profile` measures the rendering performance of a trained checkpoint
 and writes a versioned JSON report. It reuses the same config resolution as
 train/render/eval, so a completed run can be profiled with the same config:
 
 ```bash
-tribench profile --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+msbench profile --config configs/triangle-splatting/mipnerf360/bicycle.yaml
 ```
 
 The defaults in `configs/base/_base_.yaml` write the report to
@@ -151,7 +151,7 @@ profile:
 Fast smoke run on the same config:
 
 ```bash
-tribench profile \
+msbench profile \
   --config configs/triangle-splatting/mipnerf360/bicycle.yaml \
   --repeats 3 \
   --warmup 1 \
@@ -205,14 +205,14 @@ whenever the active PyTorch/CUDA environment changes; an ABI mismatch surfaces
 as an extension import error when the adapter loads:
 
 ```bash
-conda activate tribench
-TRIBENCH_BUILD_CUDA=1 \
-  TRIBENCH_CUDA_BACKENDS=triangle-splatting,simple-knn \
+conda activate msbench
+MSBENCH_BUILD_CUDA=1 \
+  MSBENCH_CUDA_BACKENDS=triangle-splatting,simple-knn \
   python setup.py build_ext --inplace --force
 ```
 
-Set `TRIBENCH_CUDA_BACKENDS` to the backends you need and `TRIBENCH_CUDA_ARCHS`
-to your GPU architecture (default `89`); set `TRIBENCH_SKIP_CUDA=1` to skip
+Set `MSBENCH_CUDA_BACKENDS` to the backends you need and `MSBENCH_CUDA_ARCHS`
+to your GPU architecture (default `89`); set `MSBENCH_SKIP_CUDA=1` to skip
 extension builds entirely.
 
 ## Unity-native Evaluation
@@ -235,7 +235,7 @@ export UNITY=/path/to/Unity/Editor/Unity
 Linux. It also builds or reuses a Linux standalone Development Player at:
 
 ```text
-outputs/unity_player/linux/TriBenchProfilePlayer.x86_64
+outputs/unity_player/linux/MeshSplatBenchProfilePlayer.x86_64
 ```
 
 ### Export Unity assets only
@@ -540,8 +540,8 @@ outputs/{method}/{dataset}/{scene}/
 ├── config.yaml           # resolved config snapshot
 ├── metrics.json          # aggregated image metrics (test split)
 ├── mesh_metrics.json     # DTU/mesh geometry metrics
-├── profile.json          # renderer profiling report (tribench profile)
-├── stats.json            # model statistics (tribench inspect)
+├── profile.json          # renderer profiling report (msbench profile)
+├── stats.json            # model statistics (msbench inspect)
 └── train_stats.json      # training time / peak GPU memory
 ```
 
@@ -562,7 +562,7 @@ The `adapter.checkpoint` template in each method base config points at `ckpt/`:
 
 ```
 MeshSplatBench/
-├── tribench/
+├── msbench/
 │   ├── core/           # Cameras, stats, profiling, registry, config
 │   ├── primitives/     # Triangle primitive types (independent, mesh, convex)
 │   ├── renderers/      # Adapter wrappers for each method
@@ -595,4 +595,4 @@ If you find this benchmark, codebase, or results helpful in your research, pleas
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE). Third-party submodules and vendor components under `tribench/vendor/` and `submodules/` are subject to their respective original licenses.
+This project is licensed under the [MIT License](LICENSE). Third-party submodules and vendor components under `msbench/vendor/` and `submodules/` are subject to their respective original licenses.

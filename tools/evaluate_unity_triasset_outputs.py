@@ -64,7 +64,7 @@ def main() -> int:
             "--output", str(root / "metrics_summary.json"),
             "--with-lpips", "--lpips-net", "vgg", "--lpips-device", args.lpips_device,
         ]
-        print(f"[TriBench] metrics scene={scene}, reference={image_dir}", flush=True)
+        print(f"[MeshSplatBench] metrics scene={scene}, reference={image_dir}", flush=True)
         with (root / "metrics_vgg.log").open("w") as log:
             completed = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, check=False)
         if completed.returncode != 0:

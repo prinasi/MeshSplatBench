@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repeated no-I/O Unity deployment profiling for TriBench assets.
+"""Repeated no-I/O Unity deployment profiling for MeshSplatBench assets.
 
 The Unity-side profiler measures three evenly spaced LLFF held-out cameras per
 scene by default.  Each independent run is a fresh Editor process so that load
@@ -26,7 +26,7 @@ def image_directory(scene: str) -> str:
 
 
 def run_one(args: argparse.Namespace, method: str, mode: str, scene: str, run_id: int) -> None:
-    scene_root = args.tribench_root / "outputs" / method / "mipnerf360" / scene
+    scene_root = args.msbench_root / "outputs" / method / "mipnerf360" / scene
     triasset = scene_root / "unity_native" / f"{method}.triasset"
     dataset = args.datasets_root / scene
     output = args.output_root / method / mode / scene / f"run_{run_id:02d}"
@@ -34,7 +34,7 @@ def run_one(args: argparse.Namespace, method: str, mode: str, scene: str, run_id
     profile = output / f"runtime_profile_run_{run_id:02d}.json"
     marker = output / ".unity_capture_complete"
     if profile.is_file() and not args.force:
-        print(f"[TriBench] reuse {profile}", flush=True)
+        print(f"[MeshSplatBench] reuse {profile}", flush=True)
         return
     if args.force:
         profile.unlink(missing_ok=True)
@@ -54,7 +54,7 @@ def run_one(args: argparse.Namespace, method: str, mode: str, scene: str, run_id
     command = [str(args.player if args.player else args.unity), "-force-metal"]
     if not args.player:
         command.insert(1, "-batchmode")
-        command.extend(("-projectPath", str(args.unity_project), "-executeMethod", "TriBench.UnityNative.Editor.TriAssetBatchRunner.Run"))
+        command.extend(("-projectPath", str(args.unity_project), "-executeMethod", "MeshSplatBench.UnityNative.Editor.TriAssetBatchRunner.Run"))
     command.extend((
         "-method", method, "-triasset", str(triasset), "-dataset", str(dataset), "-output", str(output),
         "-triasset-width", str(width), "-triasset-height", str(height),
@@ -66,7 +66,7 @@ def run_one(args: argparse.Namespace, method: str, mode: str, scene: str, run_id
         command.extend(("-standard-mesh", "1"))
     elif method != "triangle-splatting":
         command.extend(("-method-specific", "1"))
-    print(f"[TriBench] {method}/{mode}/{scene} run={run_id}", flush=True)
+    print(f"[MeshSplatBench] {method}/{mode}/{scene} run={run_id}", flush=True)
     process = subprocess.Popen(command)
     deadline = time.monotonic() + args.timeout_seconds
     while process.poll() is None and not marker.is_file():
@@ -100,7 +100,7 @@ def main() -> int:
     parser.add_argument("--unity", type=Path, default=Path("/Applications/Unity/Unity-6000.4.7f1/Unity.app/Contents/MacOS/Unity"))
     parser.add_argument("--player", type=Path, help="Optional standalone Player executable; required for valid GPU timing on this setup.")
     parser.add_argument("--unity-project", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--tribench-root", type=Path, default=Path("/Volumes/GLOWAY/Workspace/tribench"))
+    parser.add_argument("--msbench-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--datasets-root", type=Path, default=Path("/Volumes/GLOWAY/Datasets/MipNeRF360"))
     parser.add_argument("--output-root", type=Path, default=Path(__file__).resolve().parents[1] / "Results" / "deployment_profiles")
     parser.add_argument("--methods", nargs="*", choices=METHODS, default=METHODS)
@@ -116,7 +116,7 @@ def main() -> int:
     args = parser.parse_args()
     args.unity = args.unity.resolve(); args.unity_project = args.unity_project.resolve()
     if args.player is not None: args.player = args.player.resolve()
-    args.tribench_root = args.tribench_root.resolve(); args.datasets_root = args.datasets_root.resolve(); args.output_root = args.output_root.resolve()
+    args.msbench_root = args.msbench_root.resolve(); args.datasets_root = args.datasets_root.resolve(); args.output_root = args.output_root.resolve()
     if not args.unity.is_file(): raise FileNotFoundError(args.unity)
     if args.player is not None and not args.player.is_file(): raise FileNotFoundError(args.player)
     args.output_root.mkdir(parents=True, exist_ok=True)

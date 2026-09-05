@@ -61,7 +61,7 @@ def native_gaussian_ssim(prediction: np.ndarray, target: np.ndarray) -> float:
 
 
 def _image_key(path: Path) -> str:
-    # TriBench Native renders use ``00023_DSC08140.png`` while Unity captures
+    # MeshSplatBench Native renders use ``00023_DSC08140.png`` while Unity captures
     # use ``DSC08140.png``. Strip only the framework's numeric prefix.
     return re.sub(r"^\d{5}_", "", path.stem).casefold()
 

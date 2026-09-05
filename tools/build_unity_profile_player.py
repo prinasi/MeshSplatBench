@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the TriBench standalone Unity profile Player."""
+"""Build the MeshSplatBench standalone Unity profile Player."""
 from __future__ import annotations
 
 import argparse
@@ -34,13 +34,13 @@ def main() -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     command = [
         str(unity), "-batchmode", *unity_graphics_arguments(), "-projectPath", str(project),
-        "-executeMethod", "TriBench.UnityNative.Editor.TriBenchProfilePlayerBuild.Build",
+        "-executeMethod", "MeshSplatBench.UnityNative.Editor.MeshSplatBenchProfilePlayerBuild.Build",
         "-profile-player-output", str(output),
         "-profile-player-target", args.target,
         "-logFile", str(log_path),
         "-quit",
     ]
-    print("[TriBench] Building Unity profile Player:", " ".join(command), flush=True)
+    print("[MeshSplatBench] Building Unity profile Player:", " ".join(command), flush=True)
     env = os.environ.copy()
     if sys.platform.startswith("linux") and not env.get("DISPLAY"):
         env["DISPLAY"] = args.display or ":0"

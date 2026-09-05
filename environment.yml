@@ -1,4 +1,4 @@
-name: tribench
+name: msbench
 channels:
   - pytorch
   - nvidia

@@ -24,7 +24,7 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--unity", type=Path, required=True)
     p.add_argument("--unity-project", type=Path, required=True)
-    p.add_argument("--tribench-root", type=Path, default=Path("/Volumes/GLOWAY/Workspace/tribench"))
+    p.add_argument("--msbench-root", type=Path, default=Path(__file__).resolve().parents[2])
     p.add_argument("--datasets-root", type=Path, default=Path("/Volumes/GLOWAY/Datasets/MipNeRF360"))
     p.add_argument("--output-name", required=True)
     p.add_argument("--topology", choices=("indexed", "soup"), required=True)
@@ -34,7 +34,7 @@ def main() -> int:
     p.add_argument("--scenes", nargs="*", default=SCENES)
     args = p.parse_args()
     unity = args.unity.resolve(); project = args.unity_project.resolve()
-    root = args.tribench_root.resolve() / "outputs" / "mesh-splatting" / "mipnerf360"
+    root = args.msbench_root.resolve() / "outputs" / "mesh-splatting" / "mipnerf360"
     data = args.datasets_root.resolve()
     for scene in args.scenes:
         triasset = root / scene / "unity_native" / "mesh-splatting.triasset"
@@ -45,7 +45,7 @@ def main() -> int:
         output.mkdir(parents=True, exist_ok=True)
         marker = output / ".unity_capture_complete"; marker.unlink(missing_ok=True)
         command = [str(unity), "-batchmode", "-force-metal", "-projectPath", str(project),
-                   "-executeMethod", "TriBench.UnityNative.Editor.TriAssetBatchRunner.Run",
+                   "-executeMethod", "MeshSplatBench.UnityNative.Editor.TriAssetBatchRunner.Run",
                    "-method", "mesh-splatting", "-triasset", str(triasset), "-dataset", str(data / scene),
                    "-output", str(output), "-triasset-width", str(width), "-triasset-height", str(height),
                    "-fps-warmup", str(args.fps_warmup), "-fps-frames", str(args.fps_frames),

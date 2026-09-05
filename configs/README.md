@@ -1,4 +1,4 @@
-# TriBench Config Layout
+# MeshSplatBench Config Layout
 
 Scene configs are grouped by method, then dataset:
 
@@ -53,14 +53,14 @@ _base_:
 Run one scene directly from its config:
 
 ```bash
-tribench train --config configs/triangle-splatting/mipnerf360/bicycle.yaml
-tribench eval images --config configs/triangle-splatting/mipnerf360/bicycle.yaml
-tribench train --config configs/mesh-splatting/mipnerf360/bicycle.yaml
-tribench eval images --config configs/mesh-splatting/mipnerf360/bicycle.yaml
-tribench train --config configs/triangle-splatting/nerf_synthetic/lego.yaml
-tribench eval images --config configs/triangle-splatting/nerf_synthetic/lego.yaml
-tribench train --config configs/2dts/dtu/scan24.yaml
-tribench eval images --config configs/2dts/dtu/scan24.yaml
+msbench train --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+msbench eval images --config configs/triangle-splatting/mipnerf360/bicycle.yaml
+msbench train --config configs/mesh-splatting/mipnerf360/bicycle.yaml
+msbench eval images --config configs/mesh-splatting/mipnerf360/bicycle.yaml
+msbench train --config configs/triangle-splatting/nerf_synthetic/lego.yaml
+msbench eval images --config configs/triangle-splatting/nerf_synthetic/lego.yaml
+msbench train --config configs/2dts/dtu/scan24.yaml
+msbench eval images --config configs/2dts/dtu/scan24.yaml
 ```
 
 Train/evaluate a complete built-in dataset with the scene pipeline helper:

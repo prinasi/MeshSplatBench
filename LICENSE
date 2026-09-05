@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 MeshSplatBench / TriBench Contributors
+Copyright (c) 2026 MeshSplatBench Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -24,7 +24,8 @@ SOFTWARE.
 Third-Party Component Licenses:
 
 This project incorporates or interfaces with several open-source algorithms and
-libraries under `tribench/vendor/` and `submodules/`:
+libraries under `msbench/vendor/` and `submodules/`:
+
 
 1. 2D Triangle Splatting (2DTS) / 2D Gaussian Splatting:
    - Original 3D Gaussian Splatting codebase by Inria and MPII (licensed under the

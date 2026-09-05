@@ -98,8 +98,8 @@ def summary(values: list[dict], key: str) -> list[float]:
     return [statistics.median(v[key]) for v in values if v[key]]
 
 
-def table_for_method(profile_root: Path, tribench_root: Path, method: str) -> str:
-    qualities = {mode: quality_by_scene(tribench_root, method, mode) for mode in ("common", "faithful")}
+def table_for_method(profile_root: Path, msbench_root: Path, method: str) -> str:
+    qualities = {mode: quality_by_scene(msbench_root, method, mode) for mode in ("common", "faithful")}
     rows: list[tuple[str, str, dict, dict]] = []
     for scene in SCENES:
         for mode in ("common", "faithful"):
@@ -133,11 +133,11 @@ def table_for_method(profile_root: Path, tribench_root: Path, method: str) -> st
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile-root", type=Path, required=True)
-    parser.add_argument("--tribench-root", type=Path, default=Path("/Volumes/GLOWAY/Workspace/tribench"))
+    parser.add_argument("--msbench-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    sections = ["# TriBench Unity deployment profile", "", "Quality values reuse the completed matched-camera Unity evaluations. CPU timing, load time, Unity graphics-driver allocation, and submissions are collected from repeated headless Unity Editor launches. GPU columns remain unavailable unless a valid GPU counter backend supplies at least 80% of timed frames.", ""]
-    for method in QUALITY: sections.append(table_for_method(args.profile_root, args.tribench_root, method))
+    sections = ["# MeshSplatBench Unity deployment profile", "", "Quality values reuse the completed matched-camera Unity evaluations. CPU timing, load time, Unity graphics-driver allocation, and submissions are collected from repeated headless Unity Editor launches. GPU columns remain unavailable unless a valid GPU counter backend supplies at least 80% of timed frames.", ""]
+    for method in QUALITY: sections.append(table_for_method(args.profile_root, args.msbench_root, method))
     args.output.write_text("\n".join(sections), encoding="utf-8")
     return 0
 

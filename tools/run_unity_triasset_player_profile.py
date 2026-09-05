@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run standalone Unity Player profiles for TriBench TriAssets."""
+"""Run standalone Unity Player profiles for MeshSplatBench TriAssets."""
 from __future__ import annotations
 
 import argparse
@@ -46,9 +46,10 @@ def quantile(values: list[float], q: float) -> float:
 
 def player_failure_summary(log_paths: list[Path], *, max_lines: int = 16) -> str:
     needles = (
-        "[tribench]", "error", "exception", "fatal", "crash", "gpu frametiming",
+        "[msbench]", "[meshsplatbench]", "error", "exception", "fatal", "crash", "gpu frametiming",
         "vulkan", "failed", "display", "x11", "wayland",
     )
+
     matches = []
     existing = [path for path in log_paths if path.is_file()]
     if not existing:
@@ -115,7 +116,7 @@ class PlayerProfileSupervisor:
     """Bounds a standalone Unity Player profile run and localizes stalls.
 
     Progress signals are: growth of the Player log or console log, a new
-    [TriBench] milestone line in the Player log, or appearance/growth of the
+    [MeshSplatBench] milestone line in the Player log, or appearance/growth of the
     runtime profile JSON.  Three independent deadlines are enforced:
 
     - startup timeout: time until the first progress signal.  Failure means the
@@ -173,7 +174,7 @@ class PlayerProfileSupervisor:
             return 0
 
     def _read_milestones(self) -> list[str]:
-        """Return new [TriBench] lines appended to the Player log since last read."""
+        """Return new [MeshSplatBench] lines appended to the Player log since last read."""
         size = self._file_size(self.log_path)
         if size < self._log_offset:
             self._log_offset = 0
@@ -186,7 +187,14 @@ class PlayerProfileSupervisor:
             self._log_offset = size
         except OSError:
             return []
-        return [line.strip() for line in chunk.splitlines() if line.strip() and "[tribench]" in line.strip().lower()]
+        return [
+            line.strip()
+            for line in chunk.splitlines()
+            if line.strip() and any(tag in line.strip().lower() for tag in ("[msbench]", "[meshsplatbench]"))
+        ]
+
+
+
 
     def _kill(self) -> None:
         if self.process.poll() is not None:
@@ -220,15 +228,15 @@ class PlayerProfileSupervisor:
         ]
         if stage == "startup":
             lines.append(
-                "  No TriBench milestone or profile JSON appeared; the Player likely never "
+                "  No MeshSplatBench milestone or profile JSON appeared; the Player likely never "
                 "reached the profile scene (engine startup/scene load stall)."
             )
         if self._milestones:
-            lines.append("  Recent TriBench milestones:")
+            lines.append("  Recent MeshSplatBench milestones:")
             for when, text in self._milestones[-6:]:
                 lines.append(f"    +{when - started:6.1f}s {text}")
         else:
-            lines.append("  No TriBench milestones were logged.")
+            lines.append("  No MeshSplatBench milestones were logged.")
         lines.append(f"  Relevant Player log lines ({self.log_path}, {self.console_log_path}):")
         lines.append(player_failure_summary([self.log_path, self.console_log_path]))
         return "\n".join(lines)
@@ -236,7 +244,7 @@ class PlayerProfileSupervisor:
     def _status_line(self, started: float, now: float) -> str:
         last_milestone = self._milestones[-1][1] if self._milestones else "<none>"
         return (
-            f"[TriBench] Player profile in progress scene={self.scene} elapsed={now - started:.0f}s "
+            f"[MeshSplatBench] Player profile in progress scene={self.scene} elapsed={now - started:.0f}s "
             f"log_bytes={self._file_size(self.log_path)} json={self.profile_path.is_file()} "
             f"last_milestone={last_milestone[-90:]}"
         )
@@ -292,7 +300,7 @@ class PlayerProfileSupervisor:
                 self._milestones = self._milestones[-20:]
                 if self.verbose:
                     for line in new_milestones:
-                        print(f"[TriBench] player milestone: {line}", flush=True)
+                        print(f"[MeshSplatBench] player milestone: {line}", flush=True)
             new_log_size = self._file_size(self.log_path)
             new_console_size = self._file_size(self.console_log_path)
             new_profile_size = self._file_size(self.profile_path)
@@ -419,7 +427,7 @@ def main() -> int:
         "--startup-timeout",
         type=float,
         default=300.0,
-        help="Seconds until the first TriBench progress signal before aborting the run (default: 300).",
+        help="Seconds until the first MeshSplatBench progress signal before aborting the run (default: 300).",
     )
     parser.add_argument(
         "--stall-timeout",
@@ -448,7 +456,7 @@ def main() -> int:
     parser.add_argument(
         "--verbose-wait",
         action="store_true",
-        help="Print every TriBench milestone line as it appears in the Player log.",
+        help="Print every MeshSplatBench milestone line as it appears in the Player log.",
     )
     condition = parser.add_mutually_exclusive_group(required=True)
     condition.add_argument("--general-purpose", "--standard-mesh", dest="general_purpose", action="store_true")
@@ -541,7 +549,7 @@ def main() -> int:
                 "gpu_timing_min_fraction": args.gpu_timing_min_fraction,
             },
         }
-        (output / "tribench_run_protocol.json").write_text(json.dumps(run_protocol, indent=2) + "\n")
+        (output / "msbench_run_protocol.json").write_text(json.dumps(run_protocol, indent=2) + "\n")
         command = [
             str(player),
             *unity_graphics_arguments(),
@@ -572,7 +580,7 @@ def main() -> int:
         if args.method_aware:
             command.extend(("-method-specific", "1"))
 
-        print(f"[TriBench] Player profile scene={scene}, reference={image_dir.name}, resolution={width}x{height}", flush=True)
+        print(f"[MeshSplatBench] Player profile scene={scene}, reference={image_dir.name}, resolution={width}x{height}", flush=True)
         started = time.time()
         env = os.environ.copy()
         if sys.platform.startswith("linux") and not env.get("DISPLAY"):
@@ -592,7 +600,7 @@ def main() -> int:
             args.profile_views, args.profile_warmup, args.profile_frames, frame_budget=args.stall_frame_budget
         )
         print(
-            f"[TriBench] Player profile supervision scene={scene}: "
+            f"[MeshSplatBench] Player profile supervision scene={scene}: "
             f"startup_timeout={args.startup_timeout:g}s stall_timeout={stall_timeout:g}s "
             f"total_timeout={total_timeout:g}s",
             flush=True,
@@ -648,7 +656,7 @@ def main() -> int:
         )
         summary = profile_summary(profile_path)
         print(
-            f"[TriBench] Player profile complete scene={scene} run={args.profile_run} "
+            f"[MeshSplatBench] Player profile complete scene={scene} run={args.profile_run} "
             f"gpu_fps={summary['gpu_fps']:.2f} gpu_p50_ms={summary['gpu_p50_ms']:.3f} "
             f"gpu_p95_ms={summary['gpu_p95_ms']:.3f} gpu_samples={summary['gpu_samples']} "
             f"render_mib={summary['rendering_memory_mib']:.1f} log={log_path}",

@@ -20,13 +20,13 @@
 
 ## macOS 无 CUDA 适配
 
-TriBench 原有 adapter 依赖 CUDA rasterizer。在 macOS 上通过以下策略实现无 CUDA 运行：
+MeshSplatBench 原有 adapter 依赖 CUDA rasterizer。在 macOS 上通过以下策略实现无 CUDA 运行：
 
 - 几何导出（Phase 2）纯 CPU 操作，不依赖 CUDA ✅
 - viewer server（静态文件、dataset.json、PLY endpoint）纯 CPU ✅
 - 实际渲染（POST /render）使用 DummyRenderer 返回占位图，保证 viewer UI 可用 ✅
 - 当检测到 CUDA 不可用时自动回退到 DummyRenderer ✅
-- `tribench/renderers/dummy.py` (125行)：CPU-only渲染器，返回梯度占位图 + 相机位姿叠加文字
+- `msbench/renderers/dummy.py` (125行)：CPU-only渲染器，返回梯度占位图 + 相机位姿叠加文字
 - `DummyRenderer.render()` 返回 NCHW [1,C,H,W] 张量，`_to_hwc()` 转换为 [H,W,C] 供 PIL 编码
 
 ## 实施顺序（按计划推荐）
@@ -77,21 +77,21 @@ Test 10: GET  /styles.css               → 200, 15,352 bytes
 
 | 文件路径 | 行数 | 说明 |
 |----------|------|------|
-| `tribench/core/viewer.py` | 1,108 | 完全重写：nerfbaselines兼容的HTTP+WS viewer server |
-| `tribench/core/viewer_geometry.py` | 核心模块 | 双点云导出与原始几何导出 |
-| `tribench/core/trajectory.py` | 279 | nerfbaselines-v1 trajectory读写和离线渲染 |
-| `tribench/core/_websocket.py` | 1,732 | RFC 6455 WebSocket实现（从nerfbaselines复制） |
-| `tribench/core/palettes.json` | — | 色彩调色板定义（从nerfbaselines复制） |
-| `tribench/renderers/dummy.py` | 125 | CPU-only DummyRenderer（macOS无CUDA回退） |
+| `msbench/core/viewer.py` | 1,108 | 完全重写：nerfbaselines兼容的HTTP+WS viewer server |
+| `msbench/core/viewer_geometry.py` | 核心模块 | 双点云导出与原始几何导出 |
+| `msbench/core/trajectory.py` | 279 | nerfbaselines-v1 trajectory读写和离线渲染 |
+| `msbench/core/_websocket.py` | 1,732 | RFC 6455 WebSocket实现（从nerfbaselines复制） |
+| `msbench/core/palettes.json` | — | 色彩调色板定义（从nerfbaselines复制） |
+| `msbench/renderers/dummy.py` | 125 | CPU-only DummyRenderer（macOS无CUDA回退） |
 | `tools/export_viewer_geometry.py` | 独立入口 | 几何导出CLI工具 |
-| `tribench/core/viewer_static/` | 22文件 | nerfbaselines前端必要静态资源 |
+| `msbench/core/viewer_static/` | 22文件 | nerfbaselines前端必要静态资源 |
 
 ### 修改文件
 
 | 文件路径 | 说明 |
 |----------|------|
-| `tribench/cli/render.py` | viewer命令新增geometry/split参数、CUDA自动回退、viewer-path离线轨迹渲染 |
-| `tribench/core/rendering.py` | render_video兼容imageio.v2 writer和imageio.v3.imwrite |
+| `msbench/cli/render.py` | viewer命令新增geometry/split参数、CUDA自动回退、viewer-path离线轨迹渲染 |
+| `msbench/core/rendering.py` | render_video兼容imageio.v2 writer和imageio.v3.imwrite |
 
 ### viewer_static/ 目录结构
 
@@ -122,15 +122,15 @@ viewer_static/
 
 ### Phase 1: 静态资源迁移 — ✅ 完成
 
-- [x] 从 nerfbaselines 迁移前端文件到 `tribench/core/viewer_static/`，仅保留22个必要静态资源
+- [x] 从 nerfbaselines 迁移前端文件到 `msbench/core/viewer_static/`，仅保留22个必要静态资源
 - [x] 包含 Three.js、viewer.js、controls.js、PLYLoader 等核心组件
 - [x] 保留 third-party/ 子目录结构（fonts/、lines/、loaders/）
-- [x] 禁用 `GET /3dgs.js`，TriBench viewer 不暴露 3DGS local renderer。
+- [x] 禁用 `GET /3dgs.js`，MeshSplatBench viewer 不暴露 3DGS local renderer。
 - [x] 物理移除 `viewer_static/3dgs.js` 与 gaussian-splats 第三方文件；Tabler 字体仅保留 woff2。
 
 ### Phase 2: 双点云导出 — ✅ 完成
 
-- [x] 创建 `tribench/core/viewer_geometry.py`
+- [x] 创建 `msbench/core/viewer_geometry.py`
   - `primitive_to_point_cloud()`: 从任意 BasePrimitive 采样三角形表面点
   - `_sample_triangle_surface()`: 面积加权重心坐标采样
   - `write_point_cloud_ply()` / `write_mesh_ply()`: PLY写入
@@ -186,11 +186,11 @@ viewer_static/
 ### Phase 7: Keyframe、轨迹和视频导出 — ✅ 基础完成
 
 - [x] 前端 keyframe/camera path UI 由 nerfbaselines static viewer 提供。
-- [x] 新增 `tribench/core/trajectory.py`
+- [x] 新增 `msbench/core/trajectory.py`
   - `load_trajectory()` / `save_trajectory()` 支持 `nerfbaselines-v1` JSON。
   - `trajectory_cameras()` 将 trajectory frame 转成 `CameraBatch`。
   - `render_trajectory_frames()` 支持按 trajectory 离线渲染帧序列和MP4。
-- [x] 新增 `tribench render viewer-path`
+- [x] 新增 `msbench render viewer-path`
   - `--trajectory/-t` 读取 viewer 导出的 camera path。
   - `--output-types color,depth,alpha,normal` 支持多输出类型。
   - 适配 CUDA 不可用时的 DummyRenderer fallback。
@@ -206,7 +206,7 @@ viewer_static/
 
 ### Phase 9: 配置与 CLI 集成 — ✅ 完成
 
-- [x] `tribench render viewer` 命令新增参数:
+- [x] `msbench render viewer` 命令新增参数:
   - `--viewer-splits` (默认 "train,test")
   - `--geometry` 指定 viewer 点云，默认自动生成/复用 `geometry_viewer_points.ply`
   - `--auto-export-geometry` / `--no-auto-export-geometry`
@@ -226,6 +226,6 @@ viewer_static/
 
 ## 待办事项
 
-1. 使用真实TriBench checkpoint测试完整viewer流程，尤其是四个方法的自由视角交互。
+1. 使用真实MeshSplatBench checkpoint测试完整viewer流程，尤其是四个方法的自由视角交互。
 2. 用真实 `mesh-splatting` checkpoint 验证 indexed mesh PLY/GLB 与 Unity/Blender 导入效果。
 3. 用浏览器端手动验收 keyframe preview、前端 mp4/webm/png zip 导出。

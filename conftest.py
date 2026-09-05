@@ -1,4 +1,5 @@
-"""Conftest at project root — ensures tribench package is importable for tests."""
+"""Conftest at project root — ensures msbench package is importable for tests."""
+
 import sys
 from pathlib import Path
 

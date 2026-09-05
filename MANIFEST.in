@@ -1,2 +1,3 @@
 recursive-include configs *.yaml
-recursive-include tribench/vendor/_csrc *
+recursive-include msbench/vendor/_csrc *
+

@@ -6,6 +6,6 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
-    path: Assets/Scenes/TriBenchGarden.unity
+    path: Assets/Scenes/MeshSplatBenchGarden.unity
     guid: cd7dc5b367dda4bbba70c0a2ca096115
   m_configObjects: {}

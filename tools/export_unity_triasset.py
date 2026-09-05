@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tribench.unity_assets import export_triasset
+from msbench.unity_assets import export_triasset
 
 
 def main() -> int:

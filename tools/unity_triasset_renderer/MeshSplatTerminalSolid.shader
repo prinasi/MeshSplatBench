@@ -1,6 +1,6 @@
 // MeshSplatting terminal deployment approximation.  It is selected only when
 // the manifest proves opacity_floor >= 0.999 and exp(sigma_logits) <= 0.001.
-Shader "TriBench/MeshSplatTerminalSolid"
+Shader "MeshSplatBench/MeshSplatTerminalSolid"
 {
     SubShader
     {

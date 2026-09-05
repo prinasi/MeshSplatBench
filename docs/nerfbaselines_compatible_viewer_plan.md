@@ -1,15 +1,15 @@
-# NerfBaselines-Compatible TriBench Viewer 适配计划
+# NerfBaselines-Compatible MeshSplatBench Viewer 适配计划
 
 ## 目标与范围
 
-目标是在 TriBench 中实现一个尽可能接近 `nerfbaselines/nerfbaselines/viewer/` 体验的 viewer，但只服务当前四个方法：
+目标是在 MeshSplatBench 中实现一个尽可能接近 `nerfbaselines/nerfbaselines/viewer/` 体验的 viewer，但只服务当前四个方法：
 
 - `triangle-splatting`
 - `mesh-splatting`
 - `2dts`
 - `diffsoup`
 
-我们不适配 nerfbaselines 的 3DGS 本地渲染器。TriBench 的核心交互渲染仍通过后端 `RendererAdapter.render(CameraBatch)` 完成；前端主要复用 nerfbaselines 的 Three.js viewer 能力，包括自由相机、train/test camera frustum、点云/mesh 预览、keyframe、轨迹和远程渲染协议。
+我们不适配 nerfbaselines 的 3DGS 本地渲染器。MeshSplatBench 的核心交互渲染仍通过后端 `RendererAdapter.render(CameraBatch)` 完成；前端主要复用 nerfbaselines 的 Three.js viewer 能力，包括自由相机、train/test camera frustum、点云/mesh 预览、keyframe、轨迹和远程渲染协议。
 
 整体策略是“协议兼容优先，模型格式解耦”：先把四个方法的最终权重导出成两类标准点云资产，再让 viewer 只消费轻量 viewer 点云作为 3D 场景锚点。真实图像仍由当前 adapter 远程渲染；高保真 CG 点云和可选 mesh 资产则用于 Unity、Blender、MeshLab 等外部软件检查与复用。
 
@@ -33,12 +33,12 @@
 
 - 不适配 nerfbaselines 的 3DGS local renderer。
 - 不要求支持任意 nerfbaselines method spec。
-- 不要求完全支持 appearance embedding；只有在 TriBench adapter 统一暴露后再做。
+- 不要求完全支持 appearance embedding；只有在 MeshSplatBench adapter 统一暴露后再做。
 - 不默认启用 Cloudflare public URL；可作为后续可选功能。
 
 ## 当前主要差距
 
-当前 TriBench viewer 仍以 `<img>` 展示远程渲染结果，缺少完整 Three.js 场景。它有 `POST /render` 的雏形，但没有 nerfbaselines 前端所依赖的完整环境：
+当前 MeshSplatBench viewer 仍以 `<img>` 展示远程渲染结果，缺少完整 Three.js 场景。它有 `POST /render` 的雏形，但没有 nerfbaselines 前端所依赖的完整环境：
 
 - `/dataset.json` 只返回一个 split，默认通常是 `test`。
 - 没有 train/test 同时加载。
@@ -78,8 +78,8 @@
 ### 任务
 
 1. 新增 viewer static 目录，例如：
-   - `tribench/core/viewer_static/`
-   - 或 `tribench/viewer/static/`
+   - `msbench/core/viewer_static/`
+   - 或 `msbench/viewer/static/`
 2. 从 nerfbaselines viewer 迁移必要前端文件：
    - `index.html`
    - `viewer.js`
@@ -96,8 +96,8 @@
 3. 删除或禁用 3DGS 入口：
    - 不暴露 `set_3dgs_renderer`
    - 不服务 `3dgs.js`
-   - 不在 TriBench params 中生成 3DGS renderer 配置
-4. 定义 TriBench viewer params：
+   - 不在 MeshSplatBench params 中生成 3DGS renderer 配置
+4. 定义 MeshSplatBench viewer params：
    - `renderer.type = "remote"`
    - `renderer.http_url = "./render"`
    - `renderer.websocket_url = "./render-websocket"`
@@ -112,7 +112,7 @@
 
 ### 预期效果
 
-打开 TriBench viewer 时不再进入自制 `<img>` 页面，而是进入 nerfbaselines 风格的完整 Three.js UI。即使暂时还没有点云，也应能看到空 3D 场景、菜单和远程渲染输出。
+打开 MeshSplatBench viewer 时不再进入自制 `<img>` 页面，而是进入 nerfbaselines 风格的完整 Three.js UI。即使暂时还没有点云，也应能看到空 3D 场景、菜单和远程渲染输出。
 
 ### 验证
 
@@ -126,7 +126,7 @@
 ### 任务
 
 1. 新增核心导出模块：
-   - `tribench/core/viewer_geometry.py`
+   - `msbench/core/viewer_geometry.py`
 2. 新增 CLI/tool：
    - `tools/export_viewer_geometry.py`
 3. 支持输入方式：
@@ -182,7 +182,7 @@
 ### 验证
 
 - 对四种 checkpoint 运行：
-  - `python tools/export_viewer_geometry.py --config ... --output-dir /tmp/tribench-viewer-geometry`
+  - `python tools/export_viewer_geometry.py --config ... --output-dir /tmp/msbench-viewer-geometry`
 - 用 `trimesh.load` 或 `plyfile` 能读出 vertex。
 - viewer 点云数量符合 `--viewer-num-points`。
 - CG 点云数量符合 `--cg-num-points`。
@@ -194,7 +194,7 @@
 
 ### 任务
 
-1. 修改 `tribench render viewer`：
+1. 修改 `msbench render viewer`：
    - 不再只构建一个 split。
    - 默认同时构建 `train` 和 `test` dataset。
    - 保留 `--split`，但语义改为 initial/active split，而非唯一 split。
@@ -255,7 +255,7 @@ viewer 中可以显示 train/test 两组 camera frustum。用户可以选择显�
 
 ### 预期效果
 
-nerfbaselines DatasetManager 能直接加载 TriBench 导出的 viewer 点云，并在 Three.js 场景中显示点云预览。自由视角操作会围绕实际几何锚点，而不是空白或测试图像。CG 点云和 mesh 资产可作为下载/检查入口提供，但不会拖慢默认 viewer。
+nerfbaselines DatasetManager 能直接加载 MeshSplatBench 导出的 viewer 点云，并在 Three.js 场景中显示点云预览。自由视角操作会围绕实际几何锚点，而不是空白或测试图像。CG 点云和 mesh 资产可作为下载/检查入口提供，但不会拖慢默认 viewer。
 
 ### 验证
 
@@ -283,8 +283,8 @@ nerfbaselines DatasetManager 能直接加载 TriBench 导出的 viewer 点云，
    - `split_palette`
    - `split_range`
    - `lossless`
-3. 将 nerfbaselines pose 转为 TriBench `CameraBatch`：
-   - 明确坐标系转换：Three.js camera pose -> TriBench c2w。
+3. 将 nerfbaselines pose 转为 MeshSplatBench `CameraBatch`：
+   - 明确坐标系转换：Three.js camera pose -> MeshSplatBench c2w。
    - 用单元测试覆盖 identity、dataset camera roundtrip、DTU/Blender/Colmap。
 4. 输出格式：
    - `color`: JPEG/PNG
@@ -296,7 +296,7 @@ nerfbaselines DatasetManager 能直接加载 TriBench 导出的 viewer 点云，
 
 ### 预期效果
 
-nerfbaselines 前端在任何自由视角都能调用 TriBench adapter 得到正确图像。输出类型和 split compare 基本可用。
+nerfbaselines 前端在任何自由视角都能调用 MeshSplatBench adapter 得到正确图像。输出类型和 split compare 基本可用。
 
 ### 验证
 
@@ -349,12 +349,12 @@ viewer 交互更接近 nerfbaselines，连续拖动时延迟更低，不需要�
    - output_type
    - split fields
 4. 可选新增后端命令：
-   - `tribench render viewer-path --camera-path path.json`
+   - `msbench render viewer-path --camera-path path.json`
    - 用于离线高质量渲染前端导出的 camera path。
 
 ### 预期效果
 
-用户能在 viewer 里添加 keyframe、预览 trajectory，并导出前端视频或帧序列。后续可以把前端 camera path 交给 TriBench CLI 做离线高质量渲染。
+用户能在 viewer 里添加 keyframe、预览 trajectory，并导出前端视频或帧序列。后续可以把前端 camera path 交给 MeshSplatBench CLI 做离线高质量渲染。
 
 ### 验证
 
@@ -370,7 +370,7 @@ viewer 交互更接近 nerfbaselines，连续拖动时延迟更低，不需要�
 1. 对 `mesh-splatting` 优先导出标准 `geometry_mesh.ply`：
    - `vertex` 使用标准坐标、颜色、可选 normals。
    - `face` 使用标准 index list。
-   - 不写入 TriBench 私有 face 属性；私有属性进入 `geometry_attributes.npz`。
+   - 不写入 MeshSplatBench 私有 face 属性；私有属性进入 `geometry_attributes.npz`。
 2. 对 `triangle-splatting`、`2dts`、`diffsoup`：
    - 默认导出 viewer/cg 两类点云。
    - 只有在 face 语义稳定且不会误导外部软件时，才导出 `geometry_mesh.ply`。
@@ -383,7 +383,7 @@ viewer 交互更接近 nerfbaselines，连续拖动时延迟更低，不需要�
 5. Unity/Blender 兼容增强：
    - 优先保证 `geometry_cg_points.ply` 是纯标准 PLY。
    - 后续提供 `geometry_mesh.glb`，减少 Unity 对 PLY importer 的依赖。
-   - 对 GLB 明确是否执行坐标系转换，例如 TriBench world -> glTF convention。
+   - 对 GLB 明确是否执行坐标系转换，例如 MeshSplatBench world -> glTF convention。
 
 ### 预期效果
 
@@ -447,7 +447,7 @@ viewer 交互更接近 nerfbaselines，连续拖动时延迟更低，不需要�
 所有 viewer 相关产物都有固定位置。用户可以直接运行：
 
 ```bash
-tribench render viewer --config configs/triangle-splatting/dtu/scan24.yaml
+msbench render viewer --config configs/triangle-splatting/dtu/scan24.yaml
 ```
 
 并自动获得 train/test cameras、viewer 点云、CG 点云、可选 mesh、自由视角远程渲染。
@@ -518,7 +518,7 @@ tribench render viewer --config configs/triangle-splatting/dtu/scan24.yaml
 
 ## 风险与决策点
 
-- **坐标系风险**：TriBench adapters、dataset loaders、nerfbaselines Three.js viewer 的坐标约定不完全一致。必须用 dataset camera roundtrip 测试锁死。
+- **坐标系风险**：MeshSplatBench adapters、dataset loaders、nerfbaselines Three.js viewer 的坐标约定不完全一致。必须用 dataset camera roundtrip 测试锁死。
 - **颜色风险**：triangle/mesh/diffsoup 的真实颜色可能是 view-dependent。viewer geometry 的颜色只用于空间预览，可以先用 DC/opacity/white，不要求与渲染完全一致。
 - **性能风险**：大场景 PLY 过大会拖慢前端。viewer 点云需要 `--viewer-num-points`、voxel/downsample、按面积采样；CG 点云可以更大，但不默认加载到浏览器。
 - **CG 兼容风险**：Unity/Blender 对 PLY 的自定义属性支持不稳定。标准点云 PLY 不写私有字段，复杂属性进入 sidecar；mesh 长期优先考虑 GLB。

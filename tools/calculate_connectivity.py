@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Calculate local connectivity metrics for MeshSplatting meshes.
 
-The default input is a TriBench MeshSplatting config.  The script resolves the
+The default input is a MeshSplatBench MeshSplatting config.  The script resolves the
 configured checkpoint, reads the indexed mesh stored in
 ``point_cloud_state_dict.pt`` (``triangles_points`` + ``_triangle_indices``),
 and reports topology metrics that are less easily hidden by global averages.
@@ -59,7 +59,7 @@ def _latest(paths: Iterable[Path]) -> Path | None:
 
 
 def _canonical_method(name: str) -> str:
-    from tribench.renderers.backends import canonical_backend_name
+    from msbench.renderers.backends import canonical_backend_name
 
     return canonical_backend_name(str(name))
 
@@ -538,7 +538,7 @@ def calculate_connectivity_metrics(
 def _section(cfg: Mapping[str, Any] | None, name: str) -> dict[str, Any]:
     if cfg is None:
         return {}
-    from tribench.core.config import Config
+    from msbench.core.config import Config
 
     return Config(cfg.get(name, {})).to_dict()
 
@@ -551,7 +551,7 @@ def _resolve_from_config(
     source: str | None,
     output: str | None,
 ) -> tuple[MeshData, dict[str, Any], Path | None]:
-    from tribench.cli.config import adapter_config, load_cli_config, output_dir
+    from msbench.cli.config import adapter_config, load_cli_config, output_dir
 
     cfg = load_cli_config(config) if config is not None else None
     adapter_cfg = adapter_config(cfg, checkpoint=checkpoint) if cfg is not None else {}
@@ -631,7 +631,7 @@ def main() -> None:
             "metrics for a MeshSplatting triangular mesh."
         )
     )
-    parser.add_argument("--config", "-c", type=str, help="TriBench MeshSplatting config YAML.")
+    parser.add_argument("--config", "-c", type=str, help="MeshSplatBench MeshSplatting config YAML.")
     parser.add_argument(
         "--checkpoint",
         type=str,

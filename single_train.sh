@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# single_train.sh - config-driven TriBench scene/dataset pipeline.
+# single_train.sh - config-driven MeshSplatBench scene/dataset pipeline.
 #
 # Primary interface:
 #   bash single_train.sh <method> <dataset/scene|dataset/all|all> <gpu_id> [options]
@@ -37,7 +37,7 @@ else
     PYTHON_BIN="python3"
 fi
 
-TB_CMD="${TRIBENCH_CMD:-tribench}"
+TB_CMD="${MSBENCH_CMD:-msbench}"
 TB_CMD_ARR=()
 FORMAT_METRICS="${FORMAT_METRICS:-tools/format_metrics.py}"
 
@@ -226,7 +226,7 @@ resolve_tb_cmd() {
     if command -v "${TB_CMD}" >/dev/null 2>&1; then
         TB_CMD_ARR=("${TB_CMD}")
     else
-        TB_CMD_ARR=("${PYTHON_BIN}" -m tribench.cli.main)
+        TB_CMD_ARR=("${PYTHON_BIN}" -m msbench.cli.main)
     fi
 }
 
@@ -289,7 +289,7 @@ cleanup_temp_configs() {
 
 ensure_temp_override_config_dir() {
     if [[ -z "${TEMP_OVERRIDE_CONFIG_DIR}" ]]; then
-        TEMP_OVERRIDE_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tribench-run-configs.XXXXXX")"
+        TEMP_OVERRIDE_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/msbench-run-configs.XXXXXX")"
         trap cleanup_temp_configs EXIT
     fi
 }
@@ -372,7 +372,7 @@ config_value() {
 import sys
 from pathlib import Path
 
-from tribench.core.config import Config
+from msbench.core.config import Config
 
 cfg = Config.fromfile(sys.argv[1])
 value = cfg
@@ -963,7 +963,7 @@ print_final_summary() {
 
     echo
     echo "=============================================================================================================="
-    echo "  TriBench Summary  (method: ${METHOD_ID})"
+    echo "  MeshSplatBench Summary  (method: ${METHOD_ID})"
     echo "=============================================================================================================="
     "${PYTHON_BIN}" "${FORMAT_METRICS}" --config "${SUMMARY_CONFIGS[@]}"
 }

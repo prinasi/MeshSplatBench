@@ -1,0 +1,1 @@
+"""MeshSplatBench test suite."""

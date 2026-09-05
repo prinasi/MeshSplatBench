@@ -1,0 +1,1 @@
+"""MeshSplatBench command-line interface."""

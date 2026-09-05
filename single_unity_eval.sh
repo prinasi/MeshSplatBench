@@ -15,7 +15,7 @@ GPU_ID=""
 UNITY_BIN="${UNITY:-}"
 UNITY_PROJECT_DIR="${PROJECT:-${UNITY_PROJECT:-}}"
 UNITY_PLAYER_BIN="${UNITY_PLAYER:-}"
-UNITY_PLAYER_OUTPUT="${UNITY_PLAYER_OUTPUT:-outputs/unity_player/linux/TriBenchProfilePlayer.x86_64}"
+UNITY_PLAYER_OUTPUT="${UNITY_PLAYER_OUTPUT:-outputs/unity_player/linux/MeshSplatBenchProfilePlayer.x86_64}"
 UNITY_PLAYER_TARGET="${UNITY_PLAYER_TARGET:-linux64}"
 UNITY_DISPLAY="${UNITY_DISPLAY:-}"
 PROFILE_RUNTIME="${UNITY_PROFILE_RUNTIME:-player}"
@@ -251,7 +251,7 @@ config_value() {
     local config_file="$1" dotted_key="$2"
     "${PYTHON_BIN}" - "${config_file}" "${dotted_key}" <<'PY'
 import sys
-from tribench.core.config import Config
+from msbench.core.config import Config
 
 value = Config.fromfile(sys.argv[1])
 for part in sys.argv[2].split("."):
@@ -598,15 +598,15 @@ if [[ "${SKIP_PROFILE}" -eq 0 && "${PROFILE_RUNTIME}" == "player" ]]; then
     if [[ "${METHOD_ID}" == "mesh-splatting" && "${TOPOLOGY}" == "soup" && "${SKIP_PLAYER_BUILD}" -eq 0 ]]; then
         REQUIRES_CURRENT_PLAYER_BUILD=1
         PLAYER_REBUILD_REASON="MeshSplatting shader-level soup topology"
-        PLAYER_REBUILD_SOURCES+=("${UNITY_PROJECT_DIR}/Assets/TriBench/Scripts/MethodSpecificSplatRenderer.cs")
+        PLAYER_REBUILD_SOURCES+=("${UNITY_PROJECT_DIR}/Assets/MeshSplatBench/Scripts/MethodSpecificSplatRenderer.cs")
     fi
     if [[ "${METHOD_ID}" == "mesh-splatting" && "${INDEXED_MESH_METHOD_AWARE}" -eq 1 && "${SKIP_PLAYER_BUILD}" -eq 0 ]]; then
         REQUIRES_CURRENT_PLAYER_BUILD=1
         PLAYER_REBUILD_REASON="MeshSplatting indexed MeshRenderer path"
         PLAYER_REBUILD_SOURCES+=(
-            "${UNITY_PROJECT_DIR}/Assets/TriBench/Scripts/StandardMeshTriAssetRenderer.cs"
-            "${UNITY_PROJECT_DIR}/Assets/TriBench/Shaders/MeshSplatIndexedMesh.shader"
-            "${UNITY_PROJECT_DIR}/Assets/TriBench/Resources/MeshSplatIndexedMesh.shader"
+            "${UNITY_PROJECT_DIR}/Assets/MeshSplatBench/Scripts/StandardMeshTriAssetRenderer.cs"
+            "${UNITY_PROJECT_DIR}/Assets/MeshSplatBench/Shaders/MeshSplatIndexedMesh.shader"
+            "${UNITY_PROJECT_DIR}/Assets/MeshSplatBench/Resources/MeshSplatIndexedMesh.shader"
         )
     fi
     if [[ -n "${UNITY_PLAYER_BIN}" ]]; then

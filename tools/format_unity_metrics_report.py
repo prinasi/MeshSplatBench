@@ -151,8 +151,9 @@ def read_profiles(root: Path, expected_runs: int | None = None) -> dict[str, Any
 
 
 def read_protocol(root: Path) -> dict[str, Any]:
-    path = root / "tribench_run_protocol.json"
+    path = root / "msbench_run_protocol.json"
     return json.loads(path.read_text()) if path.is_file() else {}
+
 
 
 def scene_row(

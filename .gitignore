@@ -61,7 +61,9 @@ unity_metrics_report.md
 *.booproj
 *.blob
 *.bak
-*.tribench-vulkan.bak
+*.msbench-vulkan.bak
+
+
 
 # Data directory (keep documentation, ignore local dataset copies)
 data/*

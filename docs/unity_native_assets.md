@@ -1,13 +1,13 @@
 # Unity-native TriAsset export
 
-`tribench export-unity` exports a feature-preserving `.triasset` directory for
-the TriBench Unity renderer.  It is the deployment asset for Unity quality,
+`msbench export-unity` exports a feature-preserving `.triasset` directory for
+the MeshSplatBench Unity renderer.  It is the deployment asset for Unity quality,
 FPS, and runtime-memory comparisons; it is intentionally **not** an OFF/COFF,
 PLY, OBJ, or GLB replacement.
 
 ## Do I need Unity now?
 
-No.  Exporting the package and its Python tests only require the TriBench
+No.  Exporting the package and its Python tests only require the MeshSplatBench
 environment and a checkpoint; the exporter reads tensors on CPU and does not
 import a CUDA renderer.
 If the environment does not include the optional Typer CLI, the batch helper
@@ -29,7 +29,7 @@ and Player build settings.
 ## Export
 
 ```bash
-tribench export-unity \
+msbench export-unity \
   --method triangle-splatting \
   --checkpoint outputs/triangle-splatting/garden \
   --output assets/garden/triangle-splatting
@@ -59,7 +59,7 @@ buffers/
   ... method-specific renderer buffers ...
 ```
 
-The manifest is the contract between TriBench and Unity.  Every buffer is
+The manifest is the contract between MeshSplatBench and Unity.  Every buffer is
 little-endian, contiguous, and described by `dtype`, `shape`, and `semantic`.
 It also records the exact checkpoint SHA-256 and coordinate/color-space
 conventions.  A native Unity renderer must reject unknown schema versions and
@@ -112,12 +112,12 @@ three vertex weights is a different representation.  The original
 After Unity is installed and a project exists, add the neutral loader contract:
 
 ```bash
-python3 tools/create_unity_triasset_package.py --unity-project /path/to/TriBenchUnity
+python3 tools/create_unity_triasset_package.py --unity-project /path/to/MeshSplatBenchUnity
 ```
 
-It creates `Assets/TriBench/Scripts/TriAssetLoader.cs`,
+It creates `Assets/MeshSplatBench/Scripts/TriAssetLoader.cs`,
 `TriAssetRenderer.cs`, `TriAssetSplatRenderer.cs`, and
-`TriBenchFrameBenchmark.cs`, plus a ComputeShader and a procedural shader.
+`MeshSplatBenchFrameBenchmark.cs`, plus a ComputeShader and a procedural shader.
 The loader parses the manifest and exposes every raw tensor as a `ComputeBuffer`;
 it fails closed unless a matching method renderer is attached.
 
@@ -152,16 +152,17 @@ component then selects the versioned opaque Z-buffer shader automatically.
 
 ### Migrating the legacy Metal-only project to Linux/Vulkan
 
-The older `TriBenchUnity` project uses premultiplied front-to-back blending and
+The older `MeshSplatBenchUnity` project uses premultiplied front-to-back blending and
 Metal-only shader declarations. Before running that project on Linux, apply the
 idempotent compatibility patch after syncing this repository:
 
 ```bash
 python3 tools/patch_legacy_unity_vulkan.py \
-  --unity-project /path/to/TriBenchUnity
+  --unity-project /path/to/MeshSplatBenchUnity
 ```
 
-The patch preserves `.tribench-vulkan.bak` copies, adds Vulkan shader variants,
+The patch preserves `.msbench-vulkan.bak` copies, adds Vulkan shader variants,
+
 clears capture targets to transparent black before splat accumulation, composites
 the declared black/white evaluation background after RGBA readback, and disables
 a renderer when its shader pass cannot be selected. It also installs each
@@ -204,7 +205,7 @@ frames while measuring FPS.  Run quality evaluation separately with readback.
 
 Report these independently:
 
-1. Native-to-Unity fidelity: Unity renderer output versus TriBench native
+1. Native-to-Unity fidelity: Unity renderer output versus MeshSplatBench native
    renderer output on fixed cameras.
 2. Quality: Unity output versus GT on a held-out camera trajectory.
 3. Steady-state performance: CPU/GPU frame p50/p95 and FPS.

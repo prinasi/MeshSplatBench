@@ -3,14 +3,14 @@ requires = ["setuptools>=68.0", "wheel", "torch>=2.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tribench"
+name = "msbench"
 version = "0.1.0"
 description = "A Python-first developer toolkit for triangle-splatting-style radiance field research"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    {name = "TriBench Contributors"},
+    {name = "MeshSplatBench Contributors"},
 ]
 keywords = ["3D reconstruction", "triangle splatting", "radiance fields", "benchmarking"]
 classifiers = [
@@ -52,20 +52,20 @@ cuda = [
 ]
 
 [project.scripts]
-tribench = "tribench.cli.main:app"
+msbench = "msbench.cli.main:app"
 
-[project.entry-points."tribench.adapters"]
-d2ts = "tribench.renderers.d2ts_adapter"
-triangle_splatting = "tribench.renderers.triangle_splatting_adapter"
-mesh_splatting = "tribench.renderers.mesh_splatting_adapter"
-diffsoup = "tribench.renderers.diffsoup_adapter"
+[project.entry-points."msbench.adapters"]
+d2ts = "msbench.renderers.d2ts_adapter"
+triangle_splatting = "msbench.renderers.triangle_splatting_adapter"
+mesh_splatting = "msbench.renderers.mesh_splatting_adapter"
+diffsoup = "msbench.renderers.diffsoup_adapter"
 
-[project.entry-points."tribench.training_methods"]
-triangle_splatting = "tribench.trainers.triangle_splatting_method"
-diffsoup = "tribench.trainers.diffsoup_native"
+[project.entry-points."msbench.training_methods"]
+triangle_splatting = "msbench.trainers.triangle_splatting_method"
+diffsoup = "msbench.trainers.diffsoup_native"
 
 [tool.setuptools.packages.find]
-include = ["tribench*"]
+include = ["msbench*"]
 exclude = [
     "*.__pycache__",
     "*.__pycache__.*",
@@ -75,10 +75,11 @@ exclude = [
 "*" = ["__pycache__/*", "*.py[cod]"]
 
 [tool.pytest.ini_options]
-testpaths = ["tribench/tests"]
+testpaths = ["msbench/tests"]
 python_files = "test_*.py"
 pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+

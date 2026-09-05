@@ -1,4 +1,4 @@
-Shader "TriBench/GeneralPurposeVertexColor"
+Shader "MeshSplatBench/GeneralPurposeVertexColor"
 {
     SubShader
     {

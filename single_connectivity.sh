@@ -221,7 +221,7 @@ config_value() {
     "${PYTHON_BIN}" - "${config_file}" "${dotted_key}" <<'PY'
 import sys
 
-from tribench.core.config import Config
+from msbench.core.config import Config
 
 cfg = Config.fromfile(sys.argv[1])
 value = cfg

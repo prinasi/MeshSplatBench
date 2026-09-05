@@ -1,4 +1,4 @@
-// TriBench procedural renderer for feature-preserving .triasset packages.
+// MeshSplatBench procedural renderer for feature-preserving .triasset packages.
 // It uses a ComputeShader to produce an indirect visible-primitive list and a
 // Metal-compatible DrawProcedural raster pass.  It deliberately does not turn
 // TriAssets into Unity Meshes: all learned attributes stay in ComputeBuffers.
@@ -6,7 +6,7 @@ using System;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-namespace TriBench.Unity
+namespace MeshSplatBench.Unity
 {
     public abstract class TriAssetSplatRenderer : TriAssetRenderer
     {
@@ -26,7 +26,7 @@ namespace TriBench.Unity
         protected virtual string OpacityBuffer { get { return "opacity_logits"; } }
         protected virtual bool UsesSigma { get { return true; } }
         protected virtual bool UsesSh { get { return true; } }
-        protected virtual string ResolveShaderName(TriAssetLoader source) { return "TriBench/TriAssetSplat"; }
+        protected virtual string ResolveShaderName(TriAssetLoader source) { return "MeshSplatBench/TriAssetSplat"; }
 
         protected virtual void Validate(TriAssetLoader source)
         {
@@ -57,19 +57,19 @@ namespace TriBench.Unity
             Validate(source);
             primitiveCount = source.PrimitiveCount;
             if (primitiveCount <= 0) throw new InvalidOperationException("TriAsset has no triangle primitives.");
-            if (!SystemInfo.supportsComputeShaders) throw new NotSupportedException("TriBench requires ComputeShader support (Metal on Apple Silicon).");
+            if (!SystemInfo.supportsComputeShaders) throw new NotSupportedException("MeshSplatBench requires ComputeShader support (Metal on Apple Silicon).");
 
-            culler = Resources.Load<ComputeShader>("TriBench/TriAssetCull");
+            culler = Resources.Load<ComputeShader>("MeshSplatBench/TriAssetCull");
             Shader shader = Shader.Find(ResolveShaderName(source));
             if (culler == null || shader == null)
-                throw new InvalidOperationException("TriBench shaders are missing. Re-run create_unity_triasset_package.py.");
+                throw new InvalidOperationException("MeshSplatBench shaders are missing. Re-run create_unity_triasset_package.py.");
             material = new Material(shader) { hideFlags = HideFlags.DontSave };
             visible = new ComputeBuffer(primitiveCount, sizeof(uint), ComputeBufferType.Structured);
             indirectArgs = new ComputeBuffer(1, sizeof(uint) * 4, ComputeBufferType.IndirectArguments);
             indirectArgs.SetData(new uint[] { 3, (uint)primitiveCount, 0, 0 });
             BindBuffers();
             configured = true;
-            Debug.Log($"TriBench {MethodName}: configured {primitiveCount} primitives for procedural Metal rendering.");
+            Debug.Log($"MeshSplatBench {MethodName}: configured {primitiveCount} primitives for procedural Metal rendering.");
         }
 
         protected virtual void BindBuffers()
@@ -159,7 +159,7 @@ namespace TriBench.Unity
         protected override string ResolveShaderName(TriAssetLoader source)
         {
             return source.Rendering != null && source.Rendering.terminal_solid_eligible
-                ? "TriBench/MeshSplatTerminalSolid"
+                ? "MeshSplatBench/MeshSplatTerminalSolid"
                 : base.ResolveShaderName(source);
         }
     }

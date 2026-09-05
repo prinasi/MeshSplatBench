@@ -25,7 +25,7 @@ def mean(values: list[float]) -> float: return sum(values) / len(values)
 
 
 def main() -> int:
-    root = Path("/Volumes/GLOWAY/Workspace/tribench/outputs/mesh-splatting/mipnerf360")
+    root = Path(__file__).resolve().parents[2] / "outputs/mesh-splatting/mipnerf360"
     datasets = Path("/Volumes/GLOWAY/Datasets/MipNeRF360")
     model = lpips.LPIPS(net="vgg").to("mps").eval()
     result: dict = {"protocol": {"split": "MipNeRF360 LLFF holdout; 246 views", "topology": "soup duplicates every indexed corner and all learned per-vertex attributes", "quality": "raw RGB PSNR, reflected 11x11 local SSIM, VGG LPIPS", "fps": "per-view engine frame interval, no ReadPixels/encoding/file I/O"}, "conditions": {}}

@@ -6,7 +6,7 @@ using System.IO;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-namespace TriBench.Unity
+namespace MeshSplatBench.Unity
 {
     public sealed class GeneralPurposeMeshTriAssetRenderer : TriAssetRenderer
     {
@@ -81,12 +81,12 @@ namespace TriBench.Unity
                 throw new InvalidDataException("sh_dc is neither per-vertex nor per-face RGB; a fixed-budget appearance bake is required.");
             }
 
-            mesh = new Mesh { name = "TriBench general-purpose opaque mesh", indexFormat = IndexFormat.UInt32 };
+            mesh = new Mesh { name = "MeshSplatBench general-purpose opaque mesh", indexFormat = IndexFormat.UInt32 };
             mesh.vertices = vertices; mesh.colors = colors;
             mesh.SetIndices(indices, MeshTopology.Triangles, 0, false);
             mesh.RecalculateBounds();
-            vertexColorShader = vertexColorShader != null ? vertexColorShader : Shader.Find("TriBench/GeneralPurposeVertexColor");
-            if (vertexColorShader == null) throw new InvalidOperationException("TriBench/GeneralPurposeVertexColor shader is missing.");
+            vertexColorShader = vertexColorShader != null ? vertexColorShader : Shader.Find("MeshSplatBench/GeneralPurposeVertexColor");
+            if (vertexColorShader == null) throw new InvalidOperationException("MeshSplatBench/GeneralPurposeVertexColor shader is missing.");
             material = new Material(vertexColorShader) { hideFlags = HideFlags.DontSave };
             filter = GetComponent<MeshFilter>() ?? gameObject.AddComponent<MeshFilter>();
             meshRenderer = GetComponent<MeshRenderer>() ?? gameObject.AddComponent<MeshRenderer>();

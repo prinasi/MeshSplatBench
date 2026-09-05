@@ -12,24 +12,24 @@ Run the full dataset with:
 bash single_train.sh 2dts mipnerf360/all 0 --config_root configs/opaque_2dts_mipnerf360
 ```
 
-`tribench train --config ...` now supports short smoke tests and automatic resume for
+`msbench train --config ...` now supports short smoke tests and automatic resume for
 this 2DTS setup:
 
 - `--max-steps N` overrides the structured config's default iteration count.
 - If `outputs/opaque_2dts_mipnerf360/.../ckpt/` already contains a local
   `*.ckpt` or `point_cloud/*.ply` checkpoint whose step is below `N`, training
   automatically resumes from the latest one.
-- If the latest checkpoint already reached `N`, TriBench skips the remaining
+- If the latest checkpoint already reached `N`, MeshSplatBench skips the remaining
   training work.
 
 Example smoke/resume flow:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 tribench train \
+CUDA_VISIBLE_DEVICES=0 msbench train \
   --config configs/opaque_2dts_mipnerf360/2dts/mipnerf360/bicycle.yaml \
   --max-steps 30 --quiet
 
-CUDA_VISIBLE_DEVICES=0 tribench train \
+CUDA_VISIBLE_DEVICES=0 msbench train \
   --config configs/opaque_2dts_mipnerf360/2dts/mipnerf360/bicycle.yaml \
   --max-steps 31 --quiet
 ```

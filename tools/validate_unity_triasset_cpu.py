@@ -50,7 +50,7 @@ def validate_triasset(
     if manifest.get("schema_version") != "1.0":
         raise ValueError(f"unsupported schema_version {manifest.get('schema_version')!r}")
     if int(manifest.get("export_contract_revision", 0)) < 2:
-        raise ValueError("stale export contract revision; re-export with the current TriBench exporter")
+        raise ValueError("stale export contract revision; re-export with the current MeshSplatBench exporter")
 
     buffers = _buffers(manifest)
     buffer_list = manifest.get("buffer_list")

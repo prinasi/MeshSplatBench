@@ -1,6 +1,6 @@
 # Dataset Setup & Directory Structure Guide
 
-`TriBench` (MeshSplatBench) benchmarks triangle-based neural rendering methods across four standard novel view synthesis datasets:
+`MeshSplatBench` (MeshSplatBench) benchmarks triangle-based neural rendering methods across four standard novel view synthesis datasets:
 1. **Mip-NeRF 360** (Real-world unbounded 360° indoor/outdoor scenes)
 2. **NeRF-Synthetic / Blender** (Synthetic 360° bounded objects)
 3. **Tanks and Temples** (Real-world forward-facing / large-scale scenes)
@@ -13,7 +13,7 @@
 You can either place the uncompressed datasets directly under `data/`, or store them on a separate storage drive and symlink them into `data/`. The directory structure expected by the benchmark configs is as follows:
 
 ```text
-tribench/
+msbench/
 └── data/
     ├── mipnerf360/
     │   ├── bicycle/

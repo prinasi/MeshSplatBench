@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export Unity-readable mesh assets from TriBench checkpoints.
+"""Export Unity-readable mesh assets from MeshSplatBench checkpoints.
 
 The filename is kept as ``create_off.py`` for compatibility with older
 workflows.  The default export is now ``unity_mesh.off`` with a ``COFF`` header
@@ -140,7 +140,7 @@ def _format_suffix(fmt: str) -> str:
 
 
 def _canonical_method(name: str) -> str:
-    from tribench.renderers.backends import canonical_backend_name
+    from msbench.renderers.backends import canonical_backend_name
 
     return canonical_backend_name(str(name))
 
@@ -416,7 +416,7 @@ def _load_mesh_splatting(path: Path, *, color_mode: str, camera_center: torch.Te
         # Reuse the native-package legacy recovery so the generic preview and
         # method-specific export do not interpret the same checkpoint with
         # different opacity floors.
-        from tribench.unity_assets import _mesh_splatting_opacity_floor
+        from msbench.unity_assets import _mesh_splatting_opacity_floor
 
         opacity_floor, _ = _mesh_splatting_opacity_floor(state, path, override=None)
         vertex_opacity = opacity_floor + (1.0 - opacity_floor) * torch.sigmoid(
@@ -571,8 +571,8 @@ def _mesh_from_adapter(
     camera_center: torch.Tensor,
 ) -> UnityMesh:
     del color_mode, camera_center
-    from tribench.core.builder import build_adapter
-    from tribench.core.viewer_geometry import _extract_indexed_mesh_from_primitive
+    from msbench.core.builder import build_adapter
+    from msbench.core.viewer_geometry import _extract_indexed_mesh_from_primitive
 
     adapter = build_adapter({"type": method, "checkpoint": str(checkpoint)})
     primitive = adapter.to_primitive()
@@ -678,21 +678,21 @@ def _mesh_for_vertex_color_format(mesh: UnityMesh) -> tuple[np.ndarray, np.ndarr
 
 
 def write_ply(path: str | Path, mesh: UnityMesh) -> None:
-    from tribench.core.viewer_geometry import write_mesh_ply
+    from msbench.core.viewer_geometry import write_mesh_ply
 
     vertices, faces, rgb = _mesh_for_vertex_color_format(mesh)
     write_mesh_ply(path, vertices, faces, rgb, None)
 
 
 def write_obj(path: str | Path, mesh: UnityMesh, *, material_levels: int) -> str:
-    from tribench.core.viewer_geometry import write_mesh_obj
+    from msbench.core.viewer_geometry import write_mesh_obj
 
     vertices, faces, rgb = _mesh_for_vertex_color_format(mesh)
     return write_mesh_obj(path, vertices, faces, rgb, None, material_levels=material_levels)
 
 
 def write_glb(path: str | Path, mesh: UnityMesh) -> None:
-    from tribench.core.viewer_geometry import write_mesh_glb
+    from msbench.core.viewer_geometry import write_mesh_glb
 
     vertices, faces, rgb = _mesh_for_vertex_color_format(mesh)
     write_mesh_glb(path, vertices, faces, rgb, None)
@@ -725,7 +725,7 @@ def write_metadata(
         "sampling": None,
         "downsampling": None,
         "primitive_limit": None,
-        "coordinate_system": "tribench_world",
+        "coordinate_system": "msbench_world",
         "up_axis": "+y",
         "scale": 1.0,
         "extras": mesh.extras,
@@ -740,7 +740,7 @@ def _resolve_from_config(
     checkpoint: str | None,
     output_dir: str | None,
 ) -> tuple[str, str, Path, Any | None]:
-    from tribench.cli.config import adapter_config, load_cli_config, output_dir as config_output_dir
+    from msbench.cli.config import adapter_config, load_cli_config, output_dir as config_output_dir
 
     cfg = load_cli_config(config) if config else None
     adapter_cfg = adapter_config(cfg, method=method, checkpoint=checkpoint)
@@ -772,12 +772,12 @@ def _resolve_from_config(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Export original TriBench topology as a Unity-readable mesh. "
+            "Export original MeshSplatBench topology as a Unity-readable mesh. "
             "Default output is COFF-style .off with per-face colors."
         )
     )
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--config", type=str, help="TriBench config YAML path")
+    group.add_argument("--config", type=str, help="MeshSplatBench config YAML path")
     group.add_argument(
         "--method",
         type=str,

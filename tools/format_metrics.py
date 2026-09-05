@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Format TriBench metrics.json files as a console table or CSV."""
+"""Format MeshSplatBench metrics.json files as a console table or CSV."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tribench.core.config import Config  # noqa: E402
+from msbench.core.config import Config  # noqa: E402
 
 
 MIPNERF360_OUTDOOR_SCENES = ["bicycle", "flowers", "garden", "stump", "treehill"]
@@ -382,10 +382,10 @@ def write_csv(rows: list[MetricsRow], path: Path) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Format TriBench metrics.json files from configs or output layout."
+        description="Format MeshSplatBench metrics.json files from configs or output layout."
     )
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--config", "-c", nargs="+", type=Path, help="One or more TriBench config YAML files.")
+    source.add_argument("--config", "-c", nargs="+", type=Path, help="One or more MeshSplatBench config YAML files.")
     source.add_argument("--dataset", "-d", help="Dataset target, e.g. dtu, dtu/scan24, mipnerf360/all.")
     parser.add_argument("--method", "-m", help="Method name when using --dataset, e.g. triangle-splatting.")
     parser.add_argument("--scenes", nargs="+", help="Scene list for partial datasets; comma-separated is accepted.")

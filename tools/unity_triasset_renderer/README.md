@@ -1,4 +1,4 @@
-# TriBench Unity procedural renderer templates
+# MeshSplatBench Unity procedural renderer templates
 
 `TriAssetSplatRenderer.cs` implements the method-aware condition using an
 append-buffer ComputeShader cull pass and

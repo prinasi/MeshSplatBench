@@ -26,7 +26,7 @@ elif command -v python >/dev/null 2>&1; then
 else
     PYTHON_BIN="python3"
 fi
-TB_CMD="${TRIBENCH_CMD:-tribench}"
+TB_CMD="${MSBENCH_CMD:-msbench}"
 TB_CMD_ARR=()
 TB_EXPORT_ARGS=()
 FORCE=0
@@ -186,7 +186,7 @@ config_value() {
     local config_file="$1" dotted_key="$2"
     "${PYTHON_BIN}" - "${config_file}" "${dotted_key}" <<'PY'
 import sys
-from tribench.core.config import Config
+from msbench.core.config import Config
 
 value = Config.fromfile(sys.argv[1])
 for part in sys.argv[2].split("."):
