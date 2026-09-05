@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from setuptools import Extension
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -84,6 +84,16 @@ class ParallelBuildExt(BuildExtension):
             f"-DCMAKE_CUDA_ARCHITECTURES={cuda_archs}",
             f"-Dnanobind_DIR={nanobind_dir}",
         ]
+
+        nvcc_bin = os.getenv("CUDACXX")
+        if not nvcc_bin and CUDA_HOME:
+            candidate = Path(CUDA_HOME) / "bin" / "nvcc"
+            if candidate.exists():
+                nvcc_bin = str(candidate)
+        if nvcc_bin:
+            configure_args.append(f"-DCMAKE_CUDA_COMPILER={nvcc_bin}")
+        if CUDA_HOME and Path(CUDA_HOME).exists():
+            configure_args.append(f"-DCUDAToolkit_ROOT={CUDA_HOME}")
         build_args = [cmake, "--build", str(build_temp), "--config", cfg]
         if BUILD_JOBS is not None:
             build_args.extend(["--parallel", str(BUILD_JOBS)])
