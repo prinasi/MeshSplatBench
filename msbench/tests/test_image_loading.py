@@ -321,6 +321,33 @@ def test_native_dtu_reader_matches_eval_camera_and_mask(tmp_path):
     assert torch.allclose(eval_sample.image[0, 2], torch.ones(3), atol=1 / 255)
 
 
+def test_dtu_dataset_accepts_masked_and_unmasked_modes(tmp_path):
+    root = tmp_path / "scan24"
+    (root / "images").mkdir(parents=True)
+    image = Image.new("RGBA", (2, 2), (255, 0, 0, 255))
+    image.save(root / "images" / "0000.png")
+    K = np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 0.5], [0.0, 0.0, 1.0]], dtype=np.float32)
+    extrinsic = np.array(
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 2.0]],
+        dtype=np.float32,
+    )
+    world_mat = np.eye(4, dtype=np.float32)
+    world_mat[:3, :4] = K @ extrinsic
+    np.savez(
+        root / "cameras.npz",
+        world_mat_0=world_mat,
+        scale_mat_0=np.eye(4, dtype=np.float32),
+    )
+
+    dataset_masked = DTUDataset(root, split="all", resolution=1, dtu_eval_mode="masked")
+    assert dataset_masked.dtu_eval_mode == "foreground"
+    assert dataset_masked.use_alpha is True
+
+    dataset_unmasked = DTUDataset(root, split="all", resolution=1, dtu_eval_mode="unmasked")
+    assert dataset_unmasked.dtu_eval_mode == "full"
+    assert dataset_unmasked.use_alpha is False
+
+
 def test_uint8_rgb_helper_extracts_rgb_without_compositing_alpha():
     image = Image.new("RGBA", (2, 2))
     image.putdata(

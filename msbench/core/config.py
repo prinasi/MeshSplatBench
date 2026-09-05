@@ -322,8 +322,10 @@ def _apply_dtu_defaults(config: dict[str, Any]) -> dict[str, Any]:
         return config
     dataset = dict(dataset_cfg)
     mode = str(dataset.get("dtu_eval_mode", "full")).lower()
-    if mode == "fg":
+    if mode in {"fg", "masked"}:
         mode = "foreground"
+    elif mode == "unmasked":
+        mode = "full"
     if mode not in {"full", "foreground"}:
         raise ValueError(f"dtu_eval_mode must be 'full' or 'foreground', got {mode!r}")
     dataset["dtu_eval_mode"] = mode

@@ -476,6 +476,10 @@ class DTUDataset(DatasetBase):
         self.resolution = resolution
         self.resolution_rounding = resolution_rounding
         dtu_eval_mode = str(dtu_eval_mode).lower()
+        if dtu_eval_mode in ("fg", "masked"):
+            dtu_eval_mode = "foreground"
+        elif dtu_eval_mode == "unmasked":
+            dtu_eval_mode = "full"
         if dtu_eval_mode not in ("full", "foreground"):
             raise ValueError(f"dtu_eval_mode must be 'full' or 'foreground', got {dtu_eval_mode!r}")
         self.dtu_eval_mode = dtu_eval_mode

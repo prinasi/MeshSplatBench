@@ -534,6 +534,16 @@ bash single_train.sh 2dts dtu/all 0
 
 Use `all` as the target to run all built-in datasets in one pass.
 
+> **DTU Evaluation Modes**:
+> DTU training and evaluation defaults to masked foreground evaluation composited on a white background (`--dtu-foreground` or alias `--dtu-masked`). To train and evaluate on unmasked full images with natural backgrounds (Mode A), pass `--dtu-full` or alias `--dtu-unmasked`:
+> ```bash
+> # Unmasked full-image evaluation (Mode A)
+> bash single_train.sh triangle-splatting dtu/all 0 --dtu-unmasked
+>
+> # Masked white-background evaluation (Mode B, default)
+> bash single_train.sh triangle-splatting dtu/all 0 --dtu-masked
+> ```
+
 Triangle Splatting configs inherit scene-specific triangle count caps from
 `configs/base/triangle-splatting-caps.yaml` through
 `configs/base/triangle-splatting.yaml`. During config finalization, the cap for

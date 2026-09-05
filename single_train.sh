@@ -123,9 +123,11 @@ Options:
   --cap_triangle_splatting NUM  Limit for triangle-splatting
   --cap_mesh_splatting NUM      Limit for mesh-splatting
   --cap_2dts NUM                Limit for 2dts
-  --dtu_eval_mode MODE     Override DTU mode for this run: full or foreground
+  --dtu_eval_mode MODE     Override DTU mode for this run: foreground (masked) or full (unmasked)
+  --dtu-foreground         Shortcut for --dtu_eval_mode foreground (default in dtu.yaml)
+  --dtu-masked             Alias for --dtu-foreground
   --dtu-full               Shortcut for --dtu_eval_mode full
-  --dtu-foreground         Shortcut for --dtu_eval_mode foreground
+  --dtu-unmasked           Alias for --dtu-full
   --python PATH            Python executable
   -h, --help               Show this help
 
@@ -166,9 +168,10 @@ validate_dtu_eval_mode() {
     local mode
     mode="$(lower "$1")"
     case "${mode}" in
-        full|foreground) echo "${mode}" ;;
+        full|unmasked) echo "full" ;;
+        foreground|masked) echo "foreground" ;;
         *)
-            echo "Invalid DTU eval mode: ${1}. Expected 'full' or 'foreground'." >&2
+            echo "Invalid DTU eval mode: ${1}. Expected 'foreground' ('masked') or 'full' ('unmasked')." >&2
             exit 1
             ;;
     esac
@@ -997,8 +1000,8 @@ while [[ $# -gt 0 ]]; do
         --retrain|--force_retrain|--force-retrain) FORCE_RETRAIN=1; shift ;;
         --rerun_existing|--rerun-existing|--force_existing|--force-existing) FORCE_RERUN_EXISTING=1; shift ;;
         --dtu_eval_mode|--dtu-eval-mode) require_value "$@"; DTU_EVAL_MODE="$(validate_dtu_eval_mode "$2")"; shift 2 ;;
-        --dtu_full|--dtu-full|--full-dtu) DTU_EVAL_MODE="full"; shift ;;
-        --dtu_foreground|--dtu-foreground|--foreground-dtu) DTU_EVAL_MODE="foreground"; shift ;;
+        --dtu_full|--dtu-full|--full-dtu|--dtu_unmasked|--dtu-unmasked|--unmasked-dtu) DTU_EVAL_MODE="full"; shift ;;
+        --dtu_foreground|--dtu-foreground|--foreground-dtu|--dtu_masked|--dtu-masked|--masked-dtu) DTU_EVAL_MODE="foreground"; shift ;;
         --max_primitives|--max-primitives|--max_shapes|--max-shapes) require_value "$@"; CAP_MAX_PRIMITIVES="$2"; shift 2 ;;
         --cap_triangle_splatting|--cap-triangle-splatting) require_value "$@"; CAP_TRIANGLE_SPLATTING="$2"; shift 2 ;;
         --cap_mesh_splatting|--cap-mesh-splatting) require_value "$@"; CAP_MESH_SPLATTING="$2"; shift 2 ;;

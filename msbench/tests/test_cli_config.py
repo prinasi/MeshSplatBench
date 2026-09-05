@@ -315,6 +315,48 @@ def test_2dts_dtu_full_disables_native_alpha_loading(tmp_path: Path):
     assert native.trainer.eval_alpha_mask is False
 
 
+def test_2dts_dtu_accepts_masked_and_unmasked_aliases(tmp_path: Path):
+    from msbench.trainers.d2ts_native import _build_d2ts_native_config
+
+    base_config = Path("configs/2dts/dtu/scan24.yaml").resolve()
+
+    # Test "masked" -> normalized to "foreground"
+    config_masked = tmp_path / "scan24_masked.yaml"
+    config_masked.write_text(
+        f"_base_: {base_config}\n"
+        "dataset:\n"
+        "  dtu_eval_mode: masked\n"
+    )
+    cfg_masked = Config.fromfile(config_masked)
+    native_masked = _build_d2ts_native_config(
+        cfg=cfg_masked,
+        dataset_root=cfg_masked.dataset.root,
+        output_dir=Path(cfg_masked.output.dir),
+        max_steps=cfg_masked.trainer.max_steps,
+    )
+    assert cfg_masked.dataset.dtu_eval_mode == "foreground"
+    assert native_masked.dataset.dtu_eval_mode == "foreground"
+    assert native_masked.dataset.dtu_use_alpha is True
+
+    # Test "unmasked" -> normalized to "full"
+    config_unmasked = tmp_path / "scan24_unmasked.yaml"
+    config_unmasked.write_text(
+        f"_base_: {base_config}\n"
+        "dataset:\n"
+        "  dtu_eval_mode: unmasked\n"
+    )
+    cfg_unmasked = Config.fromfile(config_unmasked)
+    native_unmasked = _build_d2ts_native_config(
+        cfg=cfg_unmasked,
+        dataset_root=cfg_unmasked.dataset.root,
+        output_dir=Path(cfg_unmasked.output.dir),
+        max_steps=cfg_unmasked.trainer.max_steps,
+    )
+    assert cfg_unmasked.dataset.dtu_eval_mode == "full"
+    assert native_unmasked.dataset.dtu_eval_mode == "full"
+    assert native_unmasked.dataset.dtu_use_alpha is False
+
+
 def test_2dts_disables_native_training_eval_by_default():
     cfg = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")
 
