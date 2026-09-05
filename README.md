@@ -37,13 +37,57 @@ conda env create -f environment.yml
 conda activate msbench
 ```
 
-### Option 2: Pip Install
+### Option 2: Pip Install / Editable Development Install
+
+If you already have a Conda or Python environment with PyTorch (>= 2.0 with CUDA support), install MeshSplatBench in editable mode:
 
 ```bash
 git clone https://github.com/prinasi/MeshSplatBench.git
 cd MeshSplatBench
-pip install -e ".[dev,cuda]"
 ```
+
+#### 1. Full Installation (Compiling All Bundled CUDA Extensions)
+To build all bundled CUDA rendering backends (Triangle Splatting, MeshSplatting, 2DTS, Simple-KNN, and DiffSoup):
+
+```bash
+# Ensure CUDA_HOME points to CUDA 11.8+ (required for Ada Lovelace / sm_89 / RTX 40-series cards)
+export CUDA_HOME=/usr/local/cuda-11.8
+export PATH=$CUDA_HOME/bin:$PATH
+
+pip install -e ".[dev,cuda]" --no-build-isolation
+```
+
+> **Tip for Multi-CUDA Systems**:
+> If your system default `/usr/bin/nvcc` is an older version (e.g., CUDA 11.5), setting `CUDA_HOME` (or `export CUDACXX=$CUDA_HOME/bin/nvcc`) ensures both PyTorch and CMake (used by DiffSoup) use the matching CUDA 11.8+ compiler.
+
+#### 2. Fast Python-Only Install (Skip CUDA Compilation)
+If you only need to work on Python code, CLI tools, evaluation scripts, or tests without compiling C++/CUDA extensions:
+
+```bash
+MSBENCH_SKIP_CUDA=1 pip install -e ".[dev]" --no-build-isolation
+```
+
+#### 3. Selective Backend Compilation
+If you only require specific CUDA backends (e.g., skipping DiffSoup CMake compilation or only building Triangle Splatting):
+
+```bash
+# Compile only triangle-splatting, mesh-splatting, 2dts, and simple-knn (skip DiffSoup)
+MSBENCH_CUDA_BACKENDS=triangle-splatting,mesh-splatting,2dts,simple-knn pip install -e ".[dev]" --no-build-isolation
+
+# Or compile only Triangle Splatting and its KNN dependency
+MSBENCH_CUDA_BACKENDS=triangle-splatting,simple-knn pip install -e ".[dev]" --no-build-isolation
+```
+
+Supported backend identifiers: `triangle-splatting`, `mesh-splatting`, `2dts`, `simple-knn`, `diffsoup`.
+
+#### 4. Additional Build Environment Variables
+| Environment Variable | Description | Default |
+| ------------------- | ----------- | ------- |
+| `MSBENCH_SKIP_CUDA` | Skip compiling all CUDA extensions (`1`, `true`, `yes`) | Unset |
+| `MSBENCH_CUDA_BACKENDS` | Comma-separated list of backends to build | All |
+| `MSBENCH_CUDA_ARCHS` | Semicolon-separated CUDA architectures for CMake (DiffSoup) | `89` |
+| `MSBENCH_CCACHE` | Enable `ccache` compilation caching for NVCC (`1`, `true`, `yes`) | Unset |
+| `MAX_BUILD_JOBS` | Maximum parallel compilation jobs | Auto |
 
 ## Dataset Setup
 
