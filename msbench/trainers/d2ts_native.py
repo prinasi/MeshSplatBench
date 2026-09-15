@@ -72,6 +72,103 @@ def run_d2ts_native_config(
     }
 
 
+def _apply_d2ts_native_strategy(
+    *,
+    native_dict: dict[str, Any],
+    d2ts_cfg: Mapping[str, Any],
+    dataset_cfg: Mapping[str, Any],
+    dataset_root: str,
+    max_steps: int,
+) -> dict[str, Any]:
+    strategy = str(d2ts_cfg.get("strategy", "auto")).lower()
+    if strategy == "auto":
+        ds_name = str(dataset_cfg.get("name", "")).lower()
+        ds_type = str(dataset_cfg.get("type", "")).lower()
+        ds_root = str(dataset_root).lower()
+        is_dtu = ds_name == "dtu" or ds_type == "dtu" or "dtu" in ds_root
+        strategy = "opaque" if is_dtu else "volumetric"
+    elif strategy in {"surface", "solidified", "solidify"}:
+        strategy = "opaque"
+    elif strategy in {"radiance", "volume"}:
+        strategy = "volumetric"
+
+    model = native_dict.setdefault("model", {})
+    model_update = model.setdefault("model_update", {})
+    trainer = native_dict.setdefault("trainer", {})
+
+    if strategy == "opaque":
+        model["sort_level"] = int(d2ts_cfg.get("sort_level", 2))
+        ste_thresh = d2ts_cfg.get("ste_threshold", 0.3)
+        model["ste_threshold"] = float(ste_thresh) if ste_thresh is not None else 0.3
+        model.setdefault("gamma_rescale", True)
+
+        gamma_init = float(d2ts_cfg.get("gamma_init", 1.0))
+        gamma_final = float(d2ts_cfg.get("gamma_final", 50.0))
+        existing_gs = model_update.get("gamma_schedule")
+        if isinstance(existing_gs, dict):
+            orig_start = existing_gs.get("start_iter", 20000)
+            orig_end = existing_gs.get("end_iter", 30000)
+            ratio = (orig_start / orig_end) if orig_end > 0 else (2.0 / 3.0)
+            existing_gs["start_iter"] = round(max_steps * ratio)
+            existing_gs["end_iter"] = int(max_steps)
+            existing_gs.setdefault("gamma_init", gamma_init)
+            existing_gs.setdefault("gamma_final", gamma_final)
+        else:
+            solidify_start = round(max_steps * (2.0 / 3.0))
+            model_update["gamma_schedule"] = {
+                "start_iter": solidify_start,
+                "end_iter": int(max_steps),
+                "gamma_init": gamma_init,
+                "gamma_final": gamma_final,
+                "step_scheduler": False,
+            }
+
+        opacity_reset = model_update.setdefault("opacity_reset", {})
+        opacity_reset.setdefault("start_iter", 0)
+        opacity_reset.setdefault("end_iter", round(max_steps * 0.5))
+        opacity_reset.setdefault("interval_iter", 3000)
+        opacity_reset["reset_value"] = float(d2ts_cfg.get("opacity_reset_value", 0.29))
+
+        smoothness_loss = trainer.setdefault("smoothness_loss", {})
+        smoothness_loss.setdefault("w_image", 0.0)
+        smoothness_loss.setdefault("w_normal", 0.05)
+        smoothness_loss.setdefault("w_depth", 0.0)
+        smoothness_loss.setdefault("start_iter", min(2000, round(max_steps * 0.1)))
+
+        geometry_loss = trainer.setdefault("geometry_loss", {})
+        geometry_loss.setdefault("w_geometry", 0.05)
+        geometry_loss.setdefault("scale_factor", None)
+        geometry_loss.setdefault("depth_grad", False)
+        geometry_loss.setdefault("start_iter", min(2000, round(max_steps * 0.1)))
+
+        distortion_loss = trainer.setdefault("distortion_loss", {})
+        distortion_loss.setdefault("w_distortion", 0.05)
+        distortion_loss.setdefault("start_iter", min(2000, round(max_steps * 0.1)))
+
+        trainer.setdefault("save_mesh_iterations", [int(max_steps)])
+        trainer.setdefault("save_pcd_iterations", [int(max_steps)])
+        trainer.setdefault("pcd_n_sample", 5000000)
+
+    elif strategy == "volumetric":
+        model["sort_level"] = int(d2ts_cfg.get("sort_level", 0))
+        model["ste_threshold"] = None
+        model_update["gamma_schedule"] = None
+
+        if "opacity_reset" in model_update and isinstance(model_update["opacity_reset"], dict):
+            model_update["opacity_reset"]["reset_value"] = 0.01
+
+        if "smoothness_loss" in trainer and isinstance(trainer["smoothness_loss"], dict):
+            trainer["smoothness_loss"]["w_normal"] = 0.0
+        if "geometry_loss" in trainer and isinstance(trainer["geometry_loss"], dict):
+            trainer["geometry_loss"]["w_geometry"] = 0.0
+        if "distortion_loss" in trainer and isinstance(trainer["distortion_loss"], dict):
+            trainer["distortion_loss"]["w_distortion"] = 0.0
+
+        trainer["save_mesh_iterations"] = []
+
+    return native_dict
+
+
 def _build_d2ts_native_config(
     *,
     cfg: Mapping[str, Any],
@@ -94,6 +191,15 @@ def _build_d2ts_native_config(
         native_path = Path.cwd() / native_path
     native = loadConfig(str(native_path))
     native_dict = configToDict(native)
+
+    dataset_cfg = tri_cfg.get("dataset", {}) or {}
+    native_dict = _apply_d2ts_native_strategy(
+        native_dict=native_dict,
+        d2ts_cfg=d2ts_cfg,
+        dataset_cfg=dataset_cfg,
+        dataset_root=dataset_root,
+        max_steps=max_steps,
+    )
 
     overrides = d2ts_cfg.get("native_overrides", {}) or {}
     if not isinstance(overrides, Mapping):

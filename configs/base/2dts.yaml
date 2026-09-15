@@ -9,8 +9,6 @@ adapter:
   checkpoint: outputs/{method}/{dataset}/{scene}/ckpt
   render_params:
     gamma_rescale: true
-    ste_threshold: null
-    sort_level: 0
     bg_color: white
 
 dataset:
@@ -24,6 +22,7 @@ output:
   report_file: outputs/{method}/{dataset}/{scene}/report.md
 
 d2ts:
+  strategy: auto
   clean_output_dir: false
   use_tensorboard: true
   # Set verbose: true to enable full 2dts training output (console logs,

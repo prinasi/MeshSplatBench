@@ -856,3 +856,109 @@ def test_compare_accepts_config_inputs(tmp_path: Path):
 
     assert result.exit_code == 0, result.output
     assert report.exists()
+
+
+def test_2dts_strategy_auto_selection():
+    bicycle = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")
+    scan24 = Config.fromfile("configs/2dts/dtu/scan24.yaml")
+
+    assert bicycle.d2ts.strategy == "volumetric"
+    assert bicycle.adapter.render_params.ste_threshold is None
+    assert bicycle.adapter.render_params.sort_level == 0
+
+    assert scan24.d2ts.strategy == "opaque"
+    assert scan24.adapter.render_params.ste_threshold == 0.3
+    assert scan24.adapter.render_params.sort_level == 2
+
+
+def test_2dts_strategy_override_mipnerf360_opaque():
+    from msbench.trainers.d2ts_native import _build_d2ts_native_config
+
+    raw_cfg = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")
+    cfg = Config(apply_overrides(raw_cfg, ["d2ts.strategy=opaque"]))
+
+    assert cfg.d2ts.strategy == "opaque"
+    assert cfg.adapter.render_params.ste_threshold == 0.3
+    assert cfg.adapter.render_params.sort_level == 2
+
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=Path(cfg.output.dir),
+        max_steps=cfg.trainer.max_steps,
+    )
+
+    assert native.model.ste_threshold == 0.3
+    assert native.model.sort_level == 2
+    assert native.model.model_update.gamma_schedule.gamma_final == 50.0
+    assert native.model.model_update.opacity_reset.reset_value == 0.29
+    assert native.trainer.smoothness_loss.w_normal == 0.05
+    assert native.trainer.geometry_loss.w_geometry == 0.05
+
+
+def test_2dts_strategy_override_dtu_volumetric():
+    from msbench.trainers.d2ts_native import _build_d2ts_native_config
+
+    raw_cfg = Config.fromfile("configs/2dts/dtu/scan24.yaml")
+    cfg = Config(apply_overrides(raw_cfg, ["d2ts.strategy=volumetric"]))
+
+    assert cfg.d2ts.strategy == "volumetric"
+    assert cfg.adapter.render_params.ste_threshold is None
+    assert cfg.adapter.render_params.sort_level == 0
+
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=Path(cfg.output.dir),
+        max_steps=cfg.trainer.max_steps,
+    )
+
+    assert native.model.ste_threshold is None
+    assert native.model.sort_level == 0
+    assert native.model.model_update.gamma_schedule is None
+    assert native.model.model_update.opacity_reset.reset_value == 0.01
+    assert native.trainer.smoothness_loss.w_normal == 0.0
+    assert native.trainer.geometry_loss.w_geometry == 0.0
+
+
+def test_2dts_strategy_dynamic_step_scaling():
+    from msbench.trainers.d2ts_native import _build_d2ts_native_config
+
+    raw_cfg = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")
+    cfg = Config(apply_overrides(raw_cfg, ["d2ts.strategy=opaque"]))
+
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=Path(cfg.output.dir),
+        max_steps=15000,
+    )
+
+    assert native.trainer.iterations == 15000
+    assert native.model.model_update.gamma_schedule.start_iter == 10000
+    assert native.model.model_update.gamma_schedule.end_iter == 15000
+
+
+def test_2dts_base_mixins(tmp_path: Path):
+    opaque_cfg_path = tmp_path / "custom_opaque.yaml"
+    opaque_cfg_path.write_text(
+        "_base_:\n"
+        "  - configs/2dts/mipnerf360/bicycle.yaml\n"
+        "  - configs/base/2dts-opaque.yaml\n"
+    )
+    loaded_opaque = Config.fromfile(str(opaque_cfg_path))
+    assert loaded_opaque.d2ts.strategy == "opaque"
+    assert loaded_opaque.adapter.render_params.ste_threshold == 0.3
+    assert loaded_opaque.adapter.render_params.sort_level == 2
+
+    vol_cfg_path = tmp_path / "custom_vol.yaml"
+    vol_cfg_path.write_text(
+        "_base_:\n"
+        "  - configs/2dts/dtu/scan24.yaml\n"
+        "  - configs/base/2dts-volumetric.yaml\n"
+    )
+    loaded_vol = Config.fromfile(str(vol_cfg_path))
+    assert loaded_vol.d2ts.strategy == "volumetric"
+    assert loaded_vol.adapter.render_params.ste_threshold is None
+    assert loaded_vol.adapter.render_params.sort_level == 0
+
