@@ -494,9 +494,29 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
             self.assertIn("RefreshTriangleOrder(TargetCamera, force: true)", renderer_text)
             self.assertIn("RefreshTriangleOrder(camera)", renderer_text)
             self.assertIn("RefreshTriangleOrder(TargetCamera)", renderer_text)
-            self.assertIn("triangleOrderBuffer.SetData(sortedTriangleIndices)", renderer_text)
+            self.assertIn("triangleOrderBuffer.SetData(triangleOrder)", renderer_text)
+            self.assertIn('SetBuffer("_TriangleOrder", triangleOrderBuffer)', renderer_text)
+            self.assertNotIn("sortedTriangleIndices", renderer_text)
             self.assertIn("sourceTriangleIndices", renderer_text)
-            self.assertIn("sortedTriangleIndices", renderer_text)
+            self.assertEqual(
+                renderer_text.count('material.SetFloat("_GammaVertexRescale", gammaVertexRescale);'),
+                2,
+            )
+
+            repository_capture = Path(
+                "unity/Assets/MeshSplatBench/Scripts/ColmapBatchCapture.cs"
+            ).read_text()
+            repository_renderer = Path(
+                "unity/Assets/MeshSplatBench/Scripts/MethodSpecificSplatRenderer.cs"
+            ).read_text()
+            self.assertEqual(
+                repository_renderer.count('material.SetFloat("_GammaVertexRescale", gammaVertexRescale);'),
+                3,
+            )
+            self.assertIn("RenderTextureFormat.ARGBFloat", repository_capture)
+            self.assertIn("TextureFormat.RGBAFloat", repository_capture)
+            self.assertIn("Texture2D encoded", repository_capture)
+            self.assertIn("CompositePremultipliedBackground(readback, encoded)", repository_capture)
 
             triangle = scripts / "TriangleSplattingTriAssetRenderer.cs"
             triangle.write_text(

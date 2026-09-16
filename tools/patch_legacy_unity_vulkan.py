@@ -84,6 +84,26 @@ def _replace_method_definitions(source: str, signature: str, replacement: str) -
     return source
 
 
+def _normalize_method_line(
+    source: str,
+    signature: str,
+    line: str,
+    anchors: tuple[str, ...],
+) -> str:
+    """Keep one state-setting line in a specific C# method body."""
+    spans = _method_spans(source, signature)
+    if not spans:
+        return source
+    begin, end = spans[0]
+    body = source[begin:end]
+    body = re.sub(r"\n\s*" + re.escape(line.strip()) + r"\n", "\n", body)
+    for anchor in anchors:
+        if anchor in body:
+            body = body.replace(anchor, anchor + line, 1)
+            return source[:begin] + body + source[end:]
+    return source
+
+
 def _camera_draw_helper(source: str, prefix: str) -> str:
     """Find the command-buffer helper used by this renderer revision."""
     for name in (f"{prefix}MsBenchCameraDraw", f"{prefix}MeshSplatBenchCameraDraw"):
@@ -502,6 +522,21 @@ def _patch_renderer_base(source: str) -> str:
 
 
 def _patch_method_specific_camera_state(source: str) -> str:
+    source = source.replace(
+        "        float gamma = 1f, opacityFloor;",
+        "        float gamma = 1f, gammaVertexRescale = 1f, opacityFloor;",
+        1,
+    )
+    if "gammaVertexRescale = ReadFloat" not in source:
+        source = source.replace(
+            '            gamma = ReadFloat(json, "gamma", 1f);\n',
+            '            gamma = ReadFloat(json, "gamma", 1f);\n            gammaVertexRescale = ReadFloat(json, "gamma_vertex_rescale", 1f);\n',
+            1,
+        )
+    # Normalize the Start method independently. Counting occurrences across
+    # the whole class is unsafe because the same material state is also set
+    # in PrepareCamera and the OnRenderObject fallback.
+    gamma_line = '            material.SetFloat("_GammaVertexRescale", gammaVertexRescale);\n'
     field_anchor = "        string status = \"Waiting to load method-specific renderer\";\n"
     field_fallback_anchor = "        int primitiveCount; bool ready, rawCode; float opacityFloor; int mode, meshAblation;\n"
     field_block = (
@@ -510,7 +545,6 @@ def _patch_method_specific_camera_state(source: str) -> str:
         "        Vector3[] triangleCentroids;\n"
         "        int[] triangleOrder;\n"
         "        int[] sourceTriangleIndices;\n"
-        "        int[] sortedTriangleIndices;\n"
         "        float[] triangleDepths;\n"
         "        Vector3 lastSortCameraPosition = new Vector3(float.NaN, float.NaN, float.NaN);\n"
         "        Vector3 lastSortCameraForward = new Vector3(float.NaN, float.NaN, float.NaN);\n"
@@ -521,7 +555,6 @@ def _patch_method_specific_camera_state(source: str) -> str:
         "triangleCentroids",
         "triangleOrder",
         "sourceTriangleIndices",
-        "sortedTriangleIndices",
         "triangleDepths",
         "lastSortCameraPosition",
         "lastSortCameraForward",
@@ -579,28 +612,39 @@ def _patch_method_specific_camera_state(source: str) -> str:
     elif 'positions = Upload(sourcePositions);' not in source:
         raise ValueError("could not locate MethodSpecific positions upload")
 
-    if 'triangleOrderBuffer = Upload(sourceIndices);' not in source:
+    if 'triangleOrderBuffer = Upload(triangleOrder);' not in source:
         if 'indices = Upload(sourceIndices);' not in source:
             raise ValueError("could not locate MethodSpecific index upload")
         source = source.replace(
             'indices = Upload(sourceIndices);',
-            'indices = Upload(sourceIndices);\n            triangleOrderBuffer = Upload(sourceIndices);',
+            'indices = Upload(sourceIndices);\n            triangleOrderBuffer = Upload(triangleOrder);',
             1,
         )
 
     buffer_old = '            material.SetBuffer("_Positions", positions); material.SetBuffer("_Indices", indices);\n'
-    buffer_new = '            material.SetBuffer("_Positions", positions); material.SetBuffer("_Indices", usesSortedTriangleOrder ? triangleOrderBuffer : indices);\n'
+    buffer_new = '            material.SetBuffer("_Positions", positions); material.SetBuffer("_Indices", indices); material.SetBuffer("_TriangleOrder", triangleOrderBuffer);\n'
     if buffer_new not in source:
         if buffer_old not in source:
             raise ValueError("could not locate MethodSpecific material index buffer binding")
         source = source.replace(buffer_old, buffer_new, 1)
 
-    ready_old = '            material.SetInt("_RawCode", 1);\n            ready = true; status = $"Method-specific {method} renderer ready ({primitiveCount:N0} primitives; {(deindexedSoup ? "shader-level triangle soup" : "indexed mesh")})";\n'
-    ready_new = '            material.SetInt("_RawCode", 1);\n            RefreshTriangleOrder(TargetCamera, force: true);\n            ready = true; status = $"Method-specific {method} renderer ready ({primitiveCount:N0} primitives; {(deindexedSoup ? "shader-level triangle soup" : "indexed mesh")})";\n'
-    if ready_new not in source:
-        if ready_old not in source:
+    ready_anchor = '            ready = true; status = $"Method-specific {method} renderer ready ({primitiveCount:N0} primitives; {(deindexedSoup ? "shader-level triangle soup" : "indexed mesh")})";\n'
+    refresh_line = "            RefreshTriangleOrder(TargetCamera, force: true);\n"
+    if refresh_line not in source:
+        if ready_anchor not in source:
             raise ValueError("could not locate MethodSpecific ready state")
-        source = source.replace(ready_old, ready_new, 1)
+        source = source.replace(ready_anchor, refresh_line + ready_anchor, 1)
+
+    source = _normalize_method_line(
+        source,
+        "IEnumerator Start()",
+        gamma_line,
+        (
+            '            material.SetFloat("_OpacityFloor", opacityFloor);\n',
+            '            material.SetInt("_ShDegree", activeShDegree); material.SetFloat("_Gamma", gamma);\n',
+            '            material.SetInt("_RawCode", 1);\n',
+        ),
+    )
 
     helper_anchor = '        // MeshSplatBench explicit camera command-buffer patch. OnRenderObject is\n'
     helper_block = '''        void InitializeTriangleOrder(float[] positionsData, int[] sourceIndices)
@@ -611,7 +655,6 @@ def _patch_method_specific_camera_state(source: str) -> str:
             triangleOrder = new int[count];
             triangleDepths = new float[count];
             sourceTriangleIndices = sourceIndices;
-            sortedTriangleIndices = new int[count * 3];
             int vertexCount = positionsData.Length / 3;
             for (int t = 0; t < count; ++t)
             {
@@ -643,18 +686,10 @@ def _patch_method_specific_camera_state(source: str) -> str:
             {
                 Vector3 center = triangleCentroids[t];
                 triangleDepths[t] = Vector3.Dot(center - cam, forward);
-                triangleOrder[t] = t * 3;
+                triangleOrder[t] = t;
             }
             Array.Sort(triangleDepths, triangleOrder);
-            int write = 0;
-            for (int t = 0; t < triangleOrder.Length; ++t)
-            {
-                int source = triangleOrder[t];
-                sortedTriangleIndices[write++] = sourceTriangleIndices[source];
-                sortedTriangleIndices[write++] = sourceTriangleIndices[source + 1];
-                sortedTriangleIndices[write++] = sourceTriangleIndices[source + 2];
-            }
-            triangleOrderBuffer.SetData(sortedTriangleIndices);
+            triangleOrderBuffer.SetData(triangleOrder);
             lastSortCameraPosition = cam;
             lastSortCameraForward = forward;
         }
@@ -694,6 +729,7 @@ def _patch_method_specific_camera_state(source: str) -> str:
             material.SetVector("_CameraWorldPos", camera.transform.position);
             material.SetInt("_RawCode", rawCode ? 1 : 0);
             material.SetFloat("_OpacityFloor", opacityFloor);
+            material.SetFloat("_GammaVertexRescale", gammaVertexRescale);
             if (mode == 1)
             {{
                 material.SetInt("_MeshAblation", meshAblation);
@@ -709,6 +745,16 @@ def _patch_method_specific_camera_state(source: str) -> str:
         if callback_anchor not in source:
             raise ValueError("could not locate MethodSpecific PrepareCamera")
         source = source.replace(callback_anchor, new_prepare + callback_anchor, 1)
+
+    source = _normalize_method_line(
+        source,
+        "void OnRenderObject()",
+        gamma_line,
+        (
+            '            material.SetFloat("_OpacityFloor", opacityFloor);\n',
+            '            material.SetInt("_RawCode", rawCode ? 1 : 0);\n',
+        ),
+    )
 
     source = re.sub(
         r"\n\s*// original OnDestroy replaced by MeshSplatBench sort patch\n"
@@ -997,35 +1043,39 @@ def _capture_helpers() -> str:
 
         // MeshSplatBench Vulkan premultiplied-capture patch. The method-aware shaders
         // use front-to-back premultiplied accumulation. Destination alpha must
-        // start at zero; Color.black/white both carry alpha one in Unity.
+        // start at zero; Color.black/white both carry alpha one in Unity. Keep
+        // the intermediate accumulation in float precision because the native
+        // renderer composites before quantizing its raw image code values.
         void PreparePremultipliedCaptureTarget()
         {
             CaptureCamera.clearFlags = CameraClearFlags.SolidColor;
             CaptureCamera.backgroundColor = new Color(0f, 0f, 0f, 0f);
         }
 
-        void CompositePremultipliedBackground(Texture2D image)
+        void CompositePremultipliedBackground(Texture2D image, Texture2D encoded)
         {
             bool white = String.Equals(
                 TriAssetRuntimeOptions.Get("-background-color", "black"),
                 "white",
                 StringComparison.OrdinalIgnoreCase);
-            int background = white ? 255 : 0;
-            Color32[] pixels = image.GetPixels32();
+            float background = white ? 1f : 0f;
+            Color[] pixels = image.GetPixels();
+            Color32[] output = new Color32[pixels.Length];
             int coveredPixels = 0;
             for (int i = 0; i < pixels.Length; ++i)
             {
-                Color32 p = pixels[i];
-                if (p.a != 0) coveredPixels++;
-                int remaining = 255 - p.a;
-                p.r = (byte)Mathf.Clamp(p.r + (background * remaining + 127) / 255, 0, 255);
-                p.g = (byte)Mathf.Clamp(p.g + (background * remaining + 127) / 255, 0, 255);
-                p.b = (byte)Mathf.Clamp(p.b + (background * remaining + 127) / 255, 0, 255);
-                p.a = 255;
-                pixels[i] = p;
+                Color p = pixels[i];
+                float alpha = Mathf.Clamp01(p.a);
+                if (alpha > 0f) coveredPixels++;
+                float remaining = 1f - alpha;
+                output[i] = new Color32(
+                    (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(p.r + background * remaining) * 255f), 0, 255),
+                    (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(p.g + background * remaining) * 255f), 0, 255),
+                    (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(p.b + background * remaining) * 255f), 0, 255),
+                    255);
             }
-            image.SetPixels32(pixels);
-            image.Apply(false, false);
+            encoded.SetPixels32(output);
+            encoded.Apply(false, false);
             if (coveredPixels == 0)
                 Debug.LogError("[MeshSplatBench] Capture target has zero alpha coverage; no procedural geometry reached the camera.");
             else
@@ -1041,7 +1091,7 @@ def _patch_capture(source: str) -> str:
             "CaptureCamera.Render();",
             "PreparePremultipliedCaptureTarget();\n                CaptureCamera.Render();",
         )
-    if "CompositePremultipliedBackground(readback);" not in updated:
+    if "CompositePremultipliedBackground(readback, encoded);" not in updated:
         updated = updated.replace(
             "readback.Apply(false, false);",
             "readback.Apply(false, false);\n                CompositePremultipliedBackground(readback);",
@@ -1051,36 +1101,37 @@ def _patch_capture(source: str) -> str:
         if class_end < 0:
             raise ValueError("could not locate ColmapBatchCapture class terminator")
         updated = updated[:class_end] + _capture_helpers() + updated[class_end:]
-    elif "Capture alpha coverage" not in updated:
-        # Upgrade projects that already received the first premultiplied-alpha
-        # patch without duplicating its helper methods.
-        updated = updated.replace(
-            "            Color32[] pixels = image.GetPixels32();\n"
-            "            for (int i = 0; i < pixels.Length; ++i)",
-            "            Color32[] pixels = image.GetPixels32();\n"
-            "            int coveredPixels = 0;\n"
-            "            for (int i = 0; i < pixels.Length; ++i)",
-            1,
-        )
-        updated = updated.replace(
-            "                Color32 p = pixels[i];\n"
-            "                int remaining = 255 - p.a;",
-            "                Color32 p = pixels[i];\n"
-            "                if (p.a != 0) coveredPixels++;\n"
-            "                int remaining = 255 - p.a;",
-            1,
-        )
-        updated = updated.replace(
-            "            image.SetPixels32(pixels);\n"
-            "            image.Apply(false, false);",
-            "            image.SetPixels32(pixels);\n"
-            "            image.Apply(false, false);\n"
-            "            if (coveredPixels == 0)\n"
-            "                Debug.LogError(\"[MeshSplatBench] Capture target has zero alpha coverage; no procedural geometry reached the camera.\");\n"
-            "            else\n"
-            "                Debug.Log($\"[MeshSplatBench] Capture alpha coverage: {coveredPixels}/{pixels.Length} pixels.\");",
-            1,
-        )
+    elif "void CompositePremultipliedBackground(Texture2D image, Texture2D encoded)" not in updated:
+        # Replace the helper block as a unit so projects that received an older
+        # version of the patch also get float-domain compositing.
+        marker = updated.find(CAPTURE_PATCH_MARKER)
+        marker_start = updated.rfind("\n", 0, marker) if marker >= 0 else -1
+        spans = _method_spans(updated, "void CompositePremultipliedBackground")
+        if marker_start >= 0 and spans:
+            updated = updated[:marker_start] + _capture_helpers() + updated[spans[0][1]:]
+
+    updated = re.sub(
+        r"RenderTexture target = new RenderTexture\(OutputWidth, OutputHeight, 24, RenderTextureFormat\.ARGB32, RenderTextureReadWrite\.Linear\);\n"
+        r"(\s*target\.Create\(\);\n\s*)"
+        r"Texture2D readback = new Texture2D\(OutputWidth, OutputHeight, TextureFormat\.RGBA32, false, true\);",
+        r"RenderTexture target = new RenderTexture(OutputWidth, OutputHeight, 24, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);\n"
+        r"\1Texture2D readback = new Texture2D(OutputWidth, OutputHeight, TextureFormat.RGBAFloat, false, true);\n"
+        r"            Texture2D encoded = new Texture2D(OutputWidth, OutputHeight, TextureFormat.RGBA32, false, true);",
+        updated,
+        count=1,
+    )
+    updated = updated.replace(
+        "CompositePremultipliedBackground(readback);",
+        "CompositePremultipliedBackground(readback, encoded);",
+        1,
+    )
+    updated = updated.replace(
+        "ImageConversion.EncodeToPNG(readback)",
+        "ImageConversion.EncodeToPNG(encoded)",
+        1,
+    )
+    if "Destroy(encoded);" not in updated and "Destroy(readback);" in updated:
+        updated = updated.replace("            Destroy(readback);", "            Destroy(readback);\n            Destroy(encoded);", 1)
     # A camera command buffer has the correct view/projection globals during
     # Camera.Render(), but custom per-view uniforms must be synchronized after
     # each COLMAP pose change and before the camera starts rendering frames.

@@ -164,9 +164,14 @@ namespace MeshSplatBench.UnityNative
             // Native triangle-splatting trains and evaluates in raw PIL RGB/255
             // code values.  An sRGB target would encode the shader output a
             // second time in a Linear Unity project and invalidate PSNR.
-            RenderTexture target = new RenderTexture(OutputWidth, OutputHeight, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+            // Keep premultiplied RGB and alpha in float precision until the
+            // declared background has been composited.  ARGB32 loses the
+            // low-alpha colour contribution before that operation and washes
+            // out the native code-value image on white backgrounds.
+            RenderTexture target = new RenderTexture(OutputWidth, OutputHeight, 24, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
             target.Create();
-            Texture2D readback = new Texture2D(OutputWidth, OutputHeight, TextureFormat.RGBA32, false, true);
+            Texture2D readback = new Texture2D(OutputWidth, OutputHeight, TextureFormat.RGBAFloat, false, true);
+            Texture2D encoded = new Texture2D(OutputWidth, OutputHeight, TextureFormat.RGBA32, false, true);
             bool wasEnabled = CaptureCamera.enabled;
             RenderTexture previousTarget = CaptureCamera.targetTexture;
             CaptureCamera.enabled = false;
@@ -200,9 +205,9 @@ namespace MeshSplatBench.UnityNative
                 RenderTexture.active = target;
                 readback.ReadPixels(new Rect(0, 0, OutputWidth, OutputHeight), 0, 0, false);
                 readback.Apply(false, false);
-                CompositePremultipliedBackground(readback);
+                CompositePremultipliedBackground(readback, encoded);
 
-                File.WriteAllBytes(Path.Combine(OutputRoot, split, renderName), ImageConversion.EncodeToPNG(readback));
+                File.WriteAllBytes(Path.Combine(OutputRoot, split, renderName), ImageConversion.EncodeToPNG(encoded));
                 manifest.Append(split).Append(',').Append(i).Append(',').Append(view.Name).Append(',').Append(split).Append('/').Append(renderName).Append('\n');
                 Debug.Log($"[MeshSplatBench] Captured {i + 1}/{views.Count}: {split}/{renderName}");
                 yield return null;
@@ -217,6 +222,7 @@ namespace MeshSplatBench.UnityNative
             fpsTarget.Release();
             Destroy(fpsTarget);
             Destroy(readback);
+            Destroy(encoded);
             File.WriteAllText(Path.Combine(OutputRoot, "manifest.csv"), manifest.ToString());
             File.WriteAllText(Path.Combine(OutputRoot, "fps_per_test_view.csv"), fpsCsv.ToString());
             File.WriteAllText(completionPath, "complete\n");
@@ -518,43 +524,45 @@ namespace MeshSplatBench.UnityNative
             if (model < 0 || model >= counts.Length) throw new InvalidDataException("Unknown COLMAP model " + model);
             return counts[model];
         }
-
         // MeshSplatBench Vulkan premultiplied-capture patch. The method-aware shaders
         // use front-to-back premultiplied accumulation. Destination alpha must
-        // start at zero; Color.black/white both carry alpha one in Unity.
+        // start at zero; Color.black/white both carry alpha one in Unity. Keep
+        // the intermediate accumulation in float precision because the native
+        // renderer composites before quantizing its raw image code values.
         void PreparePremultipliedCaptureTarget()
         {
             CaptureCamera.clearFlags = CameraClearFlags.SolidColor;
             CaptureCamera.backgroundColor = new Color(0f, 0f, 0f, 0f);
         }
 
-        void CompositePremultipliedBackground(Texture2D image)
+        void CompositePremultipliedBackground(Texture2D image, Texture2D encoded)
         {
             bool white = String.Equals(
                 TriAssetRuntimeOptions.Get("-background-color", "black"),
                 "white",
                 StringComparison.OrdinalIgnoreCase);
-            int background = white ? 255 : 0;
-            Color32[] pixels = image.GetPixels32();
+            float background = white ? 1f : 0f;
+            Color[] pixels = image.GetPixels();
+            Color32[] output = new Color32[pixels.Length];
             int coveredPixels = 0;
             for (int i = 0; i < pixels.Length; ++i)
             {
-                Color32 p = pixels[i];
-                if (p.a != 0) coveredPixels++;
-                int remaining = 255 - p.a;
-                p.r = (byte)Mathf.Clamp(p.r + (background * remaining + 127) / 255, 0, 255);
-                p.g = (byte)Mathf.Clamp(p.g + (background * remaining + 127) / 255, 0, 255);
-                p.b = (byte)Mathf.Clamp(p.b + (background * remaining + 127) / 255, 0, 255);
-                p.a = 255;
-                pixels[i] = p;
+                Color p = pixels[i];
+                float alpha = Mathf.Clamp01(p.a);
+                if (alpha > 0f) coveredPixels++;
+                float remaining = 1f - alpha;
+                output[i] = new Color32(
+                    (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(p.r + background * remaining) * 255f), 0, 255),
+                    (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(p.g + background * remaining) * 255f), 0, 255),
+                    (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(p.b + background * remaining) * 255f), 0, 255),
+                    255);
             }
-            image.SetPixels32(pixels);
-            image.Apply(false, false);
+            encoded.SetPixels32(output);
+            encoded.Apply(false, false);
             if (coveredPixels == 0)
                 Debug.LogError("[MeshSplatBench] Capture target has zero alpha coverage; no procedural geometry reached the camera.");
             else
                 Debug.Log($"[MeshSplatBench] Capture alpha coverage: {coveredPixels}/{pixels.Length} pixels.");
         }
-
     }
 }
