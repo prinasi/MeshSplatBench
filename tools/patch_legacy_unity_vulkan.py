@@ -40,6 +40,58 @@ def _write_if_changed(path: Path, original: str, updated: str) -> bool:
     return True
 
 
+def _method_spans(source: str, signature: str) -> list[tuple[int, int]]:
+    """Return source spans for simple C# methods with the given signature.
+
+    The patcher only needs this for methods whose bodies contain no braces in
+    string literals.  Counting balanced braces is still more reliable than a
+    regular expression because the target methods contain nested blocks.
+    """
+    spans: list[tuple[int, int]] = []
+    search_from = 0
+    while True:
+        signature_start = source.find(signature, search_from)
+        if signature_start < 0:
+            return spans
+        opening = source.find("{", signature_start + len(signature))
+        if opening < 0:
+            return spans
+        depth = 0
+        closing = -1
+        for index in range(opening, len(source)):
+            if source[index] == "{":
+                depth += 1
+            elif source[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    closing = index + 1
+                    break
+        if closing < 0:
+            return spans
+        line_start = source.rfind("\n", 0, signature_start) + 1
+        while closing < len(source) and source[closing] in "\r\n":
+            closing += 1
+        spans.append((line_start, closing))
+        search_from = closing
+
+
+def _replace_method_definitions(source: str, signature: str, replacement: str) -> str:
+    """Replace all definitions of a method, retaining only one definition."""
+    spans = _method_spans(source, signature)
+    for start, end in reversed(spans):
+        replacement_text = replacement if (start, end) == spans[0] else ""
+        source = source[:start] + replacement_text + source[end:]
+    return source
+
+
+def _camera_draw_helper(source: str, prefix: str) -> str:
+    """Find the command-buffer helper used by this renderer revision."""
+    for name in (f"{prefix}MsBenchCameraDraw", f"{prefix}MeshSplatBenchCameraDraw"):
+        if f"{name}(" in source:
+            return name
+    raise ValueError(f"could not locate {prefix.lower()} camera draw helper")
+
+
 def _patch_shader(source: str) -> str:
     updated = re.sub(
         r"(?m)^(\s*#pragma\s+only_renderers\s+)metal\s*$",
@@ -624,89 +676,57 @@ def _patch_method_specific_camera_state(source: str) -> str:
                 raise ValueError("could not locate MethodSpecific OnRenderObject anchor")
             source = source.replace(callback_anchor, callback_anchor + "            RefreshTriangleOrder(TargetCamera);\n", 1)
 
-    old_prepare = '''        public override void PrepareCamera(Camera camera)
-        {
-            if (camera == null || material == null) return;
-            if (msBenchDrawCommands == null)
-            {
-                TargetCamera = camera;
-                if (!InstallMeshSplatBenchCameraDraw()) { enabled = false; return; }
-            }
-            material.SetVector("_CameraWorldPos", camera.transform.position);
-            material.SetInt("_RawCode", rawCode ? 1 : 0);
-            material.SetFloat("_OpacityFloor", opacityFloor);
-            if (mode == 1)
-            {
-                material.SetInt("_MeshAblation", meshAblation);
-                material.SetInt("_UseSh", (meshAblation == 1 || meshAblation == 4) ? 0 : 1);
-            }
-        }
-'''
-    new_prepare = '''        public override void PrepareCamera(Camera camera)
-        {
+    install_helper = _camera_draw_helper(source, "Install")
+    remove_helper = install_helper.replace("Install", "Remove", 1)
+    new_prepare = f'''        public override void PrepareCamera(Camera camera)
+        {{
             if (camera == null || material == null) return;
             if (TargetCamera != camera)
-            {
-                RemoveMeshSplatBenchCameraDraw();
+            {{
+                {remove_helper}();
                 TargetCamera = camera;
-            }
+            }}
             if (msBenchDrawCommands == null)
-            {
-                if (!InstallMeshSplatBenchCameraDraw()) { enabled = false; return; }
-            }
+            {{
+                if (!{install_helper}()) {{ enabled = false; return; }}
+            }}
             RefreshTriangleOrder(camera);
             material.SetVector("_CameraWorldPos", camera.transform.position);
             material.SetInt("_RawCode", rawCode ? 1 : 0);
             material.SetFloat("_OpacityFloor", opacityFloor);
             if (mode == 1)
-            {
+            {{
                 material.SetInt("_MeshAblation", meshAblation);
                 material.SetInt("_UseSh", (meshAblation == 1 || meshAblation == 4) ? 0 : 1);
-            }
-        }
+            }}
+        }}
 '''
-    if new_prepare not in source:
-        if old_prepare in source:
-            source = source.replace(old_prepare, new_prepare, 1)
-        else:
-            callback_anchor = "        void OnRenderObject()\n"
-            if callback_anchor not in source:
-                raise ValueError("could not locate MethodSpecific PrepareCamera")
-            prepare_block = '''        public override void PrepareCamera(Camera camera)
-        {
-            if (camera == null || material == null) return;
-            if (TargetCamera != camera)
-            {
-                RemoveMeshSplatBenchCameraDraw();
-                TargetCamera = camera;
-            }
-            if (msBenchDrawCommands == null)
-            {
-                if (!InstallMeshSplatBenchCameraDraw()) { enabled = false; return; }
-            }
-            RefreshTriangleOrder(camera);
-            material.SetVector("_CameraWorldPos", camera.transform.position);
-            material.SetInt("_RawCode", rawCode ? 1 : 0);
-            material.SetFloat("_OpacityFloor", opacityFloor);
-            if (mode == 1)
-            {
-                material.SetInt("_MeshAblation", meshAblation);
-                material.SetInt("_UseSh", (meshAblation == 1 || meshAblation == 4) ? 0 : 1);
-            }
-        }
-'''
-            source = source.replace(callback_anchor, prepare_block + callback_anchor, 1)
+    prepare_signature = "public override void PrepareCamera(Camera camera)"
+    if prepare_signature in source:
+        source = _replace_method_definitions(source, prepare_signature, new_prepare)
+    else:
+        callback_anchor = "        void OnRenderObject()\n"
+        if callback_anchor not in source:
+            raise ValueError("could not locate MethodSpecific PrepareCamera")
+        source = source.replace(callback_anchor, new_prepare + callback_anchor, 1)
 
-    destroy_old = '        void OnDestroy() { RemoveMeshSplatBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n'
-    destroy_new = '        void OnDestroy() { RemoveMeshSplatBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n'
-    if destroy_new not in source:
-        if destroy_old in source:
-            source = source.replace(destroy_old, destroy_new, 1)
-        else:
-            destroy_anchor = '        void OnDestroy()'
-            if destroy_anchor not in source:
-                raise ValueError("could not locate MethodSpecific OnDestroy")
-            source = source.replace(destroy_anchor, '        void OnDestroy() { RemoveMeshSplatBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n\n        // original OnDestroy replaced by MeshSplatBench sort patch\n        void OnDestroy_disabled', 1)
+    source = re.sub(
+        r"\n\s*// original OnDestroy replaced by MeshSplatBench sort patch\n"
+        r"\s*void OnDestroy_disabled \{[^\n]*\}\n",
+        "\n",
+        source,
+    )
+    destroy_signature = "void OnDestroy()"
+    destroy_spans = _method_spans(source, destroy_signature)
+    if not destroy_spans:
+        raise ValueError("could not locate MethodSpecific OnDestroy")
+    destroy_start, destroy_end = destroy_spans[0]
+    destroy_body = (
+        f"        void OnDestroy() {{ {remove_helper}(); ready=false; positions?.Release(); "
+        "indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); "
+        "sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n"
+    )
+    source = source[:destroy_start] + destroy_body + source[destroy_end:]
 
     return source
 
@@ -854,35 +874,32 @@ def _patch_triangle_splatting_camera_sort(source: str) -> str:
             raise ValueError("could not locate TriangleSplatting BuildOrder")
         updated = updated.replace(old_order, new_order, 1)
 
-    old_prepare = '''        public override void PrepareCamera(Camera camera)
-        {
-            if (camera == null || material == null) return;
-            if (msBenchDrawCommands == null)
-            {
-                TargetCamera = camera;
-                if (!InstallMeshSplatBenchCameraDraw()) enabled = false;
-            }
-        }
-'''
-    new_prepare = '''        public override void PrepareCamera(Camera camera)
-        {
+    install_helper = _camera_draw_helper(updated, "Install")
+    remove_helper = install_helper.replace("Install", "Remove", 1)
+    new_prepare = f'''        public override void PrepareCamera(Camera camera)
+        {{
             if (camera == null || material == null) return;
             if (TargetCamera != camera)
-            {
-                RemoveMeshSplatBenchCameraDraw();
+            {{
+                {remove_helper}();
                 TargetCamera = camera;
-            }
+            }}
             if (msBenchDrawCommands == null)
-            {
-                if (!InstallMeshSplatBenchCameraDraw()) { enabled = false; return; }
-            }
+            {{
+                if (!{install_helper}()) {{ enabled = false; return; }}
+            }}
             RefreshTriangleOrder(camera);
-        }
+        }}
+
 '''
-    if new_prepare not in updated:
-        if old_prepare not in updated:
+    prepare_signature = "public override void PrepareCamera(Camera camera)"
+    if prepare_signature in updated:
+        updated = _replace_method_definitions(updated, prepare_signature, new_prepare)
+    else:
+        callback_anchor = "        void OnRenderObject()"
+        if callback_anchor not in updated:
             raise ValueError("could not locate TriangleSplatting PrepareCamera")
-        updated = updated.replace(old_prepare, new_prepare, 1)
+        updated = updated.replace(callback_anchor, new_prepare + callback_anchor, 1)
 
     render_anchor = "            if (!ready || Camera.current != TargetCamera || material == null) return;\n"
     render_refresh = render_anchor + "            RefreshTriangleOrder(TargetCamera);\n"
