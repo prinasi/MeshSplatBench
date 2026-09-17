@@ -1,21 +1,31 @@
 """Unity video trajectory rendering utilities for MeshSplatBench.
 
 Handles PCA ellipse camera trajectory generation, Unity batch invocation,
-frame validation, and MP4 video encoding for both method-aware and
-general-purpose Unity native renderer conditions.
+direct frame streaming, and MP4 video encoding for both method-aware and
+general-purpose Unity native renderer conditions. Frames are streamed directly
+into the video encoder without saving intermediate PNG images to disk unless
+explicitly requested via --write-frames.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
+import socket
+import struct
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, BinaryIO, Iterable
+
+import numpy as np
+from PIL import Image
 
 
+STREAM_MAGIC = 0x4D534256  # "MSBV" in little-endian uint32
 SCENES = ("bicycle", "bonsai", "counter", "flowers", "garden", "kitchen", "room", "stump", "treehill")
 INDOOR_SCENES = frozenset(("bonsai", "counter", "kitchen", "room"))
 
@@ -101,10 +111,166 @@ def unity_failure_summary(log_path: Path, *, max_lines: int = 16) -> str:
     return "\n".join(matches[-max_lines:])
 
 
+def read_exact(stream: Any, n: int) -> bytes:
+    """Read exactly n bytes from a socket, file, or stream.
+
+    Raises EOFError if fewer bytes were returned before stream closure.
+    """
+    buf = bytearray(n)
+    view = memoryview(buf)
+    pos = 0
+    use_socket = hasattr(stream, "recv_into")
+    while pos < n:
+        if use_socket:
+            chunk = stream.recv_into(view[pos:])
+        elif hasattr(stream, "readinto"):
+            chunk = stream.readinto(view[pos:])
+        else:
+            raw = stream.read(n - pos)
+            if not raw:
+                break
+            view[pos : pos + len(raw)] = raw
+            chunk = len(raw)
+        if not chunk:
+            break
+        pos += chunk
+    if pos < n:
+        raise EOFError(f"Unexpected end of stream: expected {n} bytes, got {pos}")
+    return bytes(buf)
+
+
+def decode_stream_to_video(
+    stream: Any,
+    output_video: Path,
+    *,
+    expected_frames: int | None = None,
+    expected_fps: int | None = None,
+    write_frames: bool = False,
+    frames_dir: Path | None = None,
+    log_path: Path | None = None,
+    show_progress: bool = True,
+) -> Path:
+    """Decode raw RGB frame stream directly into an MP4 video file.
+
+    Reads 20-byte stream header:
+        magic (uint32), width (uint32), height (uint32), total_frames (uint32), fps (uint32)
+    Followed by total_frames of:
+        frame_idx (uint32), width * height * 3 bytes (RGB24).
+
+    Streams frames directly into the video encoder without saving intermediate PNGs.
+    """
+    output_video = Path(output_video).resolve()
+    output_video.parent.mkdir(parents=True, exist_ok=True)
+    if write_frames and frames_dir is not None:
+        frames_dir.mkdir(parents=True, exist_ok=True)
+
+    header_bytes = read_exact(stream, 20)
+    magic, width, height, total_frames, stream_fps = struct.unpack("<IIIII", header_bytes)
+    if magic != STREAM_MAGIC:
+        raise ValueError(
+            f"Invalid stream magic header: 0x{magic:08X}, expected 0x{STREAM_MAGIC:08X} ('MSBV')"
+        )
+
+    if total_frames == 0:
+        raise RuntimeError("Stream indicated 0 total frames.")
+
+    fps = stream_fps if stream_fps > 0 else (expected_fps or 30)
+
+    try:
+        import imageio.v2 as iio
+        writer_factory = iio.get_writer
+        imwrite = None
+    except ImportError:
+        try:
+            import imageio.v3 as iio_v3
+            writer_factory = None
+            imwrite = iio_v3.imwrite
+        except ImportError as exc:
+            raise ImportError("decode_stream_to_video requires imageio. Install imageio[ffmpeg].") from exc
+
+    writer = (
+        writer_factory(str(output_video), fps=fps, macro_block_size=None)
+        if writer_factory is not None
+        else None
+    )
+    frame_list = [] if writer is None else None
+
+    sample_indices = {0, total_frames // 2, max(0, total_frames - 1)}
+    solid_checks: list[bool] = []
+    frame_bytes_len = width * height * 3
+
+    try:
+        for idx in range(total_frames):
+            frame_hdr = read_exact(stream, 4)
+            actual_idx = struct.unpack("<I", frame_hdr)[0]
+            body = read_exact(stream, frame_bytes_len)
+            arr = np.frombuffer(body, dtype=np.uint8).reshape((height, width, 3))
+
+            if idx in sample_indices:
+                solid_checks.append(bool(arr.min() == arr.max()))
+
+            if writer is not None:
+                writer.append_data(arr)
+            else:
+                frame_list.append(arr)
+
+            if write_frames and frames_dir is not None:
+                Image.fromarray(arr).save(frames_dir / f"{actual_idx:05d}.png")
+
+            if show_progress and ((idx + 1) % 15 == 0 or idx == total_frames - 1):
+                pct = (idx + 1) / total_frames * 100.0
+                print(
+                    f"[MeshSplatBench] Synthesized video frame {idx + 1}/{total_frames} ({pct:.1f}%)",
+                    flush=True,
+                )
+    finally:
+        if writer is not None:
+            writer.close()
+
+    if imwrite is not None and frame_list is not None:
+        imwrite(str(output_video), np.asarray(frame_list), fps=fps)
+
+    if len(solid_checks) >= 3 and all(solid_checks):
+        log_info = f" Inspect {log_path}" if log_path and log_path.is_file() else ""
+        raise RuntimeError(
+            f"Unity rendered only solid-color frames; no geometry reached the camera.{log_info}"
+        )
+
+    return output_video
+
+
+def decode_raw_stream_file(
+    raw_path: Path,
+    output_video: Path,
+    *,
+    expected_frames: int | None = None,
+    expected_fps: int | None = None,
+    write_frames: bool = False,
+    frames_dir: Path | None = None,
+    log_path: Path | None = None,
+    delete_raw_on_success: bool = True,
+) -> Path:
+    """Decode a fallback .raw stream file into an MP4 video."""
+    raw_path = Path(raw_path).resolve()
+    if not raw_path.is_file():
+        raise FileNotFoundError(f"Raw stream file not found: {raw_path}")
+    with open(raw_path, "rb") as f:
+        out = decode_stream_to_video(
+            f,
+            output_video,
+            expected_frames=expected_frames,
+            expected_fps=expected_fps,
+            write_frames=write_frames,
+            frames_dir=frames_dir,
+            log_path=log_path,
+        )
+    if delete_raw_on_success:
+        raw_path.unlink(missing_ok=True)
+    return out
+
+
 def validate_captured_frames(frames_dir: Path, expected_count: int, *, newer_than: float | None = None) -> list[Path]:
     """Validate that rendered PNG frames exist and are non-empty."""
-    from PIL import Image
-
     images = sorted(frames_dir.glob("*.png"))
     if newer_than is not None:
         images = [p for p in images if p.stat().st_mtime >= newer_than - 1.0]
@@ -134,9 +300,6 @@ def encode_video_from_frames(
     fps: int = 30,
 ) -> Path:
     """Encode PNG frames in a directory into an MP4 video."""
-    import numpy as np
-    from PIL import Image
-
     images = sorted(frames_dir.glob("*.png"))
     if not images:
         raise RuntimeError(f"No PNG frames to encode in {frames_dir}")
@@ -154,7 +317,7 @@ def encode_video_from_frames(
         except ImportError as exc:
             raise ImportError("encode_video_from_frames requires imageio. Install imageio[ffmpeg].") from exc
 
-    writer = writer_factory(str(output_video), fps=fps) if writer_factory is not None else None
+    writer = writer_factory(str(output_video), fps=fps, macro_block_size=None) if writer_factory is not None else None
     frame_list = [] if writer is None else None
     try:
         for p in images:
@@ -257,9 +420,11 @@ def run_unity_video_for_scene(
     background_color: str | None = None,
     log_name: str = "unity_editor.log",
 ) -> Path:
-    """Run Unity in headless batchmode to render a video trajectory."""
-    from msbench.unity_assets import export_triasset
+    """Run Unity in headless batchmode to render a video trajectory.
 
+    Streams rendered frames directly into the video encoder in memory without saving
+    intermediate PNG files to disk.
+    """
     unity_bin = Path(unity_bin).resolve()
     unity_project = Path(unity_project).resolve()
     triasset_path = Path(triasset_path).resolve()
@@ -267,6 +432,8 @@ def run_unity_video_for_scene(
     output_dir.mkdir(parents=True, exist_ok=True)
     frames_dir = output_dir / "frames"
     log_path = output_dir / log_name
+    video_path = output_dir / "render_traj.mp4"
+    raw_stream_path = output_dir / "render_traj.raw"
 
     manifest_path = triasset_path / "manifest.json"
     if not manifest_path.is_file():
@@ -317,7 +484,15 @@ def run_unity_video_for_scene(
     alt_marker = output_dir / ".unity_capture_complete"
     alt_marker.unlink(missing_ok=True)
 
-    # 3. Assemble Unity invocation
+    # 3. Create TCP stream listener
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_sock.bind(("127.0.0.1", 0))
+    server_sock.listen(1)
+    server_sock.settimeout(1.0)
+    stream_port = server_sock.getsockname()[1]
+
+    # 4. Assemble Unity invocation
     command = [
         str(unity_bin),
         "-batchmode",
@@ -330,6 +505,7 @@ def run_unity_video_for_scene(
         "-output", str(output_dir),
         "-topology", topology,
         "-background-color", str(background_color),
+        "-video-stream-port", str(stream_port),
         "-logFile", str(log_path),
     ]
     if condition == "general-purpose":
@@ -338,42 +514,132 @@ def run_unity_video_for_scene(
         command.extend(("-method-specific", "1"))
     if indexed_mesh_method_aware:
         command.extend(("-indexed-mesh-method-aware", "1"))
+    if write_frames:
+        command.append("-write-frames")
+
+    stream_result: dict[str, Any] = {
+        "success": False,
+        "connected": False,
+        "error": None,
+    }
+    stop_event = threading.Event()
+
+    def _receiver_worker() -> None:
+        conn = None
+        try:
+            while not stop_event.is_set():
+                try:
+                    conn, _ = server_sock.accept()
+                    stream_result["connected"] = True
+                    break
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+
+            if conn is None:
+                return
+
+            conn.settimeout(180.0)
+            decode_stream_to_video(
+                conn,
+                video_path,
+                expected_frames=total_frames,
+                expected_fps=fps,
+                write_frames=write_frames,
+                frames_dir=frames_dir,
+                log_path=log_path,
+            )
+            stream_result["success"] = True
+        except Exception as exc:
+            stream_result["error"] = exc
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    receiver_thread = threading.Thread(target=_receiver_worker, daemon=True)
+    receiver_thread.start()
 
     print(
         f"[MeshSplatBench] Launching Unity video render: method={method}, "
-        f"condition={condition}, frames={total_frames}, fps={fps}, output={output_dir}",
+        f"condition={condition}, frames={total_frames}, fps={fps}, stream_port={stream_port}, output={output_dir}",
         flush=True,
     )
     started = time.time()
     process = subprocess.Popen(command)
-    while process.poll() is None and not marker.is_file() and not alt_marker.is_file():
-        time.sleep(1)
-
-    if (marker.is_file() or alt_marker.is_file()) and process.poll() is None:
-        process.terminate()
 
     try:
-        exit_code = process.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        exit_code = process.wait(timeout=10)
+        while process.poll() is None:
+            if stream_result["error"] is not None:
+                # An error occurred in stream decoding
+                break
+            if marker.is_file() or alt_marker.is_file():
+                # Unity finished rendering
+                break
+            time.sleep(0.5)
 
-    if not marker.is_file() and not alt_marker.is_file():
-        raise RuntimeError(
-            f"Unity video rendering failed without completion marker; exit={exit_code}\n"
-            f"Relevant log lines ({log_path}):\n{unity_failure_summary(log_path)}"
+        if (marker.is_file() or alt_marker.is_file()) and process.poll() is None:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+
+        exit_code = process.poll()
+        if exit_code is None:
+            try:
+                exit_code = process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                exit_code = process.wait(timeout=10)
+    finally:
+        stop_event.set()
+        try:
+            server_sock.close()
+        except Exception:
+            pass
+        receiver_thread.join(timeout=30)
+
+    # 5. Handle fallbacks if direct TCP streaming did not complete
+    if not stream_result["success"] and raw_stream_path.is_file() and raw_stream_path.stat().st_size > 20:
+        print(f"[MeshSplatBench] Synthesizing video from raw stream fallback: {raw_stream_path}...", flush=True)
+        decode_raw_stream_file(
+            raw_stream_path,
+            video_path,
+            expected_frames=total_frames,
+            expected_fps=fps,
+            write_frames=write_frames,
+            frames_dir=frames_dir,
+            log_path=log_path,
         )
+        stream_result["success"] = True
 
-    # 4. Validate captured PNG frames
-    validate_captured_frames(frames_dir, total_frames, newer_than=started)
+    if not stream_result["success"] and frames_dir.is_dir():
+        png_count = len(list(frames_dir.glob("*.png")))
+        if png_count >= total_frames:
+            print(f"[MeshSplatBench] Synthesizing video from PNG frames in {frames_dir}...", flush=True)
+            validate_captured_frames(frames_dir, total_frames, newer_than=started)
+            encode_video_from_frames(frames_dir, video_path, fps=fps)
+            stream_result["success"] = True
 
-    # 5. Encode MP4 video
-    video_path = output_dir / "render_traj.mp4"
-    encode_video_from_frames(frames_dir, video_path, fps=fps)
-    print(f"[MeshSplatBench] Unity video saved: {video_path}", flush=True)
-
-    # 6. Cleanup frames if not requested
+    # 6. Cleanup frames directory if not requested
     if not write_frames and frames_dir.is_dir():
         shutil.rmtree(frames_dir, ignore_errors=True)
 
+    if not marker.is_file() and not alt_marker.is_file() and not stream_result["success"]:
+        err_info = f"\nStream error: {stream_result['error']}" if stream_result["error"] else ""
+        raise RuntimeError(
+            f"Unity video rendering failed without completion marker; exit={exit_code}{err_info}\n"
+            f"Relevant log lines ({log_path}):\n{unity_failure_summary(log_path)}"
+        )
+
+    if stream_result["error"] is not None and not stream_result["success"]:
+        raise stream_result["error"]
+
+    if not video_path.is_file() or video_path.stat().st_size == 0:
+        raise RuntimeError(f"Video file was not created or is empty: {video_path}")
+
+    print(f"[MeshSplatBench] Unity video saved: {video_path}", flush=True)
     return video_path

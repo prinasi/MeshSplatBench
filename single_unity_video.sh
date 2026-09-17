@@ -161,11 +161,19 @@ if [[ -z "${OUTPUT_NAME}" ]]; then
 fi
 
 if [[ -z "${UNITY_BIN}" ]]; then
-    UNITY_BIN="$("${PYTHON_BIN}" -c 'from tools.run_unity_triasset_video import find_unity_executable; print(find_unity_executable() or "")')"
+    UNITY_BIN="$("${PYTHON_BIN}" -c 'try:
+    from msbench.unity_video import find_unity_executable
+except ImportError:
+    from tools.run_unity_triasset_video import find_unity_executable
+print(find_unity_executable() or "")')"
 fi
 
 if [[ -z "${UNITY_PROJECT_DIR}" ]]; then
-    UNITY_PROJECT_DIR="$("${PYTHON_BIN}" -c 'from tools.run_unity_triasset_video import find_unity_project; print(find_unity_project() or "")')"
+    UNITY_PROJECT_DIR="$("${PYTHON_BIN}" -c 'try:
+    from msbench.unity_video import find_unity_project
+except ImportError:
+    from tools.run_unity_triasset_video import find_unity_project
+print(find_unity_project() or "")')"
 fi
 
 resolve_scenes() {
