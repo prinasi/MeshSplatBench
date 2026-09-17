@@ -388,7 +388,7 @@ def render_unity_video_cmd(
     unity_project: Optional[Path] = typer.Option(None, "--unity-project", help="Path to Unity project root"),
 ):
     """Render a trajectory video using Unity (method-aware or general-purpose condition)."""
-    from tools.run_unity_triasset_video import (
+    from msbench.unity_video import (
         find_unity_executable,
         find_unity_project,
         run_unity_video_for_scene,

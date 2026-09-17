@@ -14,7 +14,7 @@ from PIL import Image
 from msbench.core.cameras import CameraBatch
 from msbench.core.rendering import generate_ellipse_cameras
 from msbench.core.trajectory import load_trajectory, save_trajectory
-from tools.run_unity_triasset_video import (
+from msbench.unity_video import (
     encode_video_from_frames,
     find_unity_executable,
     find_unity_project,
