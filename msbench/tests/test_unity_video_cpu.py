@@ -171,6 +171,15 @@ class UnityVideoTrajectoryTests(unittest.TestCase):
             # Ensure no frames directory was created
             self.assertFalse((Path(tmp) / "frames").exists())
 
+    def test_decode_stream_odd_dimensions_handled(self) -> None:
+        """Verify stream decoder handles odd dimensions (e.g. 33x31 or 1237x822) without ffmpeg errors."""
+        stream_bytes = _build_test_stream_bytes(width=33, height=31, frames=4, fps=10, solid=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            video_path = Path(tmp) / "odd_traj.mp4"
+            out = decode_stream_to_video(io.BytesIO(stream_bytes), video_path, show_progress=False)
+            self.assertTrue(out.is_file())
+            self.assertGreater(out.stat().st_size, 0)
+
     def test_decode_stream_to_video_with_write_frames(self) -> None:
         """Verify stream decoder writes PNG frames alongside MP4 when requested."""
         stream_bytes = _build_test_stream_bytes(width=32, height=32, frames=4, fps=10, solid=False)

@@ -93,22 +93,166 @@ def unity_graphics_arguments() -> list[str]:
     return []
 
 
-def unity_failure_summary(log_path: Path, *, max_lines: int = 16) -> str:
+def unity_failure_summary(
+    log_path: Path,
+    *,
+    max_lines: int = 16,
+    stdout_lines: list[str] | None = None,
+) -> str:
     """Return the useful tail of a Unity failure without dumping its crash trace."""
-    if not log_path.is_file():
-        return f"Unity log was not created: {log_path}"
+    matches = []
     needles = (
         "[msbench]", "[meshsplatbench]", "error", "exception", "fatal", "crash", "sigsegv",
         "missing vulkan framebuffer", "shader error", "compilation failed",
+        "another unity instance", "multiple unity instances", "aborting batchmode",
     )
-    matches = []
-    for line in log_path.read_text(errors="replace").splitlines():
-        stripped = line.strip()
-        if stripped and any(needle in stripped.lower() for needle in needles):
-            matches.append(stripped)
+
+    if stdout_lines:
+        for line in stdout_lines:
+            stripped = line.strip()
+            if stripped and any(needle in stripped.lower() for needle in needles):
+                matches.append(stripped)
+
+    if log_path.is_file():
+        for line in log_path.read_text(errors="replace").splitlines():
+            stripped = line.strip()
+            if stripped and any(needle in stripped.lower() for needle in needles):
+                matches.append(stripped)
+
     if not matches:
-        return f"No explicit error found; inspect {log_path}"
+        if stdout_lines:
+            return "\n".join(stdout_lines[-max_lines:])
+        if log_path.is_file():
+            return f"No explicit error found; inspect {log_path}"
+        return f"Unity log was not created: {log_path}"
     return "\n".join(matches[-max_lines:])
+
+
+def find_running_unity_processes(unity_project: Path | None = None) -> list[tuple[int, str]]:
+    """Find running Unity Editor/standalone processes associated with this project."""
+    pids_found: dict[int, str] = {}
+
+    # 1. Check PIDs directly from lockfiles in unity_project
+    if unity_project is not None:
+        unity_project = Path(unity_project).resolve()
+        for rel in ("Temp/UnityLockfile", "Library/EditorInstance.json"):
+            lf = unity_project / rel
+            if lf.is_file():
+                try:
+                    text = lf.read_text(errors="replace")
+                    target_pid = None
+                    if lf.name == "EditorInstance.json":
+                        target_pid = int(json.loads(text).get("process_id", 0))
+                    else:
+                        for tok in text.split():
+                            if tok.isdigit():
+                                target_pid = int(tok)
+                                break
+                    if target_pid and target_pid > 0 and target_pid != os.getpid():
+                        try:
+                            os.kill(target_pid, 0)
+                            pids_found[target_pid] = f"<project lock in {rel}>"
+                        except OSError:
+                            pass
+                except Exception:
+                    pass
+
+    # 2. Check running processes via ps
+    try:
+        res = subprocess.run(
+            ["ps", "-eo", "pid,args"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        proj_str = str(unity_project.resolve()) if unity_project is not None else None
+        proj_name = unity_project.name if unity_project is not None else None
+        for line in res.stdout.splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) < 2 or not parts[0].isdigit():
+                continue
+            pid, cmd = int(parts[0]), parts[1]
+            if pid == os.getpid():
+                continue
+            cmd_lower = cmd.lower()
+            if any(ign in cmd_lower for ign in ("python", "pytest", "bash", "sh ", "git ")):
+                continue
+            is_unity = (
+                "unity.app" in cmd_lower
+                or "/unity" in cmd_lower
+                or "editor/unity" in cmd_lower
+                or cmd.startswith("Unity")
+                or cmd.startswith("unity")
+            )
+            if is_unity:
+                if proj_str is None or (proj_str in cmd) or (proj_name and f"-projectpath {proj_name}" in cmd_lower):
+                    pids_found[pid] = cmd
+    except Exception:
+        pass
+
+    return sorted(pids_found.items())
+
+
+def clear_stale_unity_locks(unity_project: Path) -> list[Path]:
+    """Remove Unity lockfiles if the process holding them is no longer running."""
+    removed = []
+    unity_project = Path(unity_project).resolve()
+    for rel in ("Temp/UnityLockfile", "Library/EditorInstance.json"):
+        lf = unity_project / rel
+        if not lf.is_file():
+            continue
+        pid = None
+        try:
+            text = lf.read_text(errors="replace")
+            if lf.name == "EditorInstance.json":
+                pid = int(json.loads(text).get("process_id", 0))
+            else:
+                for tok in text.split():
+                    if tok.isdigit():
+                        pid = int(tok)
+                        break
+        except Exception:
+            pass
+
+        is_alive = False
+        if pid and pid > 0:
+            try:
+                os.kill(pid, 0)
+                is_alive = True
+            except OSError:
+                is_alive = False
+
+        if not is_alive:
+            try:
+                lf.unlink(missing_ok=True)
+                removed.append(lf)
+            except Exception:
+                pass
+    return removed
+
+
+def terminate_existing_unity_processes(unity_project: Path | None = None) -> list[int]:
+    """Terminate existing Unity processes using the given project."""
+    import signal
+
+    running = find_running_unity_processes(unity_project)
+    killed = []
+    for pid, _ in running:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed.append(pid)
+        except OSError:
+            pass
+    if killed:
+        time.sleep(1.0)
+        for pid in killed:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+    if unity_project is not None:
+        clear_stale_unity_locks(unity_project)
+    return killed
 
 
 def read_exact(stream: Any, n: int) -> bytes:
@@ -205,6 +349,11 @@ def decode_stream_to_video(
             actual_idx = struct.unpack("<I", frame_hdr)[0]
             body = read_exact(stream, frame_bytes_len)
             arr = np.frombuffer(body, dtype=np.uint8).reshape((height, width, 3))
+
+            # H.264 / libx264 (yuv420p) requires width and height to be divisible by 2.
+            # Crop the trailing odd pixel if necessary (e.g. 1237x822 -> 1236x822).
+            if (arr.shape[1] % 2 != 0) or (arr.shape[0] % 2 != 0):
+                arr = arr[: arr.shape[0] - (arr.shape[0] % 2), : arr.shape[1] - (arr.shape[1] % 2)]
 
             if idx in sample_indices:
                 solid_checks.append(bool(arr.min() == arr.max()))
@@ -323,6 +472,8 @@ def encode_video_from_frames(
         for p in images:
             with Image.open(p) as img:
                 arr = np.asarray(img.convert("RGB"))
+            if (arr.shape[1] % 2 != 0) or (arr.shape[0] % 2 != 0):
+                arr = arr[: arr.shape[0] - (arr.shape[0] % 2), : arr.shape[1] - (arr.shape[1] % 2)]
             if writer is not None:
                 writer.append_data(arr)
             else:
@@ -419,6 +570,7 @@ def run_unity_video_for_scene(
     write_frames: bool = False,
     background_color: str | None = None,
     log_name: str = "unity_editor.log",
+    force_unity: bool = False,
 ) -> Path:
     """Run Unity in headless batchmode to render a video trajectory.
 
@@ -434,6 +586,28 @@ def run_unity_video_for_scene(
     log_path = output_dir / log_name
     video_path = output_dir / "render_traj.mp4"
     raw_stream_path = output_dir / "render_traj.raw"
+
+    # Pre-execution lock and process management
+    clear_stale_unity_locks(unity_project)
+    if force_unity:
+        killed = terminate_existing_unity_processes(unity_project)
+        if killed:
+            print(f"[MeshSplatBench] Terminated existing Unity process(es): {killed}", flush=True)
+            time.sleep(1.0)
+            clear_stale_unity_locks(unity_project)
+    else:
+        conflicting = find_running_unity_processes(unity_project)
+        if conflicting:
+            pids_desc = "\n".join(f"  - PID {p}: {c[:90]}..." for p, c in conflicting)
+            raise RuntimeError(
+                f"Another Unity instance is currently running with project '{unity_project}' open:\n"
+                f"{pids_desc}\n\n"
+                f"Multiple Unity instances cannot open the same project.\n"
+                f"To automatically terminate conflicting Unity processes, re-run with --force-unity.\n"
+                f"Or stop manually: kill -9 {' '.join(str(p) for p, _ in conflicting)}"
+            )
+
+    log_path.unlink(missing_ok=True)
 
     manifest_path = triasset_path / "manifest.json"
     if not manifest_path.is_file():
@@ -524,10 +698,16 @@ def run_unity_video_for_scene(
     }
     stop_event = threading.Event()
 
+    process: subprocess.Popen | None = None
+    stdout_lines: list[str] = []
+
     def _receiver_worker() -> None:
         conn = None
         try:
             while not stop_event.is_set():
+                if process is not None and process.poll() is not None:
+                    # Unity process terminated before connecting
+                    break
                 try:
                     conn, _ = server_sock.accept()
                     stream_result["connected"] = True
@@ -569,7 +749,29 @@ def run_unity_video_for_scene(
         flush=True,
     )
     started = time.time()
-    process = subprocess.Popen(command)
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    def _stdout_reader() -> None:
+        try:
+            if process.stdout is not None:
+                for line in iter(process.stdout.readline, ""):
+                    if not line:
+                        break
+                    line_str = line.rstrip()
+                    stdout_lines.append(line_str)
+                    if any(k in line_str.lower() for k in ("aborting", "fatal error", "multiple unity instances")):
+                        print(f"[Unity Batchmode] {line_str}", flush=True)
+        except Exception:
+            pass
+
+    stdout_thread = threading.Thread(target=_stdout_reader, daemon=True)
+    stdout_thread.start()
 
     try:
         while process.poll() is None:
@@ -594,13 +796,23 @@ def run_unity_video_for_scene(
             except subprocess.TimeoutExpired:
                 process.kill()
                 exit_code = process.wait(timeout=10)
+    except KeyboardInterrupt:
+        print("\n[MeshSplatBench] Interrupted by user. Terminating Unity process...", flush=True)
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        raise
     finally:
         stop_event.set()
         try:
             server_sock.close()
         except Exception:
             pass
-        receiver_thread.join(timeout=30)
+        receiver_thread.join(timeout=15)
+        stdout_thread.join(timeout=5)
 
     # 5. Handle fallbacks if direct TCP streaming did not complete
     if not stream_result["success"] and raw_stream_path.is_file() and raw_stream_path.stat().st_size > 20:
@@ -629,10 +841,21 @@ def run_unity_video_for_scene(
         shutil.rmtree(frames_dir, ignore_errors=True)
 
     if not marker.is_file() and not alt_marker.is_file() and not stream_result["success"]:
+        if any("multiple unity instances cannot open the same project" in s.lower() for s in stdout_lines):
+            raise RuntimeError(
+                f"Unity aborted because another Unity instance is already running with project '{unity_project}' open.\n"
+                f"Multiple Unity instances cannot open the same project.\n\n"
+                f"To fix this:\n"
+                f"  1. Run: pkill -9 -f Unity\n"
+                f"  2. Remove any stale lock: rm -f '{unity_project}/Temp/UnityLockfile'\n"
+                f"  3. Or retry with '--force-unity' to terminate conflicting processes automatically."
+            )
+
         err_info = f"\nStream error: {stream_result['error']}" if stream_result["error"] else ""
+        combined_tail = unity_failure_summary(log_path, stdout_lines=stdout_lines)
         raise RuntimeError(
             f"Unity video rendering failed without completion marker; exit={exit_code}{err_info}\n"
-            f"Relevant log lines ({log_path}):\n{unity_failure_summary(log_path)}"
+            f"Relevant log / stdout lines:\n{combined_tail}"
         )
 
     if stream_result["error"] is not None and not stream_result["success"]:

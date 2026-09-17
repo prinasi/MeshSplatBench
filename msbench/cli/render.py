@@ -250,6 +250,11 @@ def render_video_cmd(
     ),
     unity_bin: Optional[Path] = typer.Option(None, "--unity-bin", help="Path to Unity binary."),
     unity_project: Optional[Path] = typer.Option(None, "--unity-project", help="Path to Unity project root."),
+    force_unity: bool = typer.Option(
+        False,
+        "--force-unity",
+        help="With --unity, terminate conflicting Unity processes before launching.",
+    ),
 ):
     """Render a PCA-aligned ellipse trajectory video from dataset cameras."""
     if unity:
@@ -276,6 +281,7 @@ def render_video_cmd(
             write_frames=write_frames,
             unity=unity_bin,
             unity_project=unity_project,
+            force_unity=force_unity,
         )
 
     from msbench.core.builder import build_adapter, build_dataset
@@ -386,6 +392,11 @@ def render_unity_video_cmd(
     write_frames: bool = typer.Option(False, "--write-frames", help="Also save rendered PNG frame sequence"),
     unity: Optional[Path] = typer.Option(None, "--unity", help="Path to Unity binary"),
     unity_project: Optional[Path] = typer.Option(None, "--unity-project", help="Path to Unity project root"),
+    force_unity: bool = typer.Option(
+        False,
+        "--force-unity",
+        help="Terminate any conflicting Unity processes holding the project lock before launching.",
+    ),
 ):
     """Render a trajectory video using Unity (method-aware or general-purpose condition)."""
     from msbench.unity_video import (
@@ -460,6 +471,7 @@ def render_unity_video_cmd(
             z_phase=float(video_cfg.get("z_phase", z_phase)),
             split=str(video_cfg.get("split", split)),
             write_frames=write_frames,
+            force_unity=force_unity,
         )
         typer.echo(f"Unity video saved to {video_path}")
         return
@@ -494,6 +506,7 @@ def render_unity_video_cmd(
         z_phase=z_phase,
         split=split,
         write_frames=write_frames,
+        force_unity=force_unity,
     )
     typer.echo(f"Unity video saved to {video_path}")
 

@@ -61,6 +61,7 @@ def main() -> int:
     parser.add_argument("--indexed-mesh-method-aware", action="store_true")
     parser.add_argument("--write-frames", action="store_true", help="Keep rendered PNG frames alongside MP4.")
     parser.add_argument("--background-color", choices=("black", "white"), default=None)
+    parser.add_argument("--force-unity", action="store_true", help="Terminate conflicting Unity processes holding project lock before launching.")
 
     cond_group = parser.add_mutually_exclusive_group()
     cond_group.add_argument("--method-aware", "--method-specific", dest="method_aware", action="store_true", default=True, help="Use method-aware procedural Unity renderer (default).")
@@ -138,6 +139,7 @@ def main() -> int:
             split=str(video_cfg.get("split", args.split)),
             write_frames=bool(args.write_frames),
             background_color=args.background_color,
+            force_unity=bool(args.force_unity),
         )
         return 0
 
@@ -194,6 +196,7 @@ def main() -> int:
             split=args.split,
             write_frames=args.write_frames,
             background_color=args.background_color,
+            force_unity=bool(args.force_unity),
         )
     return 0
 

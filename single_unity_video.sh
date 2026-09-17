@@ -27,6 +27,7 @@ Z_VARIATION="0.0"
 Z_PHASE="0.0"
 SPLIT="train"
 WRITE_FRAMES=0
+FORCE_UNITY=0
 CONTINUE_ON_ERROR=0
 DRY_RUN=0
 REFERENCE_IMAGE_DIR_OVERRIDE=""
@@ -77,6 +78,7 @@ Options:
   --split S                Dataset split for trajectory (default: train)
   --trajectory PATH        Use existing trajectory JSON instead of computing ellipse
   --write-frames           Keep rendered PNG frames alongside MP4
+  --force-unity            Terminate conflicting Unity processes holding project lock
   --output-name NAME       Subdirectory name (default: unity_method_aware/video or unity_general_purpose/video)
   --config-root PATH       Config root (default: configs)
   --datasets-root PATH     Override dataset root with PATH/<scene>
@@ -125,6 +127,7 @@ while [[ $# -gt 0 ]]; do
         --split) require_value "$@"; SPLIT="$2"; shift 2 ;;
         --trajectory|-t) require_value "$@"; TRAJECTORY_PATH="$2"; shift 2 ;;
         --write-frames|--write_frames) WRITE_FRAMES=1; shift ;;
+        --force-unity|--force_unity) FORCE_UNITY=1; shift ;;
         --reference-image-dir|--reference_image_dir) require_value "$@"; REFERENCE_IMAGE_DIR_OVERRIDE="$2"; shift 2 ;;
         --continue-on-error) CONTINUE_ON_ERROR=1; shift ;;
         --dry-run|--dry_run) DRY_RUN=1; shift ;;
@@ -237,6 +240,7 @@ for target in "${RESOLVED_TARGETS[@]}"; do
     [[ "${CONDITION}" == "general-purpose" ]] && CMD+=(--general-purpose) || CMD+=(--method-aware)
     [[ "${INDEXED_MESH_METHOD_AWARE}" -eq 1 ]] && CMD+=(--indexed-mesh-method-aware)
     [[ "${WRITE_FRAMES}" -eq 1 ]] && CMD+=(--write-frames)
+    [[ "${FORCE_UNITY}" -eq 1 ]] && CMD+=(--force-unity)
     [[ -n "${TRAJECTORY_PATH}" ]] && CMD+=(--trajectory "${TRAJECTORY_PATH}")
     [[ -n "${REFERENCE_IMAGE_DIR_OVERRIDE}" ]] && CMD+=(--image-dir "${REFERENCE_IMAGE_DIR_OVERRIDE}")
 
