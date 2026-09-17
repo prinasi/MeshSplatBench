@@ -33,7 +33,7 @@ env/
 # Project outputs
 outputs/
 runs/
-tests/
+/tests/
 pytest-of-root/
 **/[Rr]enders/
 **/[Rr]esults/

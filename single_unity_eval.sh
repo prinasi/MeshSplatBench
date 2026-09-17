@@ -48,6 +48,7 @@ SKIP_EXPORT=0
 SKIP_CAPTURE=0
 SKIP_PROFILE=0
 SKIP_METRICS=0
+RENDER_VIDEO=0
 SKIP_UNITY_PATCH=0
 FORCE_EXPORT=0
 FORCE_CAPTURE=0
@@ -61,6 +62,8 @@ if [[ -n "${PYTHON_BIN:-}" ]]; then
     PYTHON_BIN="${PYTHON_BIN}"
 elif [[ -n "${PYTHON:-}" ]]; then
     PYTHON_BIN="${PYTHON}"
+elif [[ -x "/opt/miniconda3/envs/torch/bin/python" ]]; then
+    PYTHON_BIN="/opt/miniconda3/envs/torch/bin/python"
 elif command -v python >/dev/null 2>&1; then
     PYTHON_BIN="python"
 else
@@ -132,6 +135,7 @@ Options:
   --skip-capture           Do not capture Unity PNGs/FPS CSV
   --skip-profile           Do not run Unity no-I/O profiles
   --skip-metrics           Do not compute PSNR/SSIM/LPIPS
+  --video                  Render trajectory video matching msbench render video
   --report-only            Only format already completed scene outputs
   --force                  Rebuild export/capture/profile/metrics stages
   --force-export           Re-export TriAssets
@@ -451,6 +455,7 @@ while [[ "$#" -gt 0 ]]; do
         --skip-capture|--skip_capture) SKIP_CAPTURE=1; shift ;;
         --skip-profile|--skip_profile) SKIP_PROFILE=1; shift ;;
         --skip-metrics|--skip_metrics) SKIP_METRICS=1; shift ;;
+        --video) RENDER_VIDEO=1; shift ;;
         --report-only|--report_only) SKIP_EXPORT=1; SKIP_CAPTURE=1; SKIP_PROFILE=1; SKIP_METRICS=1; shift ;;
         --force) FORCE_EXPORT=1; FORCE_CAPTURE=1; FORCE_PROFILE=1; FORCE_METRICS=1; shift ;;
         --force-export|--force_export) FORCE_EXPORT=1; shift ;;
@@ -826,6 +831,23 @@ for target in "${EXPANDED_TARGETS[@]}"; do
             fi
         else
             echo "[${LABEL}] Metrics complete; skipping: ${METRICS_JSON}"
+        fi
+    fi
+
+    if [[ "${RENDER_VIDEO}" -eq 1 ]]; then
+        VIDEO_CMD=("${PYTHON_BIN}" "tools/run_unity_triasset_video.py"
+            --unity "${UNITY_BIN}"
+            --unity-project "${UNITY_PROJECT_DIR}"
+            --datasets-root "${UNITY_DATASETS_ROOT}"
+            --outputs-root "${UNITY_OUTPUTS_ROOT}"
+            --method "${METHOD_ID}"
+            --scenes "${UNITY_SCENE_NAME}"
+            --topology "${TOPOLOGY}"
+            "${CONDITION_ARG}")
+        [[ "${INDEXED_MESH_METHOD_AWARE}" -eq 1 ]] && VIDEO_CMD+=(--indexed-mesh-method-aware)
+        if ! run_command "${LABEL}:video" "${VIDEO_CMD[@]}"; then
+            if handle_failure "${LABEL}" "Unity video rendering failed"; then continue; fi
+            break
         fi
     fi
 
