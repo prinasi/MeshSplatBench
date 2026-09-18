@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
+using Unity.Collections;
 using UnityEngine;
 
 namespace MeshSplatBench.UnityNative
@@ -66,6 +67,10 @@ namespace MeshSplatBench.UnityNative
                 StreamPort = TriAssetRuntimeOptions.GetInt("-stream-port", StreamPort);
 
             WritePngFrames = TriAssetRuntimeOptions.Has("-write-frames") || WritePngFrames;
+
+            // Uncap rendering speed for offline video capture
+            QualitySettings.vSyncCount = 0;
+            Application.targetFrameRate = -1;
         }
 
         IEnumerator Start()
@@ -227,10 +232,10 @@ namespace MeshSplatBench.UnityNative
 
                     RenderTexture.active = target;
                     readback.ReadPixels(new Rect(0, 0, defaultWidth, defaultHeight), 0, 0, false);
-                    readback.Apply(false, false);
 
-                    // Extract RGB bytes directly with Y-flip and premultiplied background blend
-                    ExtractRgbBytes(readback.GetPixels32(), defaultWidth, defaultHeight, rgbBuffer, whiteBackground);
+                    // Use GetRawTextureData instead of GetPixels32 to avoid per-frame managed heap allocation
+                    NativeArray<Color32> rawPixels = readback.GetRawTextureData<Color32>();
+                    ExtractRgbBytes(rawPixels, defaultWidth, defaultHeight, rgbBuffer, whiteBackground);
 
                     byte[] frameHeader = BitConverter.GetBytes(i);
                     if (netStream != null)
@@ -286,28 +291,47 @@ namespace MeshSplatBench.UnityNative
             if (!Application.isEditor) Application.Quit(0);
         }
 
-        static void ExtractRgbBytes(Color32[] pixels, int width, int height, byte[] rgbBuffer, bool whiteBackground)
+        static void ExtractRgbBytes(NativeArray<Color32> pixels, int width, int height, byte[] rgbBuffer, bool whiteBackground)
         {
-            int background = whiteBackground ? 255 : 0;
             // Unity textures have row 0 at the bottom. Flip vertically so row 0 is at the top for video.
-            for (int r = 0; r < height; ++r)
+            if (whiteBackground)
             {
-                int srcY = height - 1 - r;
-                int srcRowOffset = srcY * width;
-                int dstRowOffset = r * width * 3;
-
-                for (int x = 0; x < width; ++x)
+                // White background: premultiplied alpha composite with (255,255,255)
+                for (int r = 0; r < height; ++r)
                 {
-                    Color32 p = pixels[srcRowOffset + x];
-                    int remaining = 255 - p.a;
-                    byte red = (byte)Mathf.Clamp(p.r + (background * remaining + 127) / 255, 0, 255);
-                    byte green = (byte)Mathf.Clamp(p.g + (background * remaining + 127) / 255, 0, 255);
-                    byte blue = (byte)Mathf.Clamp(p.b + (background * remaining + 127) / 255, 0, 255);
+                    int srcY = height - 1 - r;
+                    int srcRowOffset = srcY * width;
+                    int dstRowOffset = r * width * 3;
 
-                    int dstIndex = dstRowOffset + x * 3;
-                    rgbBuffer[dstIndex + 0] = red;
-                    rgbBuffer[dstIndex + 1] = green;
-                    rgbBuffer[dstIndex + 2] = blue;
+                    for (int x = 0; x < width; ++x)
+                    {
+                        Color32 p = pixels[srcRowOffset + x];
+                        int remaining = 255 - p.a;
+                        int dstIndex = dstRowOffset + x * 3;
+                        rgbBuffer[dstIndex + 0] = (byte)Math.Min(p.r + (255 * remaining + 127) / 255, 255);
+                        rgbBuffer[dstIndex + 1] = (byte)Math.Min(p.g + (255 * remaining + 127) / 255, 255);
+                        rgbBuffer[dstIndex + 2] = (byte)Math.Min(p.b + (255 * remaining + 127) / 255, 255);
+                    }
+                }
+            }
+            else
+            {
+                // Fast path for black background: alpha composite simplifies to identity
+                // (background=0, so 0*remaining/255 == 0), just copy RGB channels with Y-flip.
+                for (int r = 0; r < height; ++r)
+                {
+                    int srcY = height - 1 - r;
+                    int srcRowOffset = srcY * width;
+                    int dstRowOffset = r * width * 3;
+
+                    for (int x = 0; x < width; ++x)
+                    {
+                        Color32 p = pixels[srcRowOffset + x];
+                        int dstIndex = dstRowOffset + x * 3;
+                        rgbBuffer[dstIndex + 0] = p.r;
+                        rgbBuffer[dstIndex + 1] = p.g;
+                        rgbBuffer[dstIndex + 2] = p.b;
+                    }
                 }
             }
         }
