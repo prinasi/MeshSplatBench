@@ -302,7 +302,12 @@ def decode_stream_to_video(
         frame_idx (uint32), width * height * 3 bytes (RGB24).
 
     Streams frames directly into the video encoder without saving intermediate PNGs.
+    Uses a background encoder thread to decouple socket I/O from ffmpeg encoding,
+    preventing TCP backpressure from stalling the Unity render loop.
     """
+    import queue
+    import threading
+
     output_video = Path(output_video).resolve()
     output_video.parent.mkdir(parents=True, exist_ok=True)
     if write_frames and frames_dir is not None:
@@ -343,6 +348,35 @@ def decode_stream_to_video(
     solid_checks: list[bool] = []
     frame_bytes_len = width * height * 3
 
+    # --- P2 optimisation: background encoder thread ---
+    # Queue capacity limits memory to ~30 frames; blocks the receiver thread
+    # if ffmpeg falls behind, providing natural backpressure without stalling Unity.
+    _ENCODE_QUEUE_SIZE = 30
+    encode_queue: queue.Queue[tuple[int, np.ndarray] | None] = queue.Queue(
+        maxsize=_ENCODE_QUEUE_SIZE
+    )
+    encoder_error: list[BaseException] = []  # mutable container for thread-safe error passing
+
+    def _encoder_worker() -> None:
+        """Background worker that drains the encode queue into the video writer."""
+        try:
+            while True:
+                item = encode_queue.get()
+                if item is None:  # sentinel → end of stream
+                    break
+                frame_idx, arr = item
+                if writer is not None:
+                    writer.append_data(arr)
+                elif frame_list is not None:
+                    frame_list.append(arr)
+                if write_frames and frames_dir is not None:
+                    Image.fromarray(arr).save(frames_dir / f"{frame_idx:05d}.png")
+        except BaseException as exc:
+            encoder_error.append(exc)
+
+    encoder_thread = threading.Thread(target=_encoder_worker, daemon=True, name="video-encoder")
+    encoder_thread.start()
+
     try:
         for idx in range(total_frames):
             frame_hdr = read_exact(stream, 4)
@@ -358,13 +392,8 @@ def decode_stream_to_video(
             if idx in sample_indices:
                 solid_checks.append(bool(arr.min() == arr.max()))
 
-            if writer is not None:
-                writer.append_data(arr)
-            else:
-                frame_list.append(arr)
-
-            if write_frames and frames_dir is not None:
-                Image.fromarray(arr).save(frames_dir / f"{actual_idx:05d}.png")
+            # Enqueue for background encoding (blocks if queue full → backpressure)
+            encode_queue.put((actual_idx, arr))
 
             if show_progress and ((idx + 1) % 15 == 0 or idx == total_frames - 1):
                 pct = (idx + 1) / total_frames * 100.0
@@ -373,8 +402,15 @@ def decode_stream_to_video(
                     flush=True,
                 )
     finally:
+        # Signal encoder to finish and wait for it
+        encode_queue.put(None)
+        encoder_thread.join(timeout=120)
         if writer is not None:
             writer.close()
+
+    # Re-raise encoder thread errors
+    if encoder_error:
+        raise RuntimeError(f"Video encoder thread failed: {encoder_error[0]}") from encoder_error[0]
 
     if imwrite is not None and frame_list is not None:
         imwrite(str(output_video), np.asarray(frame_list), fps=fps)

@@ -6,6 +6,7 @@ using System.Net.Sockets;
 using System.Text;
 using Unity.Collections;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace MeshSplatBench.UnityNative
 {
@@ -184,7 +185,6 @@ namespace MeshSplatBench.UnityNative
 
             RenderTexture target = new RenderTexture(defaultWidth, defaultHeight, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
             target.Create();
-            Texture2D readback = new Texture2D(defaultWidth, defaultHeight, TextureFormat.RGBA32, false, true);
 
             bool wasEnabled = CaptureCamera.enabled;
             RenderTexture previousTarget = CaptureCamera.targetTexture;
@@ -199,7 +199,13 @@ namespace MeshSplatBench.UnityNative
             byte[] rgbBuffer = new byte[defaultWidth * defaultHeight * 3];
             bool whiteBackground = String.Equals(BackgroundColor, "white", StringComparison.OrdinalIgnoreCase);
 
-            Debug.Log($"[MeshSplatBench] Direct Unity video rendering: {frameCount} frames at {defaultWidth}x{defaultHeight}, {fps} FPS (no PNGs).");
+            // --- P3: AsyncGPUReadback pipeline (up to MAX_IN_FLIGHT frames) ---
+            const int MAX_IN_FLIGHT = 3;
+            Queue<KeyValuePair<int, AsyncGPUReadbackRequest>> pendingReadbacks =
+                new Queue<KeyValuePair<int, AsyncGPUReadbackRequest>>();
+            int processedCount = 0;
+
+            Debug.Log($"[MeshSplatBench] Direct Unity video rendering: {frameCount} frames at {defaultWidth}x{defaultHeight}, {fps} FPS (AsyncGPUReadback pipeline, depth={MAX_IN_FLIGHT}).");
 
             try
             {
@@ -211,51 +217,98 @@ namespace MeshSplatBench.UnityNative
 
                     if (frameWidth != defaultWidth || frameHeight != defaultHeight)
                     {
+                        // Resolution changed: flush all pending readbacks before resizing
+                        while (pendingReadbacks.Count > 0)
+                        {
+                            var pending = pendingReadbacks.Dequeue();
+                            pending.Value.WaitForCompletion();
+                            if (!pending.Value.hasError)
+                            {
+                                NativeArray<Color32> data = pending.Value.GetData<Color32>();
+                                ExtractRgbBytes(data, defaultWidth, defaultHeight, rgbBuffer, whiteBackground);
+                                WriteFrameData(pending.Key, rgbBuffer, netStream, rawFileStream);
+                                processedCount++;
+                                LogFrameProgress(processedCount, frameCount);
+                            }
+                        }
+
                         defaultWidth = frameWidth;
                         defaultHeight = frameHeight;
                         target.Release();
                         Destroy(target);
-                        Destroy(readback);
                         target = new RenderTexture(defaultWidth, defaultHeight, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
                         target.Create();
-                        readback = new Texture2D(defaultWidth, defaultHeight, TextureFormat.RGBA32, false, true);
                         CaptureCamera.targetTexture = target;
                         rgbBuffer = new byte[defaultWidth * defaultHeight * 3];
                     }
 
+                    // --- Render frame i ---
                     ApplyTrajectoryPose(CaptureCamera, frame, defaultWidth, defaultHeight);
                     Renderer.PrepareCamera(CaptureCamera);
-
                     CaptureCamera.targetTexture = target;
                     PreparePremultipliedCaptureTarget();
                     CaptureCamera.Render();
 
-                    RenderTexture.active = target;
-                    readback.ReadPixels(new Rect(0, 0, defaultWidth, defaultHeight), 0, 0, false);
+                    // Queue async readback (GPU copies RT to staging buffer in order)
+                    var request = AsyncGPUReadback.Request(target, 0, TextureFormat.RGBA32);
+                    pendingReadbacks.Enqueue(new KeyValuePair<int, AsyncGPUReadbackRequest>(i, request));
 
-                    // Use GetRawTextureData instead of GetPixels32 to avoid per-frame managed heap allocation
-                    NativeArray<Color32> rawPixels = readback.GetRawTextureData<Color32>();
-                    ExtractRgbBytes(rawPixels, defaultWidth, defaultHeight, rgbBuffer, whiteBackground);
-
-                    byte[] frameHeader = BitConverter.GetBytes(i);
-                    if (netStream != null)
+                    // --- Process completed readbacks ---
+                    while (pendingReadbacks.Count > 0 && pendingReadbacks.Peek().Value.done)
                     {
-                        netStream.Write(frameHeader, 0, 4);
-                        netStream.Write(rgbBuffer, 0, rgbBuffer.Length);
-                        netStream.Flush();
-                    }
-                    else if (rawFileStream != null)
-                    {
-                        rawFileStream.Write(frameHeader, 0, 4);
-                        rawFileStream.Write(rgbBuffer, 0, rgbBuffer.Length);
-                    }
-
-                    if ((i + 1) % 15 == 0 || i == frameCount - 1)
-                    {
-                        Debug.Log($"[MeshSplatBench] Rendered & streamed video frame {i + 1}/{frameCount} ({100f * (i + 1) / frameCount:F1}%)");
+                        var completed = pendingReadbacks.Dequeue();
+                        if (!completed.Value.hasError)
+                        {
+                            NativeArray<Color32> data = completed.Value.GetData<Color32>();
+                            ExtractRgbBytes(data, defaultWidth, defaultHeight, rgbBuffer, whiteBackground);
+                            WriteFrameData(completed.Key, rgbBuffer, netStream, rawFileStream);
+                            processedCount++;
+                            LogFrameProgress(processedCount, frameCount);
+                        }
+                        else
+                        {
+                            Debug.LogWarning($"[MeshSplatBench] AsyncGPUReadback failed for frame {completed.Key}");
+                        }
                     }
 
-                    yield return null;
+                    // Throttle: if pipeline is full, yield and wait for oldest readback
+                    while (pendingReadbacks.Count >= MAX_IN_FLIGHT)
+                    {
+                        yield return null;
+                        while (pendingReadbacks.Count > 0 && pendingReadbacks.Peek().Value.done)
+                        {
+                            var completed = pendingReadbacks.Dequeue();
+                            if (!completed.Value.hasError)
+                            {
+                                NativeArray<Color32> data = completed.Value.GetData<Color32>();
+                                ExtractRgbBytes(data, defaultWidth, defaultHeight, rgbBuffer, whiteBackground);
+                                WriteFrameData(completed.Key, rgbBuffer, netStream, rawFileStream);
+                                processedCount++;
+                                LogFrameProgress(processedCount, frameCount);
+                            }
+                        }
+                    }
+                }
+
+                // --- Drain remaining pending readbacks ---
+                while (pendingReadbacks.Count > 0)
+                {
+                    if (pendingReadbacks.Peek().Value.done)
+                    {
+                        var completed = pendingReadbacks.Dequeue();
+                        if (!completed.Value.hasError)
+                        {
+                            NativeArray<Color32> data = completed.Value.GetData<Color32>();
+                            ExtractRgbBytes(data, defaultWidth, defaultHeight, rgbBuffer, whiteBackground);
+                            WriteFrameData(completed.Key, rgbBuffer, netStream, rawFileStream);
+                            processedCount++;
+                            LogFrameProgress(processedCount, frameCount);
+                        }
+                    }
+                    else
+                    {
+                        yield return null;
+                    }
                 }
             }
             finally
@@ -281,14 +334,37 @@ namespace MeshSplatBench.UnityNative
 
             target.Release();
             Destroy(target);
-            Destroy(readback);
 
             File.WriteAllText(completionPath, "complete\n");
             File.WriteAllText(legacyCompletionPath, "complete\n");
 
-            Debug.Log($"[MeshSplatBench] Unity video trajectory streaming complete: {frameCount} frames directly synthesized.");
+            Debug.Log($"[MeshSplatBench] Unity video trajectory streaming complete: {processedCount}/{frameCount} frames directly synthesized.");
             running = false;
             if (!Application.isEditor) Application.Quit(0);
+        }
+
+        static void WriteFrameData(int frameIndex, byte[] rgbBuffer, NetworkStream netStream, FileStream rawFileStream)
+        {
+            byte[] frameHeader = BitConverter.GetBytes(frameIndex);
+            if (netStream != null)
+            {
+                netStream.Write(frameHeader, 0, 4);
+                netStream.Write(rgbBuffer, 0, rgbBuffer.Length);
+                netStream.Flush();
+            }
+            else if (rawFileStream != null)
+            {
+                rawFileStream.Write(frameHeader, 0, 4);
+                rawFileStream.Write(rgbBuffer, 0, rgbBuffer.Length);
+            }
+        }
+
+        static void LogFrameProgress(int processedCount, int frameCount)
+        {
+            if (processedCount % 15 == 0 || processedCount == frameCount)
+            {
+                Debug.Log($"[MeshSplatBench] Rendered & streamed video frame {processedCount}/{frameCount} ({100f * processedCount / frameCount:F1}%)");
+            }
         }
 
         static void ExtractRgbBytes(NativeArray<Color32> pixels, int width, int height, byte[] rgbBuffer, bool whiteBackground)
