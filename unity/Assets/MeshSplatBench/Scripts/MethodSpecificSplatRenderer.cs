@@ -235,6 +235,28 @@ namespace MeshSplatBench.UnityNative
                 material.SetInt("_UseSh", (meshAblation == 1 || meshAblation == 4) ? 0 : 1);
             }
         }
+        public override void PrepareCamera(Camera camera)
+        {
+            if (camera == null || material == null) return;
+            if (TargetCamera != camera)
+            {
+                RemoveMeshSplatBenchCameraDraw();
+                TargetCamera = camera;
+            }
+            if (msBenchDrawCommands == null)
+            {
+                if (!InstallMeshSplatBenchCameraDraw()) { enabled = false; return; }
+            }
+            RefreshTriangleOrder(camera);
+            material.SetVector("_CameraWorldPos", camera.transform.position);
+            material.SetInt("_RawCode", rawCode ? 1 : 0);
+            material.SetFloat("_OpacityFloor", opacityFloor);
+            if (mode == 1)
+            {
+                material.SetInt("_MeshAblation", meshAblation);
+                material.SetInt("_UseSh", (meshAblation == 1 || meshAblation == 4) ? 0 : 1);
+            }
+        }
         void OnRenderObject()
         {
             if (msBenchDrawCommands != null) return;
@@ -274,6 +296,9 @@ namespace MeshSplatBench.UnityNative
         }
         static ComputeBuffer Upload(Array values) { ComputeBuffer b=new ComputeBuffer(values.Length,4,ComputeBufferType.Raw); b.SetData(values); return b; }
         void Fail(string msg) { status="ERROR: "+msg; Debug.LogError("[MeshSplatBench] "+msg); }
-        void OnDestroy() { RemoveMsBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }
+        void OnDestroy() { RemoveMeshSplatBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }
+
+        // original OnDestroy replaced by MeshSplatBench sort patch
+        void OnDestroy_disabled { RemoveMsBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }
     }
 }
