@@ -13,7 +13,9 @@ SCENES = ("bicycle", "bonsai", "counter", "flowers", "garden", "kitchen", "room"
 INDOOR_SCENES = frozenset(("bonsai", "counter", "kitchen", "room"))
 
 
-def reference_image_directory(scene: str) -> str:
+def reference_image_directory(scene: str, method: str = "triangle-splatting") -> str:
+    if method.replace("_", "-").lower() == "diffsoup":
+        return "images_4"
     return "images_2" if scene in INDOOR_SCENES else "images_4"
 
 
@@ -27,6 +29,7 @@ def main() -> int:
     parser.add_argument("--torch-home", type=Path)
     parser.add_argument("--output-name", required=True)
     parser.add_argument("--method")
+    parser.add_argument("--reference-image-dir")
     parser.add_argument("--condition", choices=("method-aware", "general-purpose"), required=True)
     parser.add_argument("--native-render-subdir", default="renders/test/renders")
     parser.add_argument("--lpips-device", default="cpu")
@@ -55,7 +58,7 @@ def main() -> int:
                 f"{method}/{scene} has no fair general-purpose appearance contract: "
                 f"{general.get('reason', 'unsupported')}"
             )
-        image_dir = reference_image_directory(scene)
+        image_dir = args.reference_image_dir or reference_image_directory(scene, method)
         command = [
             str(args.python), str(args.evaluator),
             "--prediction", str(root),

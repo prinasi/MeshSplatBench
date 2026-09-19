@@ -665,7 +665,8 @@ def _patch_method_specific_camera_state(source: str) -> str:
             }
         }
 '''
-    if new_prepare not in source:
+    current_prepare = new_prepare.replace("MeshSplatBenchCameraDraw", "MsBenchCameraDraw")
+    if new_prepare not in source and current_prepare not in source:
         if old_prepare in source:
             source = source.replace(old_prepare, new_prepare, 1)
         else:
@@ -699,7 +700,10 @@ def _patch_method_specific_camera_state(source: str) -> str:
 
     destroy_old = '        void OnDestroy() { RemoveMeshSplatBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n'
     destroy_new = '        void OnDestroy() { RemoveMeshSplatBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n'
-    if destroy_new not in source:
+    current_destroy_new = destroy_new.replace(
+        "RemoveMeshSplatBenchCameraDraw", "RemoveMsBenchCameraDraw"
+    )
+    if destroy_new not in source and current_destroy_new not in source:
         if destroy_old in source:
             source = source.replace(destroy_old, destroy_new, 1)
         else:
@@ -879,7 +883,11 @@ def _patch_triangle_splatting_camera_sort(source: str) -> str:
             RefreshTriangleOrder(camera);
         }
 '''
-    if new_prepare not in updated:
+    # Current main uses the shorter InstallMsBench*/RemoveMsBench* helper
+    # names, while legacy projects used InstallMeshSplatBench*/
+    # RemoveMeshSplatBench*. Treat both completed forms as already patched.
+    current_prepare = new_prepare.replace("MeshSplatBenchCameraDraw", "MsBenchCameraDraw")
+    if new_prepare not in updated and current_prepare not in updated:
         if old_prepare not in updated:
             raise ValueError("could not locate TriangleSplatting PrepareCamera")
         updated = updated.replace(old_prepare, new_prepare, 1)

@@ -279,45 +279,86 @@ has_images() {
 }
 
 capture_complete() {
-    local result_dir="$1"
+    local result_dir="$1" reference_dir="$2"
     [[ -f "${result_dir}/fps_per_test_view.csv" ]] || return 1
-    has_images "${result_dir}"
+    has_images "${result_dir}" || return 1
+    "${PYTHON_BIN}" - "${result_dir}" "${reference_dir}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from PIL import Image
+
+result = Path(sys.argv[1]).resolve()
+reference = Path(sys.argv[2]).resolve()
+suffixes = {".png", ".jpg", ".jpeg"}
+predictions = sorted(
+    path for path in (result / "test").iterdir()
+    if path.is_file() and path.suffix.lower() in suffixes
+) if (result / "test").is_dir() else []
+references = sorted(
+    path for path in reference.iterdir()
+    if path.is_file() and path.suffix.lower() in suffixes
+) if reference.is_dir() else []
+if not predictions or not references:
+    raise SystemExit(1)
+with Image.open(references[0]) as image:
+    expected = image.size
+for path in predictions:
+    with Image.open(path) as image:
+        if image.size != expected:
+            raise SystemExit(1)
+protocol_path = result / "msbench_run_protocol.json"
+if protocol_path.is_file():
+    protocol = json.loads(protocol_path.read_text())
+    if protocol.get("resolution") != [expected[0], expected[1]]:
+        raise SystemExit(1)
+raise SystemExit(0)
+PY
 }
 
 metrics_complete() {
-    local path="$1"
-    "${PYTHON_BIN}" - "${path}" "${WITH_LPIPS}" <<'PY'
+    local path="$1" reference_dir="$2"
+    "${PYTHON_BIN}" - "${path}" "${WITH_LPIPS}" "${reference_dir}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 with_lpips = sys.argv[2] == "1"
+reference = Path(sys.argv[3]).resolve()
 if not path.is_file():
     raise SystemExit(1)
 try:
-    test = json.loads(path.read_text()).get("test", {})
+    report = json.loads(path.read_text())
+    test = report.get("test", {})
 except Exception:
     raise SystemExit(1)
 required = {"psnr", "ssim"}
 if with_lpips:
     required.add("lpips_vgg")
+ground_truth = report.get("protocol", {}).get("ground_truth")
+if not ground_truth or Path(ground_truth).resolve() != reference:
+    raise SystemExit(1)
 raise SystemExit(0 if required.issubset(test) else 1)
 PY
 }
 
 profile_complete() {
-    local path="$1" require_gpu="$2"
-    "${PYTHON_BIN}" - "${path}" "${PROFILE_VIEWS}" "${PROFILE_FRAMES}" "${require_gpu}" "${GPU_TIMING_MIN_FRACTION}" <<'PY'
+    local path="$1" require_gpu="$2" reference_dir="$3"
+    "${PYTHON_BIN}" - "${path}" "${PROFILE_VIEWS}" "${PROFILE_FRAMES}" "${require_gpu}" "${GPU_TIMING_MIN_FRACTION}" "${reference_dir}" <<'PY'
 import json
 import sys
 from pathlib import Path
+
+from PIL import Image
 
 path = Path(sys.argv[1])
 expected_views = int(sys.argv[2])
 expected_frames = int(sys.argv[3])
 require_gpu = sys.argv[4] == "1"
 gpu_fraction = float(sys.argv[5])
+reference = Path(sys.argv[6])
 if not path.is_file():
     raise SystemExit(1)
 try:
@@ -325,6 +366,16 @@ try:
 except Exception:
     raise SystemExit(1)
 if len(views) != expected_views:
+    raise SystemExit(1)
+reference_image = next(
+    (item for item in sorted(reference.iterdir()) if item.suffix.lower() in {".png", ".jpg", ".jpeg"}),
+    None,
+)
+if reference_image is None:
+    raise SystemExit(1)
+with Image.open(reference_image) as image:
+    expected_size = image.size
+if any((view.get("width"), view.get("height")) != expected_size for view in views):
     raise SystemExit(1)
 samples = sum(len(view.get("cpu_frame_samples_ms", [])) for view in views)
 expected_samples = expected_views * expected_frames
@@ -666,6 +717,7 @@ for target in "${EXPANDED_TARGETS[@]}"; do
     DATASET_PATH="$(config_value "${CONFIG_FILE}" "dataset.root")"
     IMAGE_DIR="$(config_value "${CONFIG_FILE}" "dataset.image_dir")"
     RESOLUTION="$(config_value "${CONFIG_FILE}" "dataset.resolution")"
+    TRAINER_DOWNSCALE="$(config_value "${CONFIG_FILE}" "trainer.downscale")"
     if [[ -z "${MODEL_PATH}" ]]; then
         if handle_failure "${LABEL}" "Config missing output.dir"; then continue; fi
         break
@@ -676,6 +728,17 @@ for target in "${EXPANDED_TARGETS[@]}"; do
     fi
     [[ -n "${IMAGE_DIR}" ]] || IMAGE_DIR="images"
     [[ -n "${RESOLUTION}" ]] || RESOLUTION="1"
+    if [[ "${METHOD_ID}" == "diffsoup" && "${DATASET}" == "mipnerf360" && "${TRAINER_DOWNSCALE}" =~ ^(0|1|2|4|8)$ ]]; then
+        DIFFSOUP_IMAGE_DIR="images"
+        if [[ "${TRAINER_DOWNSCALE}" -gt 1 ]]; then
+            DIFFSOUP_IMAGE_DIR="images_${TRAINER_DOWNSCALE}"
+        fi
+        if [[ "${IMAGE_DIR}" != "${DIFFSOUP_IMAGE_DIR}" || "${RESOLUTION}" != "1" ]]; then
+            echo "[${LABEL}] DiffSoup trainer.downscale=${TRAINER_DOWNSCALE}; using ${DIFFSOUP_IMAGE_DIR} at resolution=1 for Unity parity"
+        fi
+        IMAGE_DIR="${DIFFSOUP_IMAGE_DIR}"
+        RESOLUTION="1"
+    fi
 
     MODEL_PATH="$(abs_path "${MODEL_PATH}")"
     if [[ -n "${DATASETS_ROOT_OVERRIDE}" ]]; then
@@ -711,7 +774,7 @@ for target in "${EXPANDED_TARGETS[@]}"; do
     [[ "${CONDITION}" == "general-purpose" ]] && CONDITION_ARG="--general-purpose"
 
     if [[ "${SKIP_CAPTURE}" -eq 0 ]]; then
-        if [[ "${FORCE_CAPTURE}" -eq 1 ]] || ! capture_complete "${RESULT_DIR}"; then
+        if [[ "${FORCE_CAPTURE}" -eq 1 ]] || ! capture_complete "${RESULT_DIR}" "${REF_PATH}"; then
             CAPTURE_CMD=("${PYTHON_BIN}" "tools/run_unity_triasset_eval.py"
                 --unity "${UNITY_BIN}"
                 --unity-project "${UNITY_PROJECT_DIR}"
@@ -741,7 +804,7 @@ for target in "${EXPANDED_TARGETS[@]}"; do
     if [[ "${SKIP_PROFILE}" -eq 0 ]]; then
         for run in $(seq 1 "${PROFILE_RUNS}"); do
             PROFILE_JSON="${RESULT_DIR}/runtime_profile_run_$(printf '%02d' "${run}").json"
-            if [[ "${FORCE_PROFILE}" -eq 1 ]] || ! profile_complete "${PROFILE_JSON}" "${REQUIRE_GPU_TIMING}"; then
+            if [[ "${FORCE_PROFILE}" -eq 1 ]] || ! profile_complete "${PROFILE_JSON}" "${REQUIRE_GPU_TIMING}" "${REF_PATH}"; then
                 if [[ "${PROFILE_RUNTIME}" == "player" ]]; then
                     PROFILE_CMD=("${PYTHON_BIN}" "tools/run_unity_triasset_player_profile.py"
                         --player "${UNITY_PLAYER_BIN}"
@@ -798,8 +861,8 @@ for target in "${EXPANDED_TARGETS[@]}"; do
 
     if [[ "${SKIP_METRICS}" -eq 0 ]]; then
         METRICS_JSON="${RESULT_DIR}/metrics_summary.json"
-        if [[ "${FORCE_METRICS}" -eq 1 ]] || ! metrics_complete "${METRICS_JSON}"; then
-            if [[ "${DRY_RUN}" -eq 0 ]] && ! capture_complete "${RESULT_DIR}"; then
+        if [[ "${FORCE_METRICS}" -eq 1 ]] || ! metrics_complete "${METRICS_JSON}" "${REF_PATH}"; then
+            if [[ "${DRY_RUN}" -eq 0 ]] && ! capture_complete "${RESULT_DIR}" "${REF_PATH}"; then
                 if handle_failure "${LABEL}" "Cannot score metrics before Unity capture completes: ${RESULT_DIR}"; then continue; fi
                 break
             fi

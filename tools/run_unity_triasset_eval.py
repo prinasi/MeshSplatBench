@@ -22,8 +22,10 @@ SCENES = ("bicycle", "bonsai", "counter", "flowers", "garden", "kitchen", "room"
 INDOOR_SCENES = frozenset(("bonsai", "counter", "kitchen", "room"))
 
 
-def reference_image_directory(scene: str) -> str:
-    """Match the MipNeRF360 resolution convention used by native evaluation."""
+def reference_image_directory(scene: str, method: str = "triangle-splatting") -> str:
+    """Match the native method's MipNeRF360 evaluation resolution."""
+    if method.replace("_", "-").lower() == "diffsoup":
+        return "images_4"
     return "images_2" if scene in INDOOR_SCENES else "images_4"
 
 
@@ -156,7 +158,9 @@ def main() -> int:
         triasset = (scene_root / args.asset_subdir / f"{args.method}.triasset").resolve()
         dataset = (args.datasets_root / scene).resolve()
         output = (scene_root / args.output_name).resolve()
-        image_dir = dataset / (args.reference_image_dir or reference_image_directory(scene))
+        image_dir = dataset / (
+            args.reference_image_dir or reference_image_directory(scene, args.method)
+        )
         if not (triasset / "manifest.json").is_file():
             raise FileNotFoundError(f"missing triasset: {triasset}")
         validate_triasset(triasset, max_faces=10000)

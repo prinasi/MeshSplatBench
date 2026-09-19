@@ -18,11 +18,6 @@ from unittest.mock import patch
 import torch
 from PIL import Image
 
-from tools.validate_unity_triasset_cpu import validate_triasset
-from tools.create_off import _load_mesh_splatting
-from tools.patch_legacy_unity_vulkan import patch_unity_project
-from tools.run_unity_triasset_eval import unity_graphics_arguments, validate_captured_images
-
 from msbench.unity_assets import (
     _d2ts_gamma_vertex_rescale,
     _deployment_background_color,
@@ -31,6 +26,14 @@ from msbench.unity_assets import (
     export_triasset,
     mesh_splatting_triangle_opacity,
 )
+from tools.create_off import _load_mesh_splatting
+from tools.patch_legacy_unity_vulkan import patch_unity_project
+from tools.run_unity_triasset_eval import (
+    reference_image_directory,
+    unity_graphics_arguments,
+    validate_captured_images,
+)
+from tools.validate_unity_triasset_cpu import validate_triasset
 
 
 class MeshOpacityTests(unittest.TestCase):
@@ -461,6 +464,13 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
             self.assertIn("sourceTriangleIndices", renderer_text)
             self.assertIn("sortedTriangleIndices", renderer_text)
 
+            renderer.write_text(
+                renderer_text.replace(
+                    "InstallMeshSplatBenchCameraDraw", "InstallMsBenchCameraDraw"
+                ).replace("RemoveMeshSplatBenchCameraDraw", "RemoveMsBenchCameraDraw")
+            )
+            self.assertEqual(patch_unity_project(project), [])
+
             triangle = scripts / "TriangleSplattingTriAssetRenderer.cs"
             triangle.write_text(
                 "using System;\nusing System.Collections;\nusing System.IO;\nusing System.Text.RegularExpressions;\nusing UnityEngine;\nusing UnityEngine.Rendering;\n"
@@ -535,6 +545,13 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
             self.assertIn("RefreshTriangleOrder(camera)", triangle_text)
             self.assertIn("RefreshTriangleOrder(TargetCamera)", triangle_text)
 
+            triangle.write_text(
+                triangle_text.replace(
+                    "InstallMeshSplatBenchCameraDraw", "InstallMsBenchCameraDraw"
+                ).replace("RemoveMeshSplatBenchCameraDraw", "RemoveMsBenchCameraDraw")
+            )
+            self.assertEqual(patch_unity_project(project), [])
+
     def test_capture_validation_rejects_solid_frames(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -552,6 +569,12 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
     def test_linux_uses_vulkan(self) -> None:
         with patch.object(sys, "platform", "linux"):
             self.assertEqual(unity_graphics_arguments(), ["-force-vulkan"])
+
+    def test_diffsoup_uses_images_4_for_indoor_scenes(self) -> None:
+        self.assertEqual(reference_image_directory("kitchen", "diffsoup"), "images_4")
+        self.assertEqual(
+            reference_image_directory("kitchen", "triangle-splatting"), "images_2"
+        )
 
 
 if __name__ == "__main__":

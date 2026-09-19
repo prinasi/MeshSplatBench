@@ -9,7 +9,7 @@ experiment:
 
 dataset:
   scene: bonsai
-  image_dir: images_2
+  image_dir: images_4
   resolution: 1
 
 trainer:
