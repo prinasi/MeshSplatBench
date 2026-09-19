@@ -16,7 +16,7 @@ from msbench.cli.eval import (
 from msbench.cli.train import _mesh_splatting_native_argv, _triangle_splatting_native_argv
 from msbench.cli.main import app
 from msbench.cli.render import _default_viewer_pointcloud_paths, _mesh_export_kwargs
-from msbench.core.config import Config
+from msbench.core.config import Config, apply_overrides, finalize_config
 from msbench.core.mesh_eval import export_adapter_mesh
 
 
@@ -856,3 +856,164 @@ def test_compare_accepts_config_inputs(tmp_path: Path):
 
     assert result.exit_code == 0, result.output
     assert report.exists()
+
+
+def test_2dts_strategy_auto_selection():
+    bicycle = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")
+    scan24 = Config.fromfile("configs/2dts/dtu/scan24.yaml")
+
+    assert bicycle.d2ts.strategy == "volumetric"
+    assert bicycle.adapter.render_params.ste_threshold is None
+    assert bicycle.adapter.render_params.sort_level == 0
+
+    assert scan24.d2ts.strategy == "opaque"
+    assert scan24.adapter.render_params.ste_threshold == 0.3
+    assert scan24.adapter.render_params.sort_level == 2
+
+
+def test_2dts_strategy_override_mipnerf360_opaque():
+    from msbench.trainers.d2ts_native import _build_d2ts_native_config
+
+    raw_cfg = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")
+    cfg = Config(finalize_config(apply_overrides(raw_cfg, ["d2ts.strategy=opaque"])))
+
+    assert cfg.d2ts.strategy == "opaque"
+    assert cfg.adapter.render_params.ste_threshold == 0.3
+    assert cfg.adapter.render_params.sort_level == 2
+
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=Path(cfg.output.dir),
+        max_steps=cfg.trainer.max_steps,
+    )
+
+    assert native.model.ste_threshold == 0.3
+    assert native.model.sort_level == 2
+    assert native.model.model_update.gamma_schedule.gamma_final == 50.0
+    assert native.model.model_update.opacity_reset.reset_value == 0.29
+    assert native.trainer.smoothness_loss.w_normal == 0.05
+    assert native.trainer.geometry_loss.w_geometry == 0.05
+
+
+def test_2dts_strategy_override_dtu_volumetric():
+    from msbench.trainers.d2ts_native import _build_d2ts_native_config
+
+    raw_cfg = Config.fromfile("configs/2dts/dtu/scan24.yaml")
+    cfg = Config(finalize_config(apply_overrides(raw_cfg, ["d2ts.strategy=volumetric"])))
+
+    assert cfg.d2ts.strategy == "volumetric"
+    assert cfg.adapter.render_params.ste_threshold is None
+    assert cfg.adapter.render_params.sort_level == 0
+
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=Path(cfg.output.dir),
+        max_steps=cfg.trainer.max_steps,
+    )
+
+    assert native.model.ste_threshold is None
+    assert native.model.sort_level == 0
+    assert native.model.model_update.gamma_schedule is None
+    assert native.model.model_update.opacity_reset.reset_value == 0.01
+    assert native.trainer.smoothness_loss.w_normal == 0.0
+    assert native.trainer.geometry_loss.w_geometry == 0.0
+
+
+def test_2dts_strategy_dynamic_step_scaling():
+    from msbench.trainers.d2ts_native import _build_d2ts_native_config
+
+    raw_cfg = Config.fromfile("configs/2dts/mipnerf360/bicycle.yaml")
+    cfg = Config(finalize_config(apply_overrides(raw_cfg, ["d2ts.strategy=opaque"])))
+
+    native = _build_d2ts_native_config(
+        cfg=cfg,
+        dataset_root=cfg.dataset.root,
+        output_dir=Path(cfg.output.dir),
+        max_steps=15000,
+    )
+
+    assert native.trainer.iterations == 15000
+    assert native.model.model_update.gamma_schedule.start_iter == 10000
+    assert native.model.model_update.gamma_schedule.end_iter == 15000
+
+
+def test_2dts_base_mixins(tmp_path: Path):
+    mip_base = Path("configs/2dts/mipnerf360/bicycle.yaml").resolve()
+    opaque_base = Path("configs/base/2dts-opaque.yaml").resolve()
+    dtu_base = Path("configs/2dts/dtu/scan24.yaml").resolve()
+    vol_base = Path("configs/base/2dts-volumetric.yaml").resolve()
+
+    opaque_cfg_path = tmp_path / "custom_opaque.yaml"
+    opaque_cfg_path.write_text(
+        f"_base_:\n  - {mip_base}\n  - {opaque_base}\n"
+    )
+    loaded_opaque = Config.fromfile(str(opaque_cfg_path))
+    assert loaded_opaque.d2ts.strategy == "opaque"
+    assert loaded_opaque.adapter.render_params.ste_threshold == 0.3
+    assert loaded_opaque.adapter.render_params.sort_level == 2
+
+    vol_cfg_path = tmp_path / "custom_vol.yaml"
+    vol_cfg_path.write_text(
+        f"_base_:\n  - {dtu_base}\n  - {vol_base}\n"
+    )
+    loaded_vol = Config.fromfile(str(vol_cfg_path))
+    assert loaded_vol.d2ts.strategy == "volumetric"
+    assert loaded_vol.adapter.render_params.ste_threshold is None
+    assert loaded_vol.adapter.render_params.sort_level == 0
+
+
+def test_train_cli_output_dir_override(tmp_path: Path):
+    captured_cfgs = []
+
+    def fake_train_structured(cfg, *, output_dir, quiet, max_steps_override=None):
+        captured_cfgs.append((cfg, output_dir))
+        return {
+            "total_steps": 100,
+            "total_time_s": 1.0,
+            "avg_step_time_ms": 10.0,
+            "final_losses": {},
+        }
+
+    with patch("msbench.cli.train._train_from_structured_config", fake_train_structured):
+        # 1. Using -o flag
+        res1 = CliRunner().invoke(
+            app,
+            [
+                "train",
+                "--config",
+                "configs/2dts/mipnerf360/bicycle.yaml",
+                "--override",
+                "d2ts.strategy=opaque",
+                "-o",
+                "outputs/custom_test_opaque/bicycle",
+            ],
+        )
+        assert res1.exit_code == 0, res1.output
+        cfg1, out1 = captured_cfgs[0]
+        assert str(out1) == "outputs/custom_test_opaque/bicycle"
+        assert cfg1.output.dir == "outputs/custom_test_opaque/bicycle"
+        assert cfg1.adapter.checkpoint == "outputs/custom_test_opaque/bicycle/ckpt"
+        assert cfg1.d2ts.strategy == "opaque"
+        assert cfg1.adapter.render_params.ste_threshold == 0.3
+
+        # 2. Using --override output.dir=...
+        res2 = CliRunner().invoke(
+            app,
+            [
+                "train",
+                "--config",
+                "configs/2dts/mipnerf360/bicycle.yaml",
+                "--override",
+                "d2ts.strategy=opaque",
+                "--override",
+                "output.dir=outputs/override_opaque/bicycle",
+            ],
+        )
+        assert res2.exit_code == 0, res2.output
+        cfg2, out2 = captured_cfgs[1]
+        assert str(out2) == "outputs/override_opaque/bicycle"
+        assert cfg2.output.dir == "outputs/override_opaque/bicycle"
+        assert cfg2.adapter.checkpoint == "outputs/override_opaque/bicycle/ckpt"
+        assert cfg2.d2ts.strategy == "opaque"

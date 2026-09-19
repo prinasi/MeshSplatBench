@@ -345,6 +345,43 @@ class UnityTemplateTests(unittest.TestCase):
 
 
 class LegacyUnityVulkanPatchTests(unittest.TestCase):
+    def test_patch_accepts_current_msbench_camera_helper_names(self) -> None:
+        from tools.patch_legacy_unity_vulkan import (
+            _patch_method_specific_camera_state,
+            _patch_triangle_splatting_camera_sort,
+        )
+
+        method_path = Path(
+            "unity/Assets/MeshSplatBench/Scripts/MethodSpecificSplatRenderer.cs"
+        )
+        triangle_path = Path(
+            "unity/Assets/MeshSplatBench/Scripts/TriangleSplattingTriAssetRenderer.cs"
+        )
+        method_source = method_path.read_text()
+        prepare_start = method_source.index("        public override void PrepareCamera")
+        prepare_end = method_source.index("        void OnRenderObject")
+        duplicate_prepare = method_source[prepare_start:prepare_end]
+        method_source = method_source.replace(
+            "        void OnRenderObject()",
+            duplicate_prepare + "        void OnRenderObject()",
+            1,
+        )
+
+        patched_method = _patch_method_specific_camera_state(method_source)
+        patched_triangle = _patch_triangle_splatting_camera_sort(triangle_path.read_text())
+
+        self.assertEqual(
+            patched_method.count("public override void PrepareCamera(Camera camera)"),
+            1,
+        )
+        self.assertEqual(patched_method.count("void OnDestroy()"), 1)
+        self.assertIn("InstallMsBenchCameraDraw", patched_method)
+        self.assertNotIn("InstallMeshSplatBenchCameraDraw", patched_method)
+        self.assertEqual(
+            patched_triangle.count("public override void PrepareCamera(Camera camera)"),
+            1,
+        )
+
     def test_patch_is_idempotent_and_fixes_premultiplied_capture(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
@@ -492,6 +529,25 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
                 ).replace("RemoveMeshSplatBenchCameraDraw", "RemoveMsBenchCameraDraw")
             )
             self.assertEqual(patch_unity_project(project), [])
+            self.assertEqual(
+                renderer_text.count('material.SetFloat("_GammaVertexRescale", gammaVertexRescale);'),
+                2,
+            )
+
+            repository_capture = Path(
+                "unity/Assets/MeshSplatBench/Scripts/ColmapBatchCapture.cs"
+            ).read_text()
+            repository_renderer = Path(
+                "unity/Assets/MeshSplatBench/Scripts/MethodSpecificSplatRenderer.cs"
+            ).read_text()
+            self.assertEqual(
+                repository_renderer.count('material.SetFloat("_GammaVertexRescale", gammaVertexRescale);'),
+                3,
+            )
+            self.assertIn("RenderTextureFormat.ARGBFloat", repository_capture)
+            self.assertIn("TextureFormat.RGBAFloat", repository_capture)
+            self.assertIn("Texture2D encoded", repository_capture)
+            self.assertIn("CompositePremultipliedBackground(readback, encoded)", repository_capture)
 
             triangle = scripts / "TriangleSplattingTriAssetRenderer.cs"
             triangle.write_text(

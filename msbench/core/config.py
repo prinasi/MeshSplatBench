@@ -144,6 +144,7 @@ def finalize_config(config: Mapping[str, Any]) -> dict[str, Any]:
     resolved = _apply_scene_triangle_caps(_to_plain_dict(config))
     resolved = _apply_max_primitive_limit(resolved)
     resolved = _apply_dtu_defaults(resolved)
+    resolved = _apply_d2ts_defaults(resolved)
     resolved = _format_config_templates(resolved)
     resolved = _resolve_dataset_scene(resolved)
     return resolved
@@ -360,6 +361,79 @@ def _apply_dtu_defaults(config: dict[str, Any]) -> dict[str, Any]:
         render_params["bg_color"] = "white" if mode == "foreground" else "black"
         adapter["render_params"] = render_params
         config["adapter"] = adapter
+    return config
+
+
+def _apply_d2ts_defaults(config: dict[str, Any]) -> dict[str, Any]:
+    adapter_cfg = config.get("adapter", {})
+    trainer_cfg = config.get("trainer", {})
+    d2ts_cfg = config.get("d2ts", {})
+
+    adapter_type = str(adapter_cfg.get("type", "")).lower() if isinstance(adapter_cfg, Mapping) else ""
+    trainer_type = str(trainer_cfg.get("type", "")).lower() if isinstance(trainer_cfg, Mapping) else ""
+    is_d2ts = adapter_type in {"2dts", "d2ts"} or trainer_type in {"2dts", "d2ts"} or bool(d2ts_cfg)
+    if not is_d2ts:
+        return config
+
+    d2ts = dict(d2ts_cfg) if isinstance(d2ts_cfg, Mapping) else {}
+    strategy = d2ts.get("strategy")
+    if strategy is None and isinstance(trainer_cfg, Mapping):
+        strategy = trainer_cfg.get("strategy")
+    if strategy is None:
+        strategy = "auto"
+    strategy = str(strategy).lower()
+
+    dataset_cfg = config.get("dataset", {})
+    ds_name = str(dataset_cfg.get("name", "")).lower() if isinstance(dataset_cfg, Mapping) else ""
+    ds_type = str(dataset_cfg.get("type", "")).lower() if isinstance(dataset_cfg, Mapping) else ""
+    ds_root = str(dataset_cfg.get("root", "")).lower() if isinstance(dataset_cfg, Mapping) else ""
+    is_dtu = ds_name == "dtu" or ds_type == "dtu" or "dtu" in ds_root
+
+    render_params = {}
+    if isinstance(adapter_cfg, Mapping):
+        render_params = dict(adapter_cfg.get("render_params", {}) or {})
+
+    if strategy == "auto":
+        if render_params.get("ste_threshold") is not None and float(render_params.get("ste_threshold")) > 0:
+            strategy = "opaque"
+        elif is_dtu:
+            strategy = "opaque"
+        else:
+            strategy = "volumetric"
+
+    if strategy in {"surface", "solidified", "solidify"}:
+        strategy = "opaque"
+    elif strategy in {"radiance", "volume"}:
+        strategy = "volumetric"
+
+    if strategy not in {"volumetric", "opaque"}:
+        raise ValueError(
+            f"Invalid d2ts.strategy: {strategy!r}. Expected 'auto', 'volumetric', or 'opaque'."
+        )
+
+    d2ts["strategy"] = strategy
+    config["d2ts"] = d2ts
+
+    if isinstance(adapter_cfg, Mapping):
+        adapter = dict(adapter_cfg)
+        render_params.setdefault("gamma_rescale", True)
+        if strategy == "opaque":
+            if render_params.get("ste_threshold") is None:
+                render_params["ste_threshold"] = 0.3
+            if render_params.get("sort_level") in {None, 0}:
+                render_params["sort_level"] = 2
+        elif strategy == "volumetric":
+            if render_params.get("ste_threshold") == 0.3:
+                render_params["ste_threshold"] = None
+            else:
+                render_params.setdefault("ste_threshold", None)
+            if render_params.get("sort_level") == 2:
+                render_params["sort_level"] = 0
+            else:
+                render_params.setdefault("sort_level", 0)
+        adapter["render_params"] = render_params
+        config["adapter"] = adapter
+
     return config
 
 

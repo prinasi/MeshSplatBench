@@ -21,7 +21,7 @@ namespace MeshSplatBench.UnityNative
         CommandBuffer msBenchDrawCommands;
         Camera msBenchCommandCamera;
         int primitiveCount, mode, activeShDegree, meshAblation;
-        float gamma = 1f, opacityFloor;
+        float gamma = 1f, gammaVertexRescale = 1f, opacityFloor;
         bool ready, rawCode, deindexedSoup;
         string status = "Waiting to load method-specific renderer";
         ComputeBuffer triangleOrderBuffer;
@@ -48,6 +48,7 @@ namespace MeshSplatBench.UnityNative
             primitiveCount = ReadInt(json, "primitive_count", 0);
             activeShDegree = ReadInt(json, "active_sh_degree", 0);
             gamma = ReadFloat(json, "gamma", 1f);
+            gammaVertexRescale = ReadFloat(json, "gamma_vertex_rescale", 1f);
             opacityFloor = Mathf.Clamp01(ReadFloat(json, "opacity_floor", 0f));
             if (primitiveCount <= 0) { Fail("Invalid primitive_count."); yield break; }
             string b = Path.Combine(AssetDirectory, "buffers");
@@ -107,6 +108,7 @@ namespace MeshSplatBench.UnityNative
             material.SetInt("_Mode", mode); material.SetInt("_PrimitiveCount", primitiveCount);
             material.SetInt("_ShDegree", activeShDegree); material.SetFloat("_Gamma", gamma);
             material.SetFloat("_OpacityFloor", opacityFloor);
+            material.SetFloat("_GammaVertexRescale", gammaVertexRescale);
             if (mode == 1)
             {
                 meshAblation = ablation == "no-sh" ? 1 : ablation == "no-sigma" ? 2 : 0;
@@ -218,6 +220,7 @@ namespace MeshSplatBench.UnityNative
             material.SetVector("_CameraWorldPos", camera.transform.position);
             material.SetInt("_RawCode", rawCode ? 1 : 0);
             material.SetFloat("_OpacityFloor", opacityFloor);
+            material.SetFloat("_GammaVertexRescale", gammaVertexRescale);
             if (mode == 1)
             {
                 material.SetInt("_MeshAblation", meshAblation);
@@ -233,6 +236,7 @@ namespace MeshSplatBench.UnityNative
             material.SetVector("_CameraWorldPos", TargetCamera.transform.position);
             material.SetInt("_RawCode", rawCode ? 1 : 0);
             material.SetFloat("_OpacityFloor", opacityFloor);
+            material.SetFloat("_GammaVertexRescale", gammaVertexRescale);
             if (mode == 1)
             {
                 material.SetInt("_MeshAblation", meshAblation);

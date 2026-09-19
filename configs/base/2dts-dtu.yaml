@@ -13,3 +13,6 @@ dataset:
 eval:
   mesh:
     geometry_mode: pcd
+
+d2ts:
+  strategy: opaque

@@ -15,7 +15,15 @@ from typing import Optional
 import typer
 
 from msbench.core.builder import build_training_loop, build_training_method
-from msbench.core.config import Config, finalize_config, load_config, resolve_dataset_config, save_config_snapshot
+from msbench.core.config import (
+    Config,
+    _retarget_ablation_paths,
+    apply_overrides,
+    finalize_config,
+    load_config,
+    resolve_dataset_config,
+    save_config_snapshot,
+)
 from msbench.renderers.backends import canonical_backend_name
 from msbench.core.runtime_stats import run_with_training_stats
 from msbench.trainers.checkpoints import find_latest_point_cloud_checkpoint
@@ -81,8 +89,13 @@ def train(
     ctx: typer.Context,
     method: Optional[str] = typer.Option(None, "--method", "-m", help="Method name"),
     dataset: Optional[Path] = typer.Option(None, "--dataset", "-d", help="Path to dataset directory"),
-    output_dir: Path = typer.Option("./outputs", "--output-dir", "-o", help="Output directory"),
+    output_dir: Optional[Path] = typer.Option(None, "--output-dir", "-o", help="Output directory"),
     config: Optional[Path] = typer.Option(None, "--config", "-c", help="Optional training config YAML"),
+    override: Optional[list[str]] = typer.Option(
+        None,
+        "--override",
+        help="Dotted key-value config overrides, e.g. --override d2ts.strategy=opaque --override output.dir=outputs/my_dir",
+    ),
     max_steps: Optional[int] = typer.Option(
         None,
         "--max-steps",
@@ -120,6 +133,17 @@ def train(
     """
     if config is not None:
         cfg = Config.fromfile(config)
+        raw = cfg.to_dict()
+        old_output = raw.get("output", {}).get("dir")
+        if override:
+            raw = apply_overrides(raw, override)
+        if output_dir is not None:
+            raw.setdefault("output", {})["dir"] = str(output_dir)
+
+        new_output = raw.get("output", {}).get("dir")
+        if old_output and new_output and str(old_output) != str(new_output):
+            raw = _retarget_ablation_paths(raw, str(old_output), str(new_output))
+
         overrides = {}
         if max_primitives is not None:
             overrides["max_primitives"] = max_primitives
@@ -130,24 +154,27 @@ def train(
         if max_primitives_2dts is not None:
             overrides["max_primitives_2dts"] = max_primitives_2dts
         if overrides:
-            trainer_dict = dict(cfg.get("trainer", {}) or {})
+            trainer_dict = dict(raw.get("trainer", {}) or {})
             trainer_dict.update(overrides)
-            cfg["trainer"] = trainer_dict
-            cfg = Config(finalize_config(cfg.to_dict()))
+            raw["trainer"] = trainer_dict
+
+        cfg = Config(finalize_config(raw))
 
         if "trainer" in cfg or "loop" in cfg or "dataset" in cfg:
+            effective_dir = Path(cfg.get("output", {}).get("dir") or output_dir or "./outputs")
             summary = _train_from_structured_config(
                 cfg,
-                output_dir=output_dir,
+                output_dir=effective_dir,
                 quiet=quiet,
                 max_steps_override=max_steps,
             )
             if not quiet:
                 typer.echo(
                     f"Training complete: {summary['total_steps']} steps "
-                    f"in {summary['total_time_s']:.1f}s"
+                    f"in {summary['total_time_s']:.1f}s "
+                    f"({summary['avg_step_time_ms']:.1f} ms/step)"
                 )
-            return
+            return summary
 
     # A structured config owns its default. Reaching this path means no
     # structured trainer config was dispatched, so retain the historical 30k
