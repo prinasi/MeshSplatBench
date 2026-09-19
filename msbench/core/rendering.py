@@ -722,7 +722,7 @@ def render_video(
         frame_dir.mkdir(parents=True, exist_ok=True)
 
     video_path = output_dir / "render_traj.mp4"
-    writer = writer_factory(video_path, fps=fps) if writer_factory is not None else None
+    writer = writer_factory(video_path, fps=fps, macro_block_size=None) if writer_factory is not None else None
     frames = [] if writer is None else None
     try:
         for idx, camera in enumerate(cameras):
@@ -732,6 +732,9 @@ def render_video(
             arr = tensor_to_uint8(
                 _composite_output_rgb(output, metadata.get("eval_background_color"))
             )
+            # Crop trailing odd pixel for H.264 compatibility (libx264 yuv420p requires even dimensions)
+            if arr.shape[0] % 2 != 0 or arr.shape[1] % 2 != 0:
+                arr = arr[: arr.shape[0] - (arr.shape[0] % 2), : arr.shape[1] - (arr.shape[1] % 2)]
             if writer is not None:
                 writer.append_data(arr)
             else:

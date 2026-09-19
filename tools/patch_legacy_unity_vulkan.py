@@ -52,6 +52,27 @@ def _patch_shader(source: str) -> str:
             updated = updated.replace(pragma, "#pragma target 5.0\n  " + pragma, 1)
         else:
             updated = updated.replace("#pragma vertex", "#pragma target 5.0\n  #pragma vertex", 1)
+    if 'Shader "MeshSplatBench/MethodSpecificSplat"' in updated or 'Shader "TriBench/MethodSpecificSplat"' in updated:
+        updated = updated.replace(
+            "ByteAddressBuffer _Positions,_Indices,_Opacity,_Sigma,_ShDc,_ShRest;",
+            "ByteAddressBuffer _Positions,_Indices,_TriangleOrder,_Opacity,_Sigma,_ShDc,_ShRest;",
+            1,
+        )
+        updated = updated.replace(
+            "struct V{float4 p:SV_POSITION;float3 b:TEXCOORD0;",
+            "struct V{float4 p:SV_POSITION;noperspective float3 b:TEXCOORD0;",
+            1,
+        )
+        updated = updated.replace(
+            "uint t=id/3,corner=id-t*3,ib=t*3;",
+            "uint t=id/3,corner=id-t*3,source=I(_TriangleOrder,t),ib=source*3;",
+            1,
+        )
+        updated = updated.replace(
+            "uint e=_Mode==1?vi:t;",
+            "uint e=_Mode==1?vi:source;",
+            1,
+        )
     return updated
 
 
@@ -450,6 +471,11 @@ def _patch_renderer_base(source: str) -> str:
 
 
 def _patch_method_specific_camera_state(source: str) -> str:
+    # Older revisions sorted a flattened index buffer.  That detached 2DTS
+    # per-triangle SH/opacity from geometry because the shader still indexed
+    # attributes by draw order.  Keep one sorted primitive-ID buffer instead.
+    source = source.replace("        int[] sourceTriangleIndices;\n", "")
+    source = source.replace("        int[] sortedTriangleIndices;\n", "")
     field_anchor = "        string status = \"Waiting to load method-specific renderer\";\n"
     field_fallback_anchor = "        int primitiveCount; bool ready, rawCode; float opacityFloor; int mode, meshAblation;\n"
     field_block = (
@@ -457,8 +483,6 @@ def _patch_method_specific_camera_state(source: str) -> str:
         "        bool usesSortedTriangleOrder;\n"
         "        Vector3[] triangleCentroids;\n"
         "        int[] triangleOrder;\n"
-        "        int[] sourceTriangleIndices;\n"
-        "        int[] sortedTriangleIndices;\n"
         "        float[] triangleDepths;\n"
         "        Vector3 lastSortCameraPosition = new Vector3(float.NaN, float.NaN, float.NaN);\n"
         "        Vector3 lastSortCameraForward = new Vector3(float.NaN, float.NaN, float.NaN);\n"
@@ -468,8 +492,6 @@ def _patch_method_specific_camera_state(source: str) -> str:
         "usesSortedTriangleOrder",
         "triangleCentroids",
         "triangleOrder",
-        "sourceTriangleIndices",
-        "sortedTriangleIndices",
         "triangleDepths",
         "lastSortCameraPosition",
         "lastSortCameraForward",
@@ -527,17 +549,24 @@ def _patch_method_specific_camera_state(source: str) -> str:
     elif 'positions = Upload(sourcePositions);' not in source:
         raise ValueError("could not locate MethodSpecific positions upload")
 
-    if 'triangleOrderBuffer = Upload(sourceIndices);' not in source:
+    source = source.replace(
+        'triangleOrderBuffer = Upload(sourceIndices);',
+        'triangleOrderBuffer = Upload(triangleOrder);',
+        1,
+    )
+    if 'triangleOrderBuffer = Upload(triangleOrder);' not in source:
         if 'indices = Upload(sourceIndices);' not in source:
             raise ValueError("could not locate MethodSpecific index upload")
         source = source.replace(
             'indices = Upload(sourceIndices);',
-            'indices = Upload(sourceIndices);\n            triangleOrderBuffer = Upload(sourceIndices);',
+            'indices = Upload(sourceIndices);\n            triangleOrderBuffer = Upload(triangleOrder);',
             1,
         )
 
     buffer_old = '            material.SetBuffer("_Positions", positions); material.SetBuffer("_Indices", indices);\n'
-    buffer_new = '            material.SetBuffer("_Positions", positions); material.SetBuffer("_Indices", usesSortedTriangleOrder ? triangleOrderBuffer : indices);\n'
+    buffer_buggy = '            material.SetBuffer("_Positions", positions); material.SetBuffer("_Indices", usesSortedTriangleOrder ? triangleOrderBuffer : indices);\n'
+    buffer_new = buffer_old + '            if (usesSortedTriangleOrder) material.SetBuffer("_TriangleOrder", triangleOrderBuffer);\n'
+    source = source.replace(buffer_buggy, buffer_new, 1)
     if buffer_new not in source:
         if buffer_old not in source:
             raise ValueError("could not locate MethodSpecific material index buffer binding")
@@ -558,8 +587,6 @@ def _patch_method_specific_camera_state(source: str) -> str:
             triangleCentroids = new Vector3[count];
             triangleOrder = new int[count];
             triangleDepths = new float[count];
-            sourceTriangleIndices = sourceIndices;
-            sortedTriangleIndices = new int[count * 3];
             int vertexCount = positionsData.Length / 3;
             for (int t = 0; t < count; ++t)
             {
@@ -591,27 +618,23 @@ def _patch_method_specific_camera_state(source: str) -> str:
             {
                 Vector3 center = triangleCentroids[t];
                 triangleDepths[t] = Vector3.Dot(center - cam, forward);
-                triangleOrder[t] = t * 3;
+                triangleOrder[t] = t;
             }
             Array.Sort(triangleDepths, triangleOrder);
-            int write = 0;
-            for (int t = 0; t < triangleOrder.Length; ++t)
-            {
-                int source = triangleOrder[t];
-                sortedTriangleIndices[write++] = sourceTriangleIndices[source];
-                sortedTriangleIndices[write++] = sourceTriangleIndices[source + 1];
-                sortedTriangleIndices[write++] = sourceTriangleIndices[source + 2];
-            }
-            triangleOrderBuffer.SetData(sortedTriangleIndices);
+            triangleOrderBuffer.SetData(triangleOrder);
             lastSortCameraPosition = cam;
             lastSortCameraForward = forward;
         }
 
 '''
-    if helper_block not in source:
-        if helper_anchor not in source:
+    helper_start = source.find("        void InitializeTriangleOrder(float[] positionsData, int[] sourceIndices)\n")
+    helper_end = source.find(helper_anchor)
+    if helper_start >= 0 and helper_end > helper_start:
+        source = source[:helper_start] + helper_block + source[helper_end:]
+    elif helper_block not in source:
+        if helper_end < 0:
             raise ValueError("could not locate MethodSpecific helper anchor")
-        source = source.replace(helper_anchor, helper_block + helper_anchor, 1)
+        source = source[:helper_end] + helper_block + source[helper_end:]
 
     render_anchor = "            if (!ready || Camera.current != TargetCamera || material == null) return;\n"
     render_refresh = render_anchor + "            RefreshTriangleOrder(TargetCamera);\n"
@@ -698,19 +721,23 @@ def _patch_method_specific_camera_state(source: str) -> str:
 '''
             source = source.replace(callback_anchor, prepare_block + callback_anchor, 1)
 
-    destroy_old = '        void OnDestroy() { RemoveMeshSplatBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n'
-    destroy_new = '        void OnDestroy() { RemoveMeshSplatBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n'
-    current_destroy_new = destroy_new.replace(
-        "RemoveMeshSplatBenchCameraDraw", "RemoveMsBenchCameraDraw"
-    )
-    if destroy_new not in source and current_destroy_new not in source:
-        if destroy_old in source:
-            source = source.replace(destroy_old, destroy_new, 1)
-        else:
-            destroy_anchor = '        void OnDestroy()'
-            if destroy_anchor not in source:
-                raise ValueError("could not locate MethodSpecific OnDestroy")
-            source = source.replace(destroy_anchor, '        void OnDestroy() { RemoveMeshSplatBenchCameraDraw(); ready=false; positions?.Release(); indices?.Release(); triangleOrderBuffer?.Release(); opacity?.Release(); sigma?.Release(); dc?.Release(); rest?.Release(); if(material!=null) Destroy(material); }\n\n        // original OnDestroy replaced by MeshSplatBench sort patch\n        void OnDestroy_disabled', 1)
+    destroy_match = re.search(r"(?m)^        void OnDestroy\(\) \{[^\n]*\}\n", source)
+    if destroy_match is None:
+        raise ValueError("could not locate MethodSpecific OnDestroy")
+    destroy_line = destroy_match.group(0)
+    if "triangleOrderBuffer?.Release();" not in destroy_line:
+        if "indices?.Release();" not in destroy_line:
+            raise ValueError("could not locate MethodSpecific index cleanup")
+        updated_destroy_line = destroy_line.replace(
+            "indices?.Release();",
+            "indices?.Release(); triangleOrderBuffer?.Release();",
+            1,
+        )
+        source = (
+            source[: destroy_match.start()]
+            + updated_destroy_line
+            + source[destroy_match.end() :]
+        )
 
     return source
 
@@ -883,9 +910,6 @@ def _patch_triangle_splatting_camera_sort(source: str) -> str:
             RefreshTriangleOrder(camera);
         }
 '''
-    # Current main uses the shorter InstallMsBench*/RemoveMsBench* helper
-    # names, while legacy projects used InstallMeshSplatBench*/
-    # RemoveMeshSplatBench*. Treat both completed forms as already patched.
     current_prepare = new_prepare.replace("MeshSplatBenchCameraDraw", "MsBenchCameraDraw")
     if new_prepare not in updated and current_prepare not in updated:
         if old_prepare not in updated:

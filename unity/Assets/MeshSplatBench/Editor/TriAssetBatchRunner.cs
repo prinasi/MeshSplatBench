@@ -27,50 +27,70 @@ namespace MeshSplatBench.UnityNative.Editor
                 EditorApplication.Exit(2);
                 return;
             }
-            completionPath = Path.Combine(output, ".unity_capture_complete");
+            string trajectory = GetArgument("-video-trajectory") ?? GetArgument("-trajectory");
+            bool isVideo = !string.IsNullOrEmpty(trajectory);
+            completionPath = Path.Combine(output, isVideo ? ".unity_video_complete" : ".unity_capture_complete");
             if (File.Exists(completionPath)) File.Delete(completionPath);
+            string altMarker = Path.Combine(output, isVideo ? ".unity_capture_complete" : ".unity_video_complete");
+            if (File.Exists(altMarker)) File.Delete(altMarker);
             EditorSceneManager.OpenScene(ScenePath);
-            ConfigureRenderer(GetArgument("-method"));
+            ConfigureRenderer(GetArgument("-method"), isVideo, trajectory, output);
             started = EditorApplication.timeSinceStartup;
             EditorApplication.update += Tick;
         }
 
-        static void ConfigureRenderer(string method)
+        public static void RunVideo()
+        {
+            Run();
+        }
+
+        static void ConfigureRenderer(string method, bool isVideo, string trajectory, string output)
         {
             bool methodSpecific = GetArgument("-method-specific") != null;
             if (methodSpecific && (String.Equals(method, "mesh-splatting", StringComparison.OrdinalIgnoreCase)
                 || String.Equals(method, "2dts", StringComparison.OrdinalIgnoreCase)
                 || String.Equals(method, "diffsoup", StringComparison.OrdinalIgnoreCase)))
             {
-                ConfigureMethodSpecific(method);
+                ConfigureMethodSpecific(method, isVideo, trajectory, output);
                 return;
             }
             bool standardMeshMethod = GetArgument("-standard-mesh") != null
                 || String.Equals(method, "mesh-splatting", StringComparison.OrdinalIgnoreCase)
                 || String.Equals(method, "2dts", StringComparison.OrdinalIgnoreCase)
                 || String.Equals(method, "diffsoup", StringComparison.OrdinalIgnoreCase);
-            if (!standardMeshMethod) return;
-            GameObject root = GameObject.Find("Garden - Triangle Splatting");
-            if (root == null)
+            if (!standardMeshMethod)
+            {
+                GameObject root = GameObject.Find("Garden - Triangle Splatting");
+                if (root == null)
+                {
+                    Debug.LogError("[MeshSplatBench] Scene renderer root is missing.");
+                    return;
+                }
+                TriangleSplattingTriAssetRenderer triangle = root.GetComponent<TriangleSplattingTriAssetRenderer>();
+                if (triangle == null) triangle = root.AddComponent<TriangleSplattingTriAssetRenderer>();
+                triangle.AssetDirectory = GetArgument("-triasset");
+                triangle.TargetCamera = Camera.main;
+                AttachCapture(root, triangle, isVideo, trajectory, output);
+                Debug.Log("[MeshSplatBench] Configured Triangle Splatting renderer for " + method + (isVideo ? " (video trajectory)" : "") + ".");
+                return;
+            }
+            GameObject meshRoot = GameObject.Find("Garden - Triangle Splatting");
+            if (meshRoot == null)
             {
                 Debug.LogError("[MeshSplatBench] Scene renderer root is missing.");
                 return;
             }
-            TriangleSplattingTriAssetRenderer triangle = root.GetComponent<TriangleSplattingTriAssetRenderer>();
-            if (triangle != null) UnityEngine.Object.DestroyImmediate(triangle);
-            StandardMeshTriAssetRenderer mesh = root.GetComponent<StandardMeshTriAssetRenderer>();
-            if (mesh == null) mesh = root.AddComponent<StandardMeshTriAssetRenderer>();
+            TriangleSplattingTriAssetRenderer oldTriangle = meshRoot.GetComponent<TriangleSplattingTriAssetRenderer>();
+            if (oldTriangle != null) UnityEngine.Object.DestroyImmediate(oldTriangle);
+            StandardMeshTriAssetRenderer mesh = meshRoot.GetComponent<StandardMeshTriAssetRenderer>();
+            if (mesh == null) mesh = meshRoot.AddComponent<StandardMeshTriAssetRenderer>();
             mesh.AssetDirectory = GetArgument("-triasset");
             mesh.TargetCamera = Camera.main;
-            ColmapBatchCapture capture = root.GetComponent<ColmapBatchCapture>();
-            if (capture == null) capture = root.AddComponent<ColmapBatchCapture>();
-            capture.Renderer = mesh;
-            capture.CaptureCamera = Camera.main;
-            capture.AutoStart = true;
-            Debug.Log("[MeshSplatBench] Configured standard indexed-Mesh baseline for " + method + ".");
+            AttachCapture(meshRoot, mesh, isVideo, trajectory, output);
+            Debug.Log("[MeshSplatBench] Configured standard indexed-Mesh baseline for " + method + (isVideo ? " (video trajectory)" : "") + ".");
         }
 
-        static void ConfigureMethodSpecific(string method)
+        static void ConfigureMethodSpecific(string method, bool isVideo, string trajectory, string output)
         {
             GameObject root = GameObject.Find("Garden - Triangle Splatting");
             if (root == null) { Debug.LogError("[MeshSplatBench] Scene renderer root is missing."); return; }
@@ -95,10 +115,34 @@ namespace MeshSplatBench.UnityNative.Editor
                 if (splat == null) splat = root.AddComponent<MethodSpecificSplatRenderer>();
                 splat.AssetDirectory = GetArgument("-triasset"); splat.TargetCamera = Camera.main; renderer = splat;
             }
-            ColmapBatchCapture capture = root.GetComponent<ColmapBatchCapture>();
-            if (capture == null) capture = root.AddComponent<ColmapBatchCapture>();
-            capture.Renderer = renderer; capture.CaptureCamera = Camera.main; capture.AutoStart = true;
-            Debug.Log("[MeshSplatBench] Configured method-specific Unity portability renderer for " + method + ".");
+            AttachCapture(root, renderer, isVideo, trajectory, output);
+            Debug.Log("[MeshSplatBench] Configured method-specific Unity portability renderer for " + method + (isVideo ? " (video trajectory)" : "") + ".");
+        }
+
+        static void AttachCapture(GameObject root, TriAssetRenderer renderer, bool isVideo, string trajectory, string output)
+        {
+            if (isVideo)
+            {
+                ColmapBatchCapture oldCapture = root.GetComponent<ColmapBatchCapture>();
+                if (oldCapture != null) UnityEngine.Object.DestroyImmediate(oldCapture);
+                TriAssetVideoBatchCapture videoCapture = root.GetComponent<TriAssetVideoBatchCapture>();
+                if (videoCapture == null) videoCapture = root.AddComponent<TriAssetVideoBatchCapture>();
+                videoCapture.Renderer = renderer;
+                videoCapture.CaptureCamera = Camera.main;
+                videoCapture.TrajectoryPath = trajectory;
+                videoCapture.OutputRoot = output;
+                videoCapture.AutoStart = true;
+            }
+            else
+            {
+                TriAssetVideoBatchCapture oldVideo = root.GetComponent<TriAssetVideoBatchCapture>();
+                if (oldVideo != null) UnityEngine.Object.DestroyImmediate(oldVideo);
+                ColmapBatchCapture capture = root.GetComponent<ColmapBatchCapture>();
+                if (capture == null) capture = root.AddComponent<ColmapBatchCapture>();
+                capture.Renderer = renderer;
+                capture.CaptureCamera = Camera.main;
+                capture.AutoStart = true;
+            }
         }
 
         static void Tick()

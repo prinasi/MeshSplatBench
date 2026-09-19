@@ -271,3 +271,30 @@ Mip-NeRF 360 scenes and refuses stale assets or an unsupported general-purpose
 condition. Quality aggregation deliberately excludes FPS; use repeated
 standalone Player profiles and `tools/aggregate_unity_deployment_profile.py`
 for CPU/GPU P50/P95, load, asset, and graphics allocation results.
+
+## Unity video trajectory rendering
+
+To render trajectory videos in Unity using either the `method-aware` (procedural splatting)
+or `general-purpose` (standard Unity Mesh) condition along the exact same PCA ellipse trajectory
+as `msbench render video`:
+
+```bash
+# Method-aware procedural splatting (default)
+msbench render unity-video --config configs/triangle-splatting/mipnerf360/bicycle.yaml --method-aware
+
+# General-purpose Unity Mesh baseline
+msbench render unity-video --config configs/triangle-splatting/mipnerf360/bicycle.yaml --general-purpose
+
+# Or use --unity flag on msbench render video
+msbench render video --config configs/triangle-splatting/mipnerf360/bicycle.yaml --unity --method-aware
+```
+
+Batch video rendering across scenes/datasets is supported via `single_unity_video.sh`:
+
+```bash
+bash single_unity_video.sh 2dts mipnerf360/bicycle 0 --method-aware
+bash single_unity_video.sh mesh-splatting mipnerf360/all 0 --general-purpose
+```
+
+Or pass `--video` to `single_unity_eval.sh` to render the video alongside metric evaluation.
+Videos are written to `<run_dir>/<condition>/video/render_traj.mp4` by default.

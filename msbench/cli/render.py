@@ -221,8 +221,69 @@ def render_video_cmd(
     zoom: float = typer.Option(1.0, "--zoom"),
     z_variation: float = typer.Option(0.0, "--z-variation"),
     z_phase: float = typer.Option(0.0, "--z-phase", help="Phase offset for vertical oscillation [0, 1]"),
+    unity: bool = typer.Option(
+        False,
+        "--unity",
+        help="Render video using Unity native renderer instead of adapter.",
+    ),
+    general_purpose: bool = typer.Option(
+        False,
+        "--general-purpose",
+        "--standard-mesh",
+        help="With --unity, use standard Unity Mesh baseline.",
+    ),
+    method_aware: bool = typer.Option(
+        True,
+        "--method-aware",
+        "--method-specific",
+        help="With --unity, use method-aware Unity renderer (default).",
+    ),
+    topology: str = typer.Option(
+        "indexed",
+        "--topology",
+        help="With --unity, mesh topology: indexed or soup.",
+    ),
+    indexed_mesh_method_aware: bool = typer.Option(
+        False,
+        "--indexed-mesh-method-aware",
+        help="With --unity and general-purpose, use indexed MeshRenderer with method-aware appearance.",
+    ),
+    unity_bin: Optional[Path] = typer.Option(None, "--unity-bin", help="Path to Unity binary."),
+    unity_project: Optional[Path] = typer.Option(None, "--unity-project", help="Path to Unity project root."),
+    force_unity: bool = typer.Option(
+        False,
+        "--force-unity",
+        help="With --unity, terminate conflicting Unity processes before launching.",
+    ),
 ):
     """Render a PCA-aligned ellipse trajectory video from dataset cameras."""
+    if unity:
+        return render_unity_video_cmd(
+            config=config,
+            method=method,
+            checkpoint=checkpoint,
+            dataset=dataset,
+            output_dir=output_dir if output_dir != "video/" else None,
+            general_purpose=general_purpose,
+            method_aware=method_aware,
+            topology=topology,
+            indexed_mesh_method_aware=indexed_mesh_method_aware,
+            frames=frames,
+            fps=fps,
+            zoom=zoom,
+            z_variation=z_variation,
+            z_phase=z_phase,
+            split=split,
+            resolution=resolution,
+            eval_every=eval_every,
+            image_dir=image_dir,
+            dataset_type=dataset_type,
+            write_frames=write_frames,
+            unity=unity_bin,
+            unity_project=unity_project,
+            force_unity=force_unity,
+        )
+
     from msbench.core.builder import build_adapter, build_dataset
     from msbench.core.config import save_config_snapshot
     from msbench.core.rendering import generate_ellipse_cameras, render_video
@@ -285,6 +346,169 @@ def render_video_cmd(
         write_frames=write_frames,
     )
     typer.echo(f"Video saved to {video_path}")
+
+
+@render_app.command("unity-video")
+def render_unity_video_cmd(
+    config: Optional[Path] = typer.Option(None, "--config", help="MeshSplatBench render config YAML"),
+    method: Optional[str] = typer.Option(None, "--method", "-m", help="Method name"),
+    checkpoint: Optional[str] = typer.Option(None, "--checkpoint", "-c", help="Path to checkpoint"),
+    triasset: Optional[Path] = typer.Option(None, "--triasset", help="Path to .triasset directory"),
+    dataset: Optional[str] = typer.Option(None, "--dataset", "-d", help="Path to dataset directory"),
+    output_dir: Optional[str] = typer.Option(None, "--output-dir", "-o", help="Output directory for video"),
+    general_purpose: bool = typer.Option(
+        False,
+        "--general-purpose",
+        "--standard-mesh",
+        help="Use standard Unity Mesh baseline.",
+    ),
+    method_aware: bool = typer.Option(
+        True,
+        "--method-aware",
+        "--method-specific",
+        help="Use method-aware Unity renderer (default).",
+    ),
+    topology: str = typer.Option(
+        "indexed",
+        "--topology",
+        help="Mesh topology: indexed or soup.",
+    ),
+    indexed_mesh_method_aware: bool = typer.Option(
+        False,
+        "--indexed-mesh-method-aware",
+        help="With general-purpose, use indexed MeshRenderer with method-aware appearance.",
+    ),
+    trajectory: Optional[Path] = typer.Option(None, "--trajectory", "-t", help="Existing trajectory JSON file"),
+    frames: int = typer.Option(240, "--frames", help="Number of frames in ellipse trajectory"),
+    fps: int = typer.Option(30, "--fps", help="Video framerate"),
+    zoom: float = typer.Option(1.0, "--zoom", help="Zoom factor"),
+    z_variation: float = typer.Option(0.0, "--z-variation", help="Vertical oscillation amplitude"),
+    z_phase: float = typer.Option(0.0, "--z-phase", help="Vertical oscillation phase [0, 1]"),
+    split: str = typer.Option("train", "--split", "-s", help="Dataset split for trajectory"),
+    resolution: int = typer.Option(1, "--resolution", "-r", help=RESOLUTION_HELP),
+    eval_every: int = typer.Option(8, "--eval-every", help="Holdout stride"),
+    image_dir: str = typer.Option("images", "--image-dir", help="COLMAP image directory"),
+    dataset_type: str = typer.Option("auto", "--dataset-type", help="auto/colmap/mipnerf360/tanks/dtu/blender"),
+    write_frames: bool = typer.Option(False, "--write-frames", help="Also save rendered PNG frame sequence"),
+    unity: Optional[Path] = typer.Option(None, "--unity", help="Path to Unity binary"),
+    unity_project: Optional[Path] = typer.Option(None, "--unity-project", help="Path to Unity project root"),
+    force_unity: bool = typer.Option(
+        False,
+        "--force-unity",
+        help="Terminate any conflicting Unity processes holding the project lock before launching.",
+    ),
+):
+    """Render a trajectory video using Unity (method-aware or general-purpose condition)."""
+    from msbench.unity_video import (
+        find_unity_executable,
+        find_unity_project,
+        run_unity_video_for_scene,
+    )
+
+    condition = "general-purpose" if general_purpose else "method-aware"
+
+    unity_bin = unity or find_unity_executable()
+    if unity_bin is None or not Path(unity_bin).is_file():
+        raise typer.BadParameter("Unity binary not found. Specify --unity /path/to/Unity or set $UNITY.")
+
+    proj = unity_project or find_unity_project()
+    if proj is None or not Path(proj).is_dir():
+        raise typer.BadParameter("Unity project not found. Specify --unity-project /path/to/unity or set $PROJECT.")
+
+    if config is not None:
+        cfg = load_cli_config(config)
+        assert cfg is not None
+        video_cfg = merged_section(cfg, "render", nested="video")
+        adapter_cfg = adapter_config(cfg, method=method, checkpoint=checkpoint)
+        method_name = str(method or adapter_cfg.get("type") or "triangle-splatting")
+        dataset_cfg = dataset_config(
+            cfg,
+            dataset=dataset,
+            dataset_type=dataset_type if dataset_type != "auto" else None,
+            split=split if split != "train" else None,
+            image_dir=image_dir if image_dir != "images" else None,
+            resolution=resolution if resolution != 1 else None,
+            eval_every=eval_every if eval_every != 8 else None,
+            stage="render",
+        )
+
+        dataset_path = Path(dataset_cfg["root"])
+        if "scene" in dataset_cfg and (dataset_path / dataset_cfg["scene"]).is_dir():
+            dataset_path = dataset_path / dataset_cfg["scene"]
+
+        run_dir = config_output_dir(cfg)
+        cond_folder = "unity_method_aware" if condition == "method-aware" else "unity_general_purpose"
+        default_out = Path(run_dir) / cond_folder / "video" if run_dir else Path(f"video_{cond_folder}")
+        target_output_dir = Path(output_dir or default_out)
+
+        triasset_path = triasset or (Path(run_dir) / "unity_native" / f"{method_name}.triasset")
+        if not triasset_path.is_dir():
+            from msbench.unity_assets import export_triasset
+            ckpt = adapter_cfg.get("checkpoint")
+            if ckpt:
+                typer.echo(f"Exporting triasset for {method_name} to {triasset_path}...")
+                export_triasset(method=method_name, checkpoint=ckpt, output_dir=triasset_path)
+
+        video_path = run_unity_video_for_scene(
+            unity_bin=unity_bin,
+            unity_project=proj,
+            method=method_name,
+            triasset_path=triasset_path,
+            dataset_path=dataset_path,
+            output_dir=target_output_dir,
+            condition=condition,
+            topology="indexed" if topology == "mesh" else topology,
+            indexed_mesh_method_aware=indexed_mesh_method_aware,
+            trajectory_path=trajectory,
+            dataset_type=str(dataset_cfg.get("type", "auto")),
+            image_dir=str(dataset_cfg.get("image_dir", image_dir)),
+            resolution=int(dataset_cfg.get("resolution", resolution)),
+            eval_every=int(dataset_cfg.get("eval_every", eval_every)),
+            frames=int(video_cfg.get("frames", frames)),
+            fps=int(video_cfg.get("fps", fps)),
+            zoom=float(video_cfg.get("zoom", zoom)),
+            z_variation=float(video_cfg.get("z_variation", z_variation)),
+            z_phase=float(video_cfg.get("z_phase", z_phase)),
+            split=str(video_cfg.get("split", split)),
+            write_frames=write_frames,
+            force_unity=force_unity,
+        )
+        typer.echo(f"Unity video saved to {video_path}")
+        return
+
+    if method is None:
+        raise typer.BadParameter("Provide --config, or specify --method, --triasset, and --dataset.")
+
+    target_triasset = triasset or Path(f"outputs/{method}/unity_native/{method}.triasset")
+    target_dataset = Path(dataset) if dataset else None
+    cond_folder = "unity_method_aware" if condition == "method-aware" else "unity_general_purpose"
+    target_output_dir = Path(output_dir or f"outputs/{method}/{cond_folder}/video")
+
+    video_path = run_unity_video_for_scene(
+        unity_bin=unity_bin,
+        unity_project=proj,
+        method=method,
+        triasset_path=target_triasset,
+        dataset_path=target_dataset,
+        output_dir=target_output_dir,
+        condition=condition,
+        topology="indexed" if topology == "mesh" else topology,
+        indexed_mesh_method_aware=indexed_mesh_method_aware,
+        trajectory_path=trajectory,
+        dataset_type=dataset_type,
+        image_dir=image_dir,
+        resolution=resolution,
+        eval_every=eval_every,
+        frames=frames,
+        fps=fps,
+        zoom=zoom,
+        z_variation=z_variation,
+        z_phase=z_phase,
+        split=split,
+        write_frames=write_frames,
+        force_unity=force_unity,
+    )
+    typer.echo(f"Unity video saved to {video_path}")
 
 
 @render_app.command("viewer")

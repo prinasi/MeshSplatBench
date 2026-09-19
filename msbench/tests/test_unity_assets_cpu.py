@@ -354,8 +354,13 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
             shaders.mkdir(parents=True)
             shader = shaders / "MethodSpecificSplat.shader"
             shader.write_text(
+                'Shader "MeshSplatBench/MethodSpecificSplat" { SubShader { Pass {\n'
                 "CGPROGRAM\n#pragma only_renderers metal\n#pragma vertex Vert\n"
-                "ByteAddressBuffer _Positions;\nENDCG\n"
+                "ByteAddressBuffer _Positions,_Indices,_Opacity,_Sigma,_ShDc,_ShRest;\n"
+                "struct V{float4 p:SV_POSITION;float3 b:TEXCOORD0;};\n"
+                "V Vert(uint id:SV_VertexID){V o;uint t=id/3,corner=id-t*3,ib=t*3;"
+                "uint vi=I(_Indices,ib+corner);uint e=_Mode==1?vi:t;return o;}\n"
+                "ENDCG\n} } }\n"
             )
             capture = scripts / "ColmapBatchCapture.cs"
             capture.write_text(
@@ -431,6 +436,11 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
             )
 
             first = patch_unity_project(project)
+            renderer.write_text(
+                renderer.read_text().replace(
+                    "MeshSplatBenchCameraDraw", "MsBenchCameraDraw"
+                )
+            )
             second = patch_unity_project(project)
 
             self.assertTrue(first)
@@ -460,9 +470,21 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
             self.assertIn("RefreshTriangleOrder(TargetCamera, force: true)", renderer_text)
             self.assertIn("RefreshTriangleOrder(camera)", renderer_text)
             self.assertIn("RefreshTriangleOrder(TargetCamera)", renderer_text)
-            self.assertIn("triangleOrderBuffer.SetData(sortedTriangleIndices)", renderer_text)
-            self.assertIn("sourceTriangleIndices", renderer_text)
-            self.assertIn("sortedTriangleIndices", renderer_text)
+            self.assertIn("triangleOrderBuffer = Upload(triangleOrder)", renderer_text)
+            self.assertIn("triangleOrderBuffer.SetData(triangleOrder)", renderer_text)
+            self.assertIn('SetBuffer("_TriangleOrder", triangleOrderBuffer)', renderer_text)
+            self.assertNotIn("sourceTriangleIndices", renderer_text)
+            self.assertNotIn("sortedTriangleIndices", renderer_text)
+            shader_text = shader.read_text()
+            self.assertIn("_Indices,_TriangleOrder,_Opacity", shader_text)
+            self.assertIn("source=I(_TriangleOrder,t)", shader_text)
+            self.assertIn("uint e=_Mode==1?vi:source", shader_text)
+            self.assertIn("noperspective float3 b", shader_text)
+            self.assertEqual(
+                renderer_text.count("public override void PrepareCamera(Camera camera)"),
+                1,
+            )
+            self.assertNotIn("OnDestroy_disabled", renderer_text)
 
             renderer.write_text(
                 renderer_text.replace(
@@ -544,6 +566,18 @@ class LegacyUnityVulkanPatchTests(unittest.TestCase):
             self.assertIn("if (TargetCamera != camera)", triangle_text)
             self.assertIn("RefreshTriangleOrder(camera)", triangle_text)
             self.assertIn("RefreshTriangleOrder(TargetCamera)", triangle_text)
+            triangle.write_text(
+                triangle_text.replace(
+                    "MeshSplatBenchCameraDraw", "MsBenchCameraDraw"
+                )
+            )
+            self.assertEqual(patch_unity_project(project), [])
+            self.assertEqual(
+                triangle.read_text().count(
+                    "public override void PrepareCamera(Camera camera)"
+                ),
+                1,
+            )
 
             triangle.write_text(
                 triangle_text.replace(

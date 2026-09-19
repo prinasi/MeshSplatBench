@@ -28,8 +28,6 @@ namespace MeshSplatBench.UnityNative
         bool usesSortedTriangleOrder;
         Vector3[] triangleCentroids;
         int[] triangleOrder;
-        int[] sourceTriangleIndices;
-        int[] sortedTriangleIndices;
         float[] triangleDepths;
         Vector3 lastSortCameraPosition = new Vector3(float.NaN, float.NaN, float.NaN);
         Vector3 lastSortCameraForward = new Vector3(float.NaN, float.NaN, float.NaN);
@@ -73,7 +71,7 @@ namespace MeshSplatBench.UnityNative
             }
             positions = Upload(sourcePositions);
             indices = Upload(sourceIndices);
-            triangleOrderBuffer = Upload(sourceIndices);
+            triangleOrderBuffer = Upload(triangleOrder);
             opacity = Upload(ReadFloat(Path.Combine(b, mode == 1 ? "vertex_weight_logits.bin" : "opacity_logits.bin")));
             dc = Upload(ReadFloat(Path.Combine(b, "sh_dc.bin")));
             rest = Upload(ReadFloat(Path.Combine(b, "sh_rest.bin")));
@@ -102,7 +100,8 @@ namespace MeshSplatBench.UnityNative
             SplatShader = SplatShader != null ? SplatShader : Shader.Find(shaderName);
             if (SplatShader == null) { Fail("MeshSplatBench/MethodSpecificSplat shader was not found."); yield break; }
             material = new Material(SplatShader) { hideFlags = HideFlags.HideAndDontSave };
-            material.SetBuffer("_Positions", positions); material.SetBuffer("_Indices", usesSortedTriangleOrder ? triangleOrderBuffer : indices);
+            material.SetBuffer("_Positions", positions); material.SetBuffer("_Indices", indices);
+            if (usesSortedTriangleOrder) material.SetBuffer("_TriangleOrder", triangleOrderBuffer);
             material.SetBuffer("_Opacity", opacity); material.SetBuffer("_ShDc", dc); material.SetBuffer("_ShRest", rest);
             material.SetBuffer("_Sigma", sigma != null ? sigma : opacity);
             material.SetInt("_Mode", mode); material.SetInt("_PrimitiveCount", primitiveCount);
@@ -128,8 +127,6 @@ namespace MeshSplatBench.UnityNative
             triangleCentroids = new Vector3[count];
             triangleOrder = new int[count];
             triangleDepths = new float[count];
-            sourceTriangleIndices = sourceIndices;
-            sortedTriangleIndices = new int[count * 3];
             int vertexCount = positionsData.Length / 3;
             for (int t = 0; t < count; ++t)
             {
@@ -161,18 +158,10 @@ namespace MeshSplatBench.UnityNative
             {
                 Vector3 center = triangleCentroids[t];
                 triangleDepths[t] = Vector3.Dot(center - cam, forward);
-                triangleOrder[t] = t * 3;
+                triangleOrder[t] = t;
             }
             Array.Sort(triangleDepths, triangleOrder);
-            int write = 0;
-            for (int t = 0; t < triangleOrder.Length; ++t)
-            {
-                int source = triangleOrder[t];
-                sortedTriangleIndices[write++] = sourceTriangleIndices[source];
-                sortedTriangleIndices[write++] = sourceTriangleIndices[source + 1];
-                sortedTriangleIndices[write++] = sourceTriangleIndices[source + 2];
-            }
-            triangleOrderBuffer.SetData(sortedTriangleIndices);
+            triangleOrderBuffer.SetData(triangleOrder);
             lastSortCameraPosition = cam;
             lastSortCameraForward = forward;
         }
