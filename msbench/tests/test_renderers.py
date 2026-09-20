@@ -10,6 +10,7 @@ from msbench.renderers.d2ts_adapter import D2TSAdapter
 from msbench.renderers.triangle_splatting_adapter import TriangleSplattingAdapter
 from msbench.renderers.mesh_splatting_adapter import (
     MeshSplattingAdapter,
+    _ensure_nonempty_tsdf_mesh,
     load_mesh_splatting_primitive_checkpoint,
 )
 from msbench.renderers.diffsoup_adapter import DiffSoupAdapter
@@ -26,6 +27,16 @@ try:
     _has_ts_cuda = spec is not None
 except Exception:
     pass
+
+
+def test_empty_mesh_splatting_tsdf_error_recommends_scene_depth():
+    mesh = SimpleNamespace(vertices=[], triangles=[])
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"depth_trunc=3.*at least 6\.57",
+    ):
+        _ensure_nonempty_tsdf_mesh(mesh, depth_trunc=3.0, estimated_radius=3.285)
 
 
 class TestRenderOutput:

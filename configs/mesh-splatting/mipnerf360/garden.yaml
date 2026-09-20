@@ -14,3 +14,10 @@ dataset:
 
 trainer:
   data_device: cpu
+
+mesh:
+  output: outputs/{method}/{dataset}/{scene}/mesh/fuse_post.ply
+  depth_trunc: 7.0
+
+output:
+  mesh_file: outputs/{method}/{dataset}/{scene}/mesh/fuse_post.ply

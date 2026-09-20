@@ -663,6 +663,15 @@ def test_mesh_splatting_mesh_export_kwargs_follow_native_mesh_script():
     assert kwargs["render_scaling"] == 1
 
 
+def test_mesh_splatting_garden_mesh_export_uses_scene_depth_range():
+    cfg = Config.fromfile("configs/mesh-splatting/mipnerf360/garden.yaml")
+    kwargs = _mesh_export_kwargs(cfg, cfg.mesh.to_dict(), method="mesh-splatting")
+
+    assert cfg.mesh.output == "outputs/mesh-splatting/mipnerf360/garden/mesh/fuse_post.ply"
+    assert cfg.output.mesh_file == cfg.mesh.output
+    assert kwargs["depth_trunc"] == 7.0
+
+
 def test_2dts_vanilla_ts_import_does_not_require_gaussian_rasterizer():
     from msbench.vendor.d2ts.diff_recon import VanillaTSTrainer
     from msbench.vendor.d2ts.diff_recon.renderer import GaussianRenderer, HybridRenderer, TriangleRenderer

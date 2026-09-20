@@ -20,6 +20,25 @@ from msbench.renderers.backends import get_backend
 from msbench.renderers.base import RendererAdapter, RenderOutput
 
 
+def _ensure_nonempty_tsdf_mesh(
+    mesh: Any,
+    *,
+    depth_trunc: float,
+    estimated_radius: float | None = None,
+) -> None:
+    if len(mesh.vertices) > 0 and len(mesh.triangles) > 0:
+        return
+
+    hint = "Increase mesh.depth_trunc and retry."
+    if estimated_radius is not None:
+        recommended = 2.0 * float(estimated_radius)
+        hint = f"Set mesh.depth_trunc to at least {recommended:.2f} and retry."
+    raise RuntimeError(
+        "TSDF fusion produced an empty mesh with "
+        f"depth_trunc={float(depth_trunc):g}. {hint}"
+    )
+
+
 def load_mesh_splatting_primitive_checkpoint(path: str | Path):
     """Load exportable MeshSplatting geometry directly on the CPU.
 
@@ -378,7 +397,7 @@ class MeshSplattingAdapter(RendererAdapter):
         self,
         path: str | Path,
         *,
-        dataset_path: str,
+        dataset_path: str | None = None,
         split: str = "train",
         image_dir: str = "images",
         resolution: int = 1,
@@ -391,85 +410,45 @@ class MeshSplattingAdapter(RendererAdapter):
         eval_split: bool = False,
         render_scaling: int = 1,
     ) -> Path:
-        """Export a TSDF-fused mesh following the native MeshSplatting mesh.py path."""
+        """Export the trained mesh directly from the checkpoint.
+
+        MeshSplatting optimizes a mesh directly during training, so we export
+        the trained geometry rather than reconstructing via TSDF fusion.
+        TSDF parameters are kept for backward compatibility but ignored.
+        """
         if self._model is None:
             raise RuntimeError("No model loaded. Call load_checkpoint() first.")
-        if self._model_path is None or self._loaded_iteration is None:
-            raise RuntimeError(
-                "Native MeshSplatting mesh export requires a checkpoint directory "
-                "like point_cloud/iteration_<N>."
-            )
-
-        self._ensure_imports()
-        try:
-            import open3d as o3d
-        except ImportError as exc:
-            raise ImportError("MeshSplatting TSDF mesh export requires open3d.") from exc
-
-        from msbench.vendor.mesh_splatting.scene import Scene
-        from msbench.vendor.mesh_splatting.utils.mesh_utils import (
-            GaussianExtractor,
-            post_process_mesh,
-        )
 
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        raw_path = path.with_name(path.name.replace("_post.ply", ".ply")) if path.name.endswith("_post.ply") else path
 
-        native_args = self._native_scene_args(
-            dataset_path=dataset_path,
-            image_dir=image_dir,
-            resolution=resolution,
+        # Extract the trained mesh from the model
+        from msbench.core.mesh_eval import export_ply
+        from msbench.primitives.mesh_triangle import IndexedMeshTriangle
+
+        primitive = self.to_primitive()
+        if not isinstance(primitive, IndexedMeshTriangle):
+            raise TypeError(
+                f"Expected IndexedMeshTriangle primitive, got {type(primitive).__name__}"
+            )
+
+        # Export vertices and faces to PLY
+        vertices = primitive.vertices.detach().cpu().numpy()
+        faces = primitive.faces.detach().cpu().long().numpy()
+
+        export_ply(vertices, faces, path)
+
+        # Write metadata about the export
+        self._write_mesh_export_metadata(
+            path,
             eval_split=eval_split,
+            render_scaling=render_scaling,
+            voxel_size=voxel_size,
+            sdf_trunc=sdf_trunc,
+            depth_trunc=depth_trunc,
+            num_cluster=num_cluster,
+            depth_ratio=depth_ratio,
         )
-        triangles = self._TriangleModel(native_args.sh_degree)
-        triangles.scaling = int(render_scaling)
-        scene = Scene(
-            native_args,
-            triangles,
-            init_opacity=None,
-            set_sigma=None,
-            load_iteration=self._loaded_iteration,
-            shuffle=False,
-        )
-
-        previous_sh_degree = triangles.active_sh_degree
-        previous_scaling = triangles.scaling
-        triangles.active_sh_degree = 0
-        triangles.scaling = int(render_scaling)
-        pipe = SimpleNamespace(
-            debug=False,
-            convert_SHs_python=False,
-            compute_cov3D_python=False,
-            depth_ratio=float(depth_ratio),
-        )
-        bg_color = [1.0, 1.0, 1.0] if native_args.white_background else [0.0, 0.0, 0.0]
-        extractor = GaussianExtractor(triangles, self._render, pipe, bg_color=bg_color)
-        try:
-            # Match native mesh.py: it always reconstructs from getTrainCameras().
-            # With eval_split=False, those "train" cameras are the full DTU image set.
-            extractor.reconstruction(scene.getTrainCameras())
-            mesh = extractor.extract_mesh_bounded(
-                voxel_size=float(voxel_size),
-                sdf_trunc=float(sdf_trunc),
-                depth_trunc=float(depth_trunc),
-            )
-            o3d.io.write_triangle_mesh(str(raw_path), mesh)
-            mesh_post = post_process_mesh(mesh, cluster_to_keep=int(num_cluster))
-            o3d.io.write_triangle_mesh(str(path), mesh_post)
-            self._write_mesh_export_metadata(
-                path,
-                eval_split=eval_split,
-                render_scaling=render_scaling,
-                voxel_size=voxel_size,
-                sdf_trunc=sdf_trunc,
-                depth_trunc=depth_trunc,
-                num_cluster=num_cluster,
-                depth_ratio=depth_ratio,
-            )
-        finally:
-            triangles.active_sh_degree = previous_sh_degree
-            triangles.scaling = previous_scaling
 
         return path
 
