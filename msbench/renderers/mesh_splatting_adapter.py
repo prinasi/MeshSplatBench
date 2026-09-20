@@ -436,7 +436,19 @@ class MeshSplattingAdapter(RendererAdapter):
         vertices = primitive.vertices.detach().cpu().numpy()
         faces = primitive.faces.detach().cpu().long().numpy()
 
-        export_ply(vertices, faces, path)
+        # Convert SH DC coefficients to RGB colors
+        colors = None
+        if primitive.sh_coeffs is not None:
+            # SH DC coefficient (0th order) to RGB conversion
+            # SH_C0 = 0.28209479177387814
+            sh_dc = primitive.sh_coeffs.detach().cpu().numpy()  # shape: [V, 3]
+            # Convert from SH space to RGB: sh_dc * SH_C0 gives values roughly in [-0.5, 0.5]
+            # Then add 0.5 to get [0, 1] range, and multiply by 255 for PLY uchar format
+            SH_C0 = 0.28209479177387814
+            rgb = (sh_dc * SH_C0 + 0.5) * 255.0
+            colors = np.clip(rgb, 0, 255).astype(np.uint8)
+
+        export_ply(vertices, faces, path, colors=colors)
 
         # Write metadata about the export
         self._write_mesh_export_metadata(

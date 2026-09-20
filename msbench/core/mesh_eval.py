@@ -30,19 +30,37 @@ def primitive_to_mesh_arrays(primitive: Any) -> tuple[np.ndarray, np.ndarray]:
     raise TypeError(f"Cannot convert primitive {type(primitive)!r} to mesh arrays")
 
 
-def export_ply(vertices: np.ndarray, faces: np.ndarray, path: str | Path) -> Path:
-    """Export a triangle mesh as ASCII PLY."""
+def export_ply(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    path: str | Path,
+    colors: np.ndarray | None = None,
+) -> Path:
+    """Export a triangle mesh as ASCII PLY.
+
+    Args:
+        vertices: Vertex positions, shape [V, 3].
+        faces: Face indices, shape [F, 3].
+        path: Output PLY file path.
+        colors: Optional vertex colors in [0, 255] range, shape [V, 3].
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
         f.write("ply\nformat ascii 1.0\n")
         f.write(f"element vertex {len(vertices)}\n")
         f.write("property float x\nproperty float y\nproperty float z\n")
+        if colors is not None:
+            f.write("property uchar red\nproperty uchar green\nproperty uchar blue\n")
         f.write(f"element face {len(faces)}\n")
         f.write("property list uchar int vertex_indices\n")
         f.write("end_header\n")
-        for v in vertices:
-            f.write(f"{v[0]} {v[1]} {v[2]}\n")
+        for i, v in enumerate(vertices):
+            if colors is not None:
+                c = colors[i]
+                f.write(f"{v[0]} {v[1]} {v[2]} {int(c[0])} {int(c[1])} {int(c[2])}\n")
+            else:
+                f.write(f"{v[0]} {v[1]} {v[2]}\n")
         for face in faces:
             f.write(f"3 {int(face[0])} {int(face[1])} {int(face[2])}\n")
     return path
