@@ -5,7 +5,10 @@ Shader "MeshSplatBench/StandardVertexColorRaw"
         Tags { "RenderType"="Opaque" "Queue"="Geometry" }
         Pass
         {
-            Cull Back
+            // COLMAP-to-Unity camera conversion applies a raster-basis reflection.
+            // Keep both winding orders visible for imported TSDF meshes so the
+            // projection reflection cannot turn valid surfaces into black holes.
+            Cull Off
             ZWrite On
             ZTest LEqual
             Blend Off
